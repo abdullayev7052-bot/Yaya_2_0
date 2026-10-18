@@ -34,6 +34,8 @@ export default async function adminRoutes(app, { db }) {
   const str = (v, max = 200) => (v == null ? null : String(v).trim().slice(0, max) || null);
   const bad = (reply, msg) => reply.code(400).send({ error: msg });
   const num = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : null);
+  // A map coordinate: a finite number in range, or null to clear it.
+  const coord = (v) => (v == null || v === '' ? null : (Number.isFinite(Number(v)) && Math.abs(Number(v)) <= 180 ? Number(v) : null));
   const has = (req, p) => req.me.perms.has(p);
   const log = (req, action, details) => audit(db, req.actor, action, details);
   const shiftErr = (reply, e) => {
@@ -204,8 +206,8 @@ export default async function adminRoutes(app, { db }) {
     const b = req.body ?? {};
     const name = str(b.name, 120);
     if (!name) return bad(reply, 'Ism shart');
-    const id = Number(db.prepare('INSERT INTO suppliers (name, phone, address, note, created_by) VALUES (?, ?, ?, ?, ?)')
-      .run(name, str(b.phone, 30)?.replace(/[^\d+]/g, '') || null, str(b.address), str(b.note), req.actor).lastInsertRowid);
+    const id = Number(db.prepare('INSERT INTO suppliers (name, phone, address, note, lat, lng, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(name, str(b.phone, 30)?.replace(/[^\d+]/g, '') || null, str(b.address), str(b.note), coord(b.lat), coord(b.lng), req.actor).lastInsertRowid);
     if (b.openingBalance != null && has(req, 'payments.create')) {
       db.prepare('UPDATE suppliers SET opening_balance = ? WHERE id = ?').run(Number(b.openingBalance) || 0, id);
     }
@@ -213,17 +215,28 @@ export default async function adminRoutes(app, { db }) {
     return { id };
   });
 
-  app.patch('/suppliers/:id', need('suppliers.edit'), async (req, reply) => {
+  // Field-level: name/phone/note/active need suppliers.edit; address and the map
+  // point need suppliers.location (so a collector can mark where a supplier is
+  // without being able to rename them). The guard only checks the token here.
+  app.patch('/suppliers/:id', need(), async (req, reply) => {
     const b = req.body ?? {};
     const s = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(req.params.id);
     if (!s) return reply.code(404).send({ error: 'Topilmadi' });
+    const touchesIdentity = ['name', 'phone', 'note', 'active'].some((k) => b[k] !== undefined);
+    const touchesLocation = ['address', 'lat', 'lng'].some((k) => b[k] !== undefined);
+    if (touchesIdentity && !has(req, 'suppliers.edit')) return reply.code(403).send({ error: 'Ma\'lumotlarni o\'zgartirishga ruxsatingiz yo\'q' });
+    if (touchesLocation && !has(req, 'suppliers.location') && !has(req, 'suppliers.edit')) {
+      return reply.code(403).send({ error: 'Manzil/joylashuvni o\'zgartirishga ruxsatingiz yo\'q' });
+    }
     if (b.name !== undefined && !str(b.name)) return bad(reply, 'Ism bo\'sh bo\'lmasin');
     db.prepare(`UPDATE suppliers SET name = COALESCE(?, name), phone = CASE WHEN ? THEN ? ELSE phone END,
-      address = CASE WHEN ? THEN ? ELSE address END, note = CASE WHEN ? THEN ? ELSE note END, active = COALESCE(?, active) WHERE id = ?`)
-      .run(str(b.name, 120), Number(b.phone !== undefined), str(b.phone, 30)?.replace(/[^\d+]/g, '') || null,
-        Number(b.address !== undefined), str(b.address), Number(b.note !== undefined), str(b.note),
-        b.active == null ? null : Number(!!b.active), s.id);
-    log(req, 'suppliers.update', { id: s.id, name: b.name ?? s.name, active: b.active });
+      note = CASE WHEN ? THEN ? ELSE note END, active = COALESCE(?, active),
+      address = CASE WHEN ? THEN ? ELSE address END, lat = CASE WHEN ? THEN ? ELSE lat END, lng = CASE WHEN ? THEN ? ELSE lng END WHERE id = ?`)
+      .run(touchesIdentity ? str(b.name, 120) : null, Number(b.phone !== undefined), str(b.phone, 30)?.replace(/[^\d+]/g, '') || null,
+        Number(b.note !== undefined), str(b.note), touchesIdentity && b.active != null ? Number(!!b.active) : null,
+        Number(b.address !== undefined), str(b.address), Number(b.lat !== undefined), coord(b.lat), Number(b.lng !== undefined), coord(b.lng), s.id);
+    if (touchesLocation) log(req, 'suppliers.location', { id: s.id, name: s.name });
+    if (touchesIdentity) log(req, 'suppliers.update', { id: s.id, name: b.name ?? s.name, active: b.active });
     return { ok: true };
   });
 
@@ -372,7 +385,9 @@ export default async function adminRoutes(app, { db }) {
 
   app.get('/payments', need('debts.view'), async (req) => {
     const { from, to } = parseRange(req.query);
-    return db.prepare(`SELECT p.*, s.name AS supplier_name FROM payments p JOIN suppliers s ON s.id = p.supplier_id
+    return db.prepare(`SELECT p.*, s.name AS supplier_name,
+        (SELECT COALESCE(u.name, u.login) FROM users u WHERE 'user:' || u.login = p.created_by) AS by_name
+      FROM payments p JOIN suppliers s ON s.id = p.supplier_id
       WHERE date(p.paid_at, '+5 hours') BETWEEN @from AND @to AND (@supplier IS NULL OR p.supplier_id = @supplier)
         AND (@voided = 1 OR p.voided_at IS NULL)
       ORDER BY p.paid_at DESC LIMIT 2000`).all({ from, to, supplier: num(req.query.supplier), voided: req.query.voided === '1' ? 1 : 0 });
@@ -438,11 +453,38 @@ export default async function adminRoutes(app, { db }) {
   });
 
   // ---------------------------------------------------------------- branding
-  app.get('/settings', need('settings.manage'), async () => ({ companyName: getSetting(db, 'company_name') ?? '' }));
+  app.get('/settings', need('settings.manage'), async () => ({
+    companyName: getSetting(db, 'company_name') ?? '',
+    greeting: getSetting(db, 'greeting') ?? '',
+    hasIntro: !!db.prepare("SELECT 1 FROM files WHERE key = 'intro'").get(),
+    introMime: db.prepare("SELECT mime FROM files WHERE key = 'intro'").get()?.mime ?? null,
+  }));
   app.put('/settings', need('settings.manage'), async (req) => {
     if (req.body?.companyName !== undefined) setSetting(db, 'company_name', str(req.body.companyName, 60));
+    // Greeting shown on the collector's start screen; {ism} is replaced by the name.
+    if (req.body?.greeting !== undefined) setSetting(db, 'greeting', str(req.body.greeting, 120));
     setSetting(db, 'brand_version', Date.now());
     log(req, 'settings.update', { companyName: req.body?.companyName });
+    return { ok: true };
+  });
+
+  // Short, silent entry animation (video/gif) shown when the app opens. Uploaded
+  // from the admin's device as a data URL; stored like the logo.
+  app.put('/settings/intro', { ...need('settings.manage'), bodyLimit: 12 * 1024 * 1024 }, async (req, reply) => {
+    const m = /^data:(video\/mp4|video\/webm|image\/gif);base64,([A-Za-z0-9+/=]+)$/.exec(String(req.body?.dataUrl ?? ''));
+    if (!m) return bad(reply, 'Fayl mp4, webm yoki gif bo\'lishi kerak');
+    const buf = Buffer.from(m[2], 'base64');
+    if (buf.length > 10 * 1024 * 1024) return bad(reply, 'Fayl 10 MB dan katta — qisqaroq/kichikroq video tanlang');
+    db.prepare(`INSERT INTO files (key, mime, data, updated_at) VALUES ('intro', ?, ?, datetime('now'))
+      ON CONFLICT(key) DO UPDATE SET mime = excluded.mime, data = excluded.data, updated_at = excluded.updated_at`).run(m[1], buf);
+    setSetting(db, 'brand_version', Date.now());
+    log(req, 'intro.update', { bytes: buf.length });
+    return { ok: true };
+  });
+  app.delete('/settings/intro', need('settings.manage'), async (req) => {
+    db.prepare("DELETE FROM files WHERE key = 'intro'").run();
+    setSetting(db, 'brand_version', Date.now());
+    log(req, 'intro.remove');
     return { ok: true };
   });
 

@@ -110,6 +110,30 @@ function openForm({ title, fields, submit = 'Saqlash', onSubmit, intro = '', dan
   $('input, select', dlg)?.focus();
 }
 
+// Full-screen map picker (shared map.html in an iframe). Resolves to
+// {lat, lng, address} when saved, or null when cancelled.
+function openMap({ lat, lng, name, address }) {
+  return new Promise((resolve) => {
+    const dlg = $('#dlg');
+    const q = new URLSearchParams();
+    if (lat != null) q.set('lat', lat);
+    if (lng != null) q.set('lng', lng);
+    if (name) q.set('name', name);
+    if (address) q.set('address', address);
+    dlg.innerHTML = `<div style="width:min(92vw,720px);height:80vh;display:flex;flex-direction:column">
+      <iframe src="map.html?${q.toString()}" style="flex:1;border:0;border-radius:12px" title="Xarita"></iframe></div>`;
+    const onMsg = (e) => {
+      if (e.origin !== location.origin || !e.data?.yayaMap) return;
+      window.removeEventListener('message', onMsg);
+      dlg.close();
+      resolve(e.data.yayaMap.ok ? e.data.yayaMap : null);
+    };
+    window.addEventListener('message', onMsg);
+    dlg.addEventListener('close', () => window.removeEventListener('message', onMsg), { once: true });
+    dlg.showModal();
+  });
+}
+
 function paymentForm(supplier, balance) {
   openForm({
     title: `To'lov: ${supplier.name}`,
@@ -427,7 +451,7 @@ const views = {
         <div class="table-wrap"><table>
           <tr><th>Sana</th><th>Yetkazib beruvchi</th><th class="num">Summa</th><th>Usul</th><th>Izoh</th><th>Kim</th><th></th></tr>
           ${pays.map((p) => `<tr class="${p.voided_at ? 'voided' : ''}"><td>${esc(fmtDate(p.paid_at))}</td><td><a href="#supplier?id=${p.supplier_id}">${esc(p.supplier_name)}</a></td>
-            <td class="num">${fmtMoney(p.amount)}</td><td>${METHOD[p.method]}</td><td>${esc(p.note)}</td><td class="muted">${esc(p.created_by.replace(/^\w+:/, ''))}</td>
+            <td class="num">${fmtMoney(p.amount)}</td><td>${METHOD[p.method]}</td><td>${esc(p.note)}</td><td class="muted">${esc(p.by_name || p.created_by.replace(/^\w+:/, ''))}</td>
             <td>${p.voided_at ? `<span class="muted">Bekor: ${esc(p.void_reason)}</span>` : can('payments.void') ? `<button class="small ghost" data-void="${p.id}">Bekor qilish</button>` : ''}</td></tr>`).join('')
             || '<tr><td colspan="7" class="muted">Bu davrda to\'lov yo\'q</td></tr>'}
         </table></div></div>`;
@@ -450,7 +474,11 @@ const views = {
       <p><a href="#suppliers">← Yetkazib beruvchilar</a></p>
       <div class="card"><div class="row" style="justify-content:space-between;align-items:start">
         <div><h2 style="margin-bottom:4px">${esc(s.name)} ${s.active ? '' : '<span class="badge error">o\'chirilgan</span>'}</h2>
-          <div class="muted">${esc(s.phone)} ${esc(s.address)}</div>${s.note ? `<div class="muted">${esc(s.note)}</div>` : ''}
+          <div class="muted">${esc(s.phone)}</div>
+          <div class="muted">📍 ${s.address ? esc(s.address) : '<i>manzil kiritilmagan</i>'}${s.lat != null ? ` <span title="xaritada belgilangan">· 🗺️</span>` : ''}
+            ${(can('suppliers.location') || can('suppliers.edit')) ? '<button class="small ghost" id="mapBtn">Xaritada belgilash</button>' : ''}
+            ${s.lat != null ? `<a class="small ghost btnlike" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}">Ko'rish ↗</a>` : ''}</div>
+          ${s.note ? `<div class="muted">${esc(s.note)}</div>` : ''}
           <div class="muted">Sut yig'uvchi: ${c.collectors.map((e) => esc(e.name || e.login)).join(', ') || '—'}</div>
           ${money() ? `<div style="margin-top:6px">${c.products.map((p) => `${p.is_default ? '★ ' : ''}${esc(p.name)}: <b>${p.price == null ? '<span class="err">narx yo\'q</span>' : fmtMoney(p.price)}</b> so'm/${esc(p.unit)}`).join(' · ') || '<span class="err">Mahsulot biriktirilmagan</span>'}</div>` : ''}</div>
         <div class="row">${st && can('payments.create') ? '<button id="pay">+ To\'lov</button>' : ''}</div>
@@ -474,6 +502,13 @@ const views = {
       </table></div></div>` : ''}`;
     dailyChart($('#chart', v), c.last60.byDay, c.last60.range.from, c.last60.range.to);
     $('#pay', v) && ($('#pay', v).onclick = () => paymentForm(s, st.balance));
+    $('#mapBtn', v) && ($('#mapBtn', v).onclick = act(async () => {
+      const r = await openMap({ lat: s.lat, lng: s.lng, name: s.name, address: s.address });
+      if (!r) return;
+      await api('PATCH', `/suppliers/${s.id}`, { lat: r.lat, lng: r.lng, address: r.address });
+      flash('Joylashuv saqlandi');
+      route();
+    }));
   },
 
   // ------------------------------------------------------------------ suppliers & prices
@@ -797,8 +832,10 @@ const views = {
     v.innerHTML = `
       ${st ? `<div class="card" style="max-width:760px">
         <h2>Brend</h2>
-        <form id="brandForm" class="row" style="align-items:end">
-          <label style="flex:1">Kompaniya nomi (ilova va panelda ko'rinadi) <input name="companyName" value="${esc(st.companyName)}" maxlength="60"></label>
+        <form id="brandForm">
+          <label>Kompaniya nomi (ilova va panelda ko'rinadi) <input name="companyName" value="${esc(st.companyName)}" maxlength="60"></label>
+          <label>Salomlashish matni (ilovada smena ekranida) <input name="greeting" value="${esc(st.greeting || '')}" maxlength="120" placeholder="Assalomu alaykum, {ism}"></label>
+          <p class="muted"><code>{ism}</code> — foydalanuvchining ismiga almashtiriladi. Bo'sh qoldirilsa, standart "Assalomu alaykum, [ism]" ishlatiladi.</p>
           <button>Saqlash</button>
         </form>
         <div class="row" style="align-items:center;margin-top:12px">
@@ -807,7 +844,22 @@ const views = {
             ${brand.logoUrl ? '<button class="ghost" id="logoDel">Logoni olib tashlash</button>' : ''}
             <p class="muted">Panel, ilova va kirish ekranida darhol ko'rinadi. Telefondagi ilova belgisi keyingi APK yig'ishda shu logoga almashadi.</p></div>
         </div>
-      </div>` : ''}
+        <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+        <h2>Kirish animatsiyasi</h2>
+        <p class="muted">Ilova ochilganda (va qulfdan keyin) foydalanuvchiga ko'rinadigan qisqa, ovozsiz video. Qurilma xotirasidan yuklang: mp4, webm yoki gif (10 MB gacha).</p>
+        <div class="row" style="align-items:center">
+          <div class="logo-preview" style="width:120px;height:80px">${st.hasIntro ? `<video src="${esc(brand.introUrl || '/api/public/intro')}" muted autoplay loop playsinline style="width:100%;height:100%;object-fit:cover"></video>` : '<span class="muted">Yo\'q</span>'}</div>
+          <div><label style="display:inline-block"><input type="file" id="introFile" accept="video/mp4,video/webm,image/gif" hidden><span class="btnlike">⬆ Video yuklash</span></label>
+            ${st.hasIntro ? '<button class="ghost" id="introDel">Olib tashlash</button>' : ''}</div>
+        </div>
+      </div>
+      <form class="card" id="meForm" style="max-width:520px">
+        <h2>Mening hisobim</h2>
+        <label>Ism <input name="name" value="${esc(me.name || '')}" maxlength="120"></label>
+        <label>Login <input name="login" value="${esc(me.login)}" minlength="3" maxlength="32"></label>
+        <p class="muted">Login va parolingizni o'zgartirsangiz, keyingi kirishda yangisidan foydalaning.</p>
+        <button>Ism va loginni saqlash</button>
+      </form>` : ''}
       <form class="card" id="pw" style="max-width:520px">
         <h2>Parolni o'zgartirish</h2>
         <label>Joriy parol <input name="current" type="password" required autocomplete="current-password"></label>
@@ -859,10 +911,27 @@ const views = {
     if (st) {
       $('#brandForm', v).onsubmit = act(async (e) => {
         e.preventDefault();
-        await api('PUT', '/settings', { companyName: e.target.elements.companyName.value });
+        await api('PUT', '/settings', { companyName: e.target.elements.companyName.value, greeting: e.target.elements.greeting.value });
         await loadBrand();
         flash('Saqlandi');
       });
+      $('#meForm', v).onsubmit = act(async (e) => {
+        e.preventDefault();
+        const r = await api('PUT', '/profile', { name: e.target.elements.name.value, login: e.target.elements.login.value }, '/api/auth');
+        me = r.user;
+        $('#whoami').textContent = `${me.name || me.login} · ${me.role}`;
+        flash('Saqlandi');
+      });
+      $('#introFile', v).onchange = act(async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        if (file.size > 10 * 1024 * 1024) return flash('Fayl 10 MB dan katta', 'err');
+        await api('PUT', '/settings/intro', { dataUrl: await fileToDataUrl(file) });
+        await loadBrand();
+        flash('Kirish animatsiyasi yangilandi');
+        route();
+      });
+      $('#introDel', v) && ($('#introDel', v).onclick = act(async () => { await api('DELETE', '/settings/intro'); await loadBrand(); route(); }));
       $('#logoFile', v).onchange = act(async (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -968,6 +1037,16 @@ function squarePng(file, size) {
     };
     img.onerror = () => reject(new Error('Rasmni o\'qib bo\'lmadi'));
     img.src = URL.createObjectURL(file);
+  });
+}
+
+// Read a file (video/gif) as a data URL to upload.
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(new Error('Faylni o\'qib bo\'lmadi'));
+    r.readAsDataURL(file);
   });
 }
 

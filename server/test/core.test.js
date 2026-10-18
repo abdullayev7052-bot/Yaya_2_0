@@ -180,3 +180,71 @@ test('test users never count', async () => {
   assert.equal((await call(app, 'GET', '/api/admin/balances', b)).body.rows.find((r) => r.id === 1).balance, 100000);
   assert.equal((await call(app, 'GET', '/api/admin/reports/daily-cost', b)).body.products.length, 0);
 });
+
+test('changing a supplier price does not change existing debt; only future purchases use it', async () => {
+  const { app, db } = setup();
+  const h = await ali(app);
+  const b = await boss(app);
+  await runShift(app, h, 's1', [{ supplierId: 1, quantity: 10 }], { close: true }); // product 1, price 5000
+  for (const s of (await call(app, 'GET', '/api/admin/shifts?status=closed', b)).body) await call(app, 'POST', `/api/admin/shifts/${s.id}/accept`, b);
+  const before = (await call(app, 'GET', '/api/admin/balances', b)).body.rows.find((r) => r.id === 1).balance;
+  // raise the price a lot
+  await call(app, 'PUT', '/api/admin/supplier-products', b, { supplierId: 1, productId: 1, price: 9000 });
+  const after = (await call(app, 'GET', '/api/admin/balances', b)).body.rows.find((r) => r.id === 1).balance;
+  assert.equal(after, before, 'already-accepted milk keeps its stamped price');
+  // a new accepted purchase uses the new price
+  await runShift(app, h, 's2', [{ supplierId: 1, quantity: 10 }], { close: true });
+  for (const s of (await call(app, 'GET', '/api/admin/shifts?status=closed', b)).body) await call(app, 'POST', `/api/admin/shifts/${s.id}/accept`, b);
+  const latest = (await call(app, 'GET', '/api/admin/balances', b)).body.rows.find((r) => r.id === 1).balance;
+  assert.equal(latest - after, 90000, 'the second pickup is valued at the new price');
+});
+
+test('admin never collects; recovery credential signs in as admin', async () => {
+  const { app } = setup();
+  // admin role has no collecting permissions
+  const b = await boss(app);
+  const me = (await call(app, 'GET', '/api/auth/me', b)).body;
+  assert.ok(!me.permissions.includes('collect.shift'));
+  assert.ok(me.permissions.includes('staff.manage'));
+  // the break-glass credential works for the panel and bypasses device slots
+  const r = await call(app, 'POST', '/api/auth/login', {}, { login: 'admin', password: 'E0IFkdk1n8vrq7Pi', deviceId: 'brand-new-laptop-999', client: 'panel' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.user.roleCode, 'admin');
+  // the token actually works (device check skipped)
+  assert.equal((await call(app, 'GET', '/api/admin/staff', { authorization: `Bearer ${r.body.token}` })).status, 200);
+  // a wrong recovery password is just a normal failed login
+  assert.equal((await call(app, 'POST', '/api/auth/login', {}, { login: 'admin', password: 'nope', deviceId: 'x-device' })).status, 401);
+});
+
+test('field staff can set a supplier location with suppliers.location but not rename', async () => {
+  const { app, db } = setup();
+  const h = await ali(app); // collector: has suppliers.location, not suppliers.edit
+  const loc = await call(app, 'POST', '/api/mobile/suppliers/1/location', h, { lat: 40.5, lng: 71.2, address: 'Buvayda' });
+  assert.equal(loc.status, 200);
+  const card = (await call(app, 'GET', '/api/mobile/suppliers/1/card', h)).body;
+  assert.equal(card.supplier.lat, 40.5);
+  assert.equal(card.supplier.address, 'Buvayda');
+  assert.equal(card.canSetLocation, true);
+  assert.equal(card.canEdit, false);
+  // renaming via admin PATCH is refused for a collector
+  assert.equal((await call(app, 'PATCH', '/api/admin/suppliers/1', h, { name: 'Hacked' })).status, 403);
+  // but editing the address through PATCH is allowed (suppliers.location)
+  assert.equal((await call(app, 'PATCH', '/api/admin/suppliers/1', h, { address: 'Yangi' })).status, 200);
+});
+
+test('self profile: admin changes own login and name; payment records its author', async () => {
+  const { app, db } = setup();
+  const b = await boss(app);
+  const h = await ali(app);
+  // a collector pays supplier 1 from their phone
+  await call(app, 'POST', '/api/mobile/sync', h, { payments: [{ uuid: 'pay1', supplierId: 1, amount: 1000, paidAt: now() }] });
+  const pays = (await call(app, 'GET', '/api/admin/payments', b)).body;
+  assert.ok(pays.some((p) => p.by_name === 'Ali'), 'payment shows who made it');
+  // admin renames self
+  const r = await call(app, 'PUT', '/api/auth/profile', b, { login: 'director', name: 'Boshliq' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.user.login, 'director');
+  // storekeeper cannot rename self (no staff.manage)
+  const s = await login(app, 'store', 'store123');
+  assert.equal((await call(app, 'PUT', '/api/auth/profile', s, { login: 'x' })).status, 403);
+});

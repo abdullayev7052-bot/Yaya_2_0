@@ -201,6 +201,21 @@ function seedRoles(db) {
   for (const r of BUILTIN_ROLES) ins.run(r.code, r.name, JSON.stringify(r.perms), r.locked);
 }
 
+// Permissions added in a later version are granted to the built-in roles that
+// should have them by default, on an already-upgraded database. Only brand-new
+// permission keys are added, so an admin's own edits are never overwritten.
+const NEW_ROLE_PERMS = { collector: ['suppliers.location'] };
+function backfillNewPermissions(db) {
+  for (const [code, keys] of Object.entries(NEW_ROLE_PERMS)) {
+    const row = db.prepare('SELECT id, permissions FROM roles WHERE code = ?').get(code);
+    if (!row) continue;
+    const perms = new Set(JSON.parse(row.permissions || '[]'));
+    const before = perms.size;
+    for (const k of keys) perms.add(k);
+    if (perms.size !== before) db.prepare('UPDATE roles SET permissions = ? WHERE id = ?').run(JSON.stringify([...perms]), row.id);
+  }
+}
+
 export const roleIdByCode = (db, code) => db.prepare('SELECT id FROM roles WHERE code = ?').get(code)?.id;
 
 // Admins get 3 device slots (phone, laptop, spare), everyone else 1.
@@ -301,6 +316,7 @@ export function openDb(file) {
   }
   db.exec(SCHEMA);
   seedRoles(db);
+  backfillNewPermissions(db);
   db.pragma(`user_version = ${SCHEMA_VERSION}`);
   return db;
 }

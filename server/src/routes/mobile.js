@@ -14,7 +14,7 @@ export default async function mobileRoutes(app, { db }) {
 
   const assignedSuppliers = (userId) => {
     const suppliers = db.prepare(`
-      SELECT s.id, s.name, s.phone, s.address
+      SELECT s.id, s.name, s.phone, s.address, s.lat, s.lng
       FROM employee_suppliers es JOIN suppliers s ON s.id = es.supplier_id AND s.active = 1
       WHERE es.employee_id = ? ORDER BY es.sort_order, s.name`).all(userId);
     const productsOf = db.prepare(`SELECT p.id, p.name, p.unit, sp.is_default FROM supplier_products sp
@@ -33,7 +33,12 @@ export default async function mobileRoutes(app, { db }) {
     const collects = me.perms.has('collect.shift');
     const out = {
       user: { id: me.id, login: me.login, name: me.name, role: me.role_name, isTest: !!me.is_test, permissions: [...me.perms] },
-      brand: { companyName: getSetting(db, 'company_name') ?? '', version: getSetting(db, 'brand_version') ?? '0' },
+      brand: {
+        companyName: getSetting(db, 'company_name') ?? '',
+        greeting: getSetting(db, 'greeting') ?? '',
+        hasIntro: !!db.prepare("SELECT 1 FROM files WHERE key = 'intro'").get(),
+        version: getSetting(db, 'brand_version') ?? '0',
+      },
       products: db.prepare('SELECT id, name, unit FROM products WHERE active = 1 ORDER BY name').all(),
       suppliers: collects ? assignedSuppliers(me.id) : [],
       shifts: collects ? myShifts(me.id) : [],
@@ -76,14 +81,15 @@ export default async function mobileRoutes(app, { db }) {
     if (!(me.perms.has('suppliers.view') || (assigned && me.perms.has('suppliers.card_own')))) {
       return reply.code(403).send({ error: 'Bu yetkazib beruvchi kartochkasiga ruxsat yo\'q' });
     }
-    const s = db.prepare('SELECT id, name, phone, address, note, active FROM suppliers WHERE id = ?').get(id);
+    const s = db.prepare('SELECT id, name, phone, address, note, lat, lng, active FROM suppliers WHERE id = ?').get(id);
     if (!s) return reply.code(404).send({ error: 'Topilmadi' });
     const pickups = db.prepare(`SELECT c.collected_at, c.quantity, p.name AS product_name, p.unit, sh.status, sh.number, sh.copy_no, u.name AS by_name
       FROM collections c JOIN shifts sh ON sh.client_uuid = c.shift_uuid JOIN products p ON p.id = c.product_id JOIN users u ON u.id = c.employee_id
       WHERE c.supplier_id = ? AND sh.status IN ('accepted', 'closed', 'open') ORDER BY c.collected_at DESC LIMIT 40`).all(id)
       .map((r) => ({ ...r, shift: shiftLabel(r), counted: r.status === 'accepted' }));
-    const payments = db.prepare(`SELECT paid_at, amount, method, note, voided_at FROM payments WHERE supplier_id = ?
-      ORDER BY paid_at DESC LIMIT 20`).all(id);
+    const payments = db.prepare(`SELECT paid_at, amount, method, note, voided_at,
+        (SELECT COALESCE(u.name, u.login) FROM users u WHERE 'user:' || u.login = payments.created_by) AS by_name
+      FROM payments WHERE supplier_id = ? ORDER BY paid_at DESC LIMIT 20`).all(id);
     return {
       supplier: s,
       balance: supplierBalance(db, id),
@@ -92,7 +98,27 @@ export default async function mobileRoutes(app, { db }) {
       payments,
       canPay: me.perms.has('payments.create'),
       canEdit: me.perms.has('suppliers.edit'),
+      canSetLocation: me.perms.has('suppliers.location') || me.perms.has('suppliers.edit'),
     };
+  });
+
+  // Set or edit a supplier's address and map point from the field.
+  app.post('/suppliers/:id/location', need('suppliers.location'), async (req, reply) => {
+    const id = Number(req.params.id);
+    const me = req.me;
+    const assigned = !!db.prepare('SELECT 1 FROM employee_suppliers WHERE employee_id = ? AND supplier_id = ?').get(me.id, id);
+    if (!(me.perms.has('suppliers.view') || assigned)) return reply.code(403).send({ error: 'Bu yetkazib beruvchiga ruxsat yo\'q' });
+    const s = db.prepare('SELECT id, name FROM suppliers WHERE id = ?').get(id);
+    if (!s) return reply.code(404).send({ error: 'Topilmadi' });
+    const b = req.body ?? {};
+    const inRange = (v) => v == null || v === '' ? null : (Number.isFinite(Number(v)) && Math.abs(Number(v)) <= 180 ? Number(v) : NaN);
+    const lat = inRange(b.lat);
+    const lng = inRange(b.lng);
+    if (Number.isNaN(lat) || Number.isNaN(lng)) return reply.code(400).send({ error: 'Koordinata noto\'g\'ri' });
+    db.prepare('UPDATE suppliers SET address = COALESCE(?, address), lat = ?, lng = ? WHERE id = ?')
+      .run(b.address === undefined ? null : str(b.address), lat, lng, id);
+    audit(db, req.actor, 'suppliers.location', { id, name: s.name, fromApp: true });
+    return { ok: true };
   });
 
   // New supplier met in the field. Online only. The admin sets the price later;
@@ -104,8 +130,9 @@ export default async function mobileRoutes(app, { db }) {
     const productIds = (req.body?.productIds ?? []).map(Number).filter((n) => db.prepare('SELECT 1 FROM products WHERE id = ? AND active = 1').get(n));
     if (!productIds.length) return reply.code(400).send({ error: 'Kamida bitta mahsulotni tanlang' });
     const id = db.transaction(() => {
-      const sid = Number(db.prepare('INSERT INTO suppliers (name, phone, address, note, created_by) VALUES (?, ?, ?, ?, ?)')
-        .run(name, phone, str(req.body?.address), str(req.body?.note), req.actor).lastInsertRowid);
+      const coord = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) || Math.abs(Number(v)) > 180 ? null : Number(v));
+      const sid = Number(db.prepare('INSERT INTO suppliers (name, phone, address, note, lat, lng, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(name, phone, str(req.body?.address), str(req.body?.note), coord(req.body?.lat), coord(req.body?.lng), req.actor).lastInsertRowid);
       productIds.forEach((pid, i) => db.prepare('INSERT INTO supplier_products (supplier_id, product_id, price, is_default) VALUES (?, ?, NULL, ?)').run(sid, pid, i === 0 ? 1 : 0));
       if (req.me.perms.has('collect.shift')) {
         const order = (db.prepare('SELECT MAX(sort_order) AS n FROM employee_suppliers WHERE employee_id = ?').get(req.me.id).n ?? -1) + 1;

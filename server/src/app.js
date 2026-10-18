@@ -35,7 +35,9 @@ export function buildApp({ db, jwtSecret, logger = false, rateLimit = true }) {
     // The panel embeds the web app in an iframe from the same origin; nobody else may.
     reply.header('X-Frame-Options', 'SAMEORIGIN');
     if (req.url.startsWith('/admin')) {
-      reply.header('Content-Security-Policy', "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'");
+      // Map tiles (OpenStreetMap) and address lookup (Nominatim) are the only
+      // third-party hosts; Leaflet itself is served from our own origin.
+      reply.header('Content-Security-Policy', "default-src 'self'; img-src 'self' data: blob: https://*.tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://nominatim.openstreetmap.org; frame-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'");
     }
     if (req.url.startsWith('/api/') && !req.url.startsWith('/api/public/logo')) reply.header('Cache-Control', 'no-store');
   });
