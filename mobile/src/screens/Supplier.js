@@ -1,16 +1,54 @@
+import { createElement, useEffect } from 'react';
 import { useState } from 'react';
-import { FlatList, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
+import { FlatList, Platform, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
 import * as api from '../api';
 import * as store from '../db';
+import { useBack } from '../back';
+import { getOnce, mapPickerUrl } from '../geo';
 import { ask, notify } from '../dialog';
 import { Btn, Chip, Err, Header, Keypad, METHOD, Tile, fmtDT, fmtMoney, useLoad } from '../components';
 import { C, fmtQty, s } from '../ui';
+
+// react-native-webview is native-only, so it's loaded lazily (never on web).
+let WebViewCmp = null;
+if (Platform.OS !== 'web') { try { WebViewCmp = require('react-native-webview').WebView; } catch { /* dev */ } }
+
+// Full-screen map picker: the same map.html the panel uses. On the phone it runs
+// in a WebView; in the browser tester it runs in an iframe. Calls
+// onPick({lat,lng,address}) when saved, or onClose() when cancelled.
+function MapPicker({ supplier, onPick, onClose }) {
+  useBack(onClose);
+  const url = mapPickerUrl({ lat: supplier.lat, lng: supplier.lng, name: supplier.name, address: supplier.address });
+  const handle = (raw) => {
+    let d = {};
+    try { d = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { /* ignore */ }
+    if (d && d.ok) onPick({ lat: d.lat, lng: d.lng, address: d.address });
+    else onClose();
+  };
+  // Browser tester: an iframe plus a window message listener.
+  useEffect(() => {
+    if (Platform.OS !== 'web') return undefined;
+    const onMsg = (e) => { if (e.data?.yayaMap) handle(e.data.yayaMap); };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+  return (
+    <View style={{ flex: 1 }}>
+      <Header title={`Joylashuv: ${supplier.name}`} onBack={onClose} />
+      {Platform.OS === 'web'
+        ? createElement('iframe', { src: url, style: { flex: 1, border: 0, width: '100%', height: '100%' }, title: 'Xarita' })
+        : WebViewCmp && <WebViewCmp source={{ uri: url }} geolocationEnabled onMessage={(e) => handle(e.nativeEvent.data)} />}
+    </View>
+  );
+}
 
 // Supplier card for everyone in the app: kg history (never prices), the current
 // debt or advance, recent payments and a "pay" button when allowed.
 export function SupplierCard({ id, onBack, onPay }) {
   const { data: c, err, busy, load } = useLoad(() => api.mobile('GET', `/suppliers/${id}/card`), [id]);
   const [renaming, setRenaming] = useState(null);
+  const [mapOpen, setMapOpen] = useState(false);
+  const [locBusy, setLocBusy] = useState(false);
   const local = api.getSuppliers().find((x) => x.id === id);
   const name = c?.supplier.name ?? local?.name ?? '...';
   const canPay = c ? c.canPay : api.can('payments.create');
@@ -25,6 +63,28 @@ export function SupplierCard({ id, onBack, onPay }) {
       api.syncNow();
     } catch (e) { notify('Xato', e.message); }
   };
+
+  const saveLocation = async (body) => {
+    try {
+      await api.mobile('POST', `/suppliers/${id}/location`, body);
+      await load();
+      api.syncNow();
+    } catch (e) { notify('Bo\'lmadi', e.message); }
+  };
+  const saveHere = async () => {
+    setLocBusy(true);
+    try {
+      const here = await getOnce();
+      if (!here) { notify('Joylashuv yo\'q', 'Telefonda joylashuvni (GPS) yoqing va ruxsat bering.'); return; }
+      await saveLocation({ lat: here.lat, lng: here.lng });
+      notify('Saqlandi', 'Yetkazib beruvchining joylashuvi hozirgi joyingizga belgilandi.');
+    } finally { setLocBusy(false); }
+  };
+
+  if (mapOpen && c) {
+    return <MapPicker supplier={c.supplier} onClose={() => setMapOpen(false)}
+      onPick={async (r) => { setMapOpen(false); await saveLocation(r); }} />;
+  }
 
   const bal = c?.balance;
   return (
@@ -49,6 +109,16 @@ export function SupplierCard({ id, onBack, onPay }) {
                 </View>
               </View>
             ) : c.canEdit && <Btn title="Ismini tahrirlash" kind="ghost" onPress={() => setRenaming(c.supplier.name)} />}
+            {c.canSetLocation && (
+              <View style={[s.card, { gap: 8 }]}>
+                <Text style={[s.text, { fontWeight: '700' }]}>📍 Manzil / joylashuv</Text>
+                <Text style={s.muted}>{c.supplier.address || 'Manzil kiritilmagan'}{c.supplier.lat != null ? ' · xaritada belgilangan' : ''}</Text>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <Btn title={locBusy ? '...' : '📍 Hozirgi joyni saqlash'} kind="ghost" style={{ flex: 1 }} disabled={locBusy} onPress={saveHere} />
+                  <Btn title="🗺️ Xaritada" kind="ghost" style={{ flex: 1 }} onPress={() => setMapOpen(true)} />
+                </View>
+              </View>
+            )}
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
               <Tile label={bal > 0 ? 'Biz qarzmiz' : bal < 0 ? 'Bizga qarz (avans)' : 'Qarz yo\'q'} value={fmtMoney(Math.abs(bal ?? 0))} sub="so'm" />
               <Tile label="Oxirgi marta" value={c.lastPickup ? `${fmtQty(c.lastPickup.quantity)} ${c.lastPickup.unit}` : '—'}
@@ -62,7 +132,7 @@ export function SupplierCard({ id, onBack, onPay }) {
                 <Text style={[s.text, { fontWeight: '700' }]}>To'lovlar</Text>
                 {c.payments.slice(0, 10).map((p, i) => (
                   <Text key={i} style={[s.text, p.voided_at && { textDecorationLine: 'line-through', color: C.muted }]}>
-                    {fmtDT(p.paid_at)} · {fmtMoney(p.amount)} so'm · {METHOD[p.method] ?? p.method}
+                    {fmtDT(p.paid_at)} · {fmtMoney(p.amount)} so'm · {METHOD[p.method] ?? p.method}{p.by_name ? ` · ${p.by_name}` : ''}
                   </Text>
                 ))}
               </View>

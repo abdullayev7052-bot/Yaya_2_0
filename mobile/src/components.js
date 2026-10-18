@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Image, Platform, Pressable, Text, View } from 'react-native';
 import { getBrand } from './api';
+import { useBack } from './back';
 import { C, fmtTime, s } from './ui';
 
 export const fmtMoney = (n) => (n == null ? '—' : String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '));
@@ -12,6 +13,8 @@ export function Logo({ size = 48 }) {
 }
 
 export function Header({ title, onBack, right }) {
+  // The phone's own back button mirrors this arrow.
+  useBack(onBack, !!onBack);
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, gap: 8 }}>
       {onBack && (

@@ -2,7 +2,7 @@
   "expo": {
     "name": "Yaya",
     "slug": "yaya",
-    "version": "2.0.0",
+    "version": "2.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -10,12 +10,13 @@
       "supportsTablet": false,
       "bundleIdentifier": "uz.yaya.collector",
       "infoPlist": {
-        "NSFaceIDUsageDescription": "Yaya ilovasini Face ID bilan ochish uchun"
+        "NSFaceIDUsageDescription": "Yaya ilovasini Face ID bilan ochish uchun",
+        "NSLocationWhenInUseUsageDescription": "Smena ochiq paytda eng yaqin yetkazib beruvchini ko’rsatish va manzilni belgilash uchun joylashuv kerak."
       }
     },
     "android": {
       "package": "uz.yaya.collector",
-      "versionCode": 3,
+      "versionCode": 4,
       "adaptiveIcon": {
         "backgroundColor": "#1F7A5A",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -26,11 +27,14 @@
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.USE_BIOMETRIC",
-        "android.permission.USE_FINGERPRINT"
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
       ],
       "blockedPermissions": [
         "android.permission.RECORD_AUDIO",
-        "android.permission.SYSTEM_ALERT_WINDOW"
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.ACCESS_BACKGROUND_LOCATION"
       ]
     },
     "plugins": [
@@ -48,6 +52,14 @@
             "enableMinifyInReleaseBuilds": true,
             "enableShrinkResourcesInReleaseBuilds": true
           }
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Smena ochiq paytda eng yaqin yetkazib beruvchini ko’rsatish uchun joylashuv kerak.",
+          "locationWhenInUsePermission": "Smena ochiq paytda eng yaqin yetkazib beruvchini ko’rsatish uchun joylashuv kerak.",
+          "isAndroidBackgroundLocationEnabled": false
         }
       ]
     ],

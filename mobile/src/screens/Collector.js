@@ -3,10 +3,19 @@ import { FlatList, Pressable, ScrollView, Text, TextInput, View } from 'react-na
 import * as api from '../api';
 import * as store from '../db';
 import SyncBar from '../SyncBar';
+import { useBack } from '../back';
+import { fmtDistance, distanceM, openRoute, startLocation, stopLocation, useMyLocation } from '../geo';
 import { ask, notify } from '../dialog';
 import { Btn, Chip, Header, Keypad, Logo, ShiftBadge, fmtDT, matches, toNumber } from '../components';
 import { NewSupplier, PaymentForm, SupplierCard } from './Supplier';
 import { C, fmtQty, fmtTime, s } from '../ui';
+
+// The greeting shown on the start screen; the admin can change the template.
+function greetingFor(name) {
+  const tpl = api.getBrand().greeting;
+  if (tpl && tpl.trim()) return tpl.replace(/\{ism\}/gi, name || '');
+  return `Assalomu alaykum, ${name || ''}`;
+}
 
 // Collecting milk: offline-first. Every action is written to the phone first
 // and uploaded by the background sync. An open shift is a draft: nothing in it
@@ -27,6 +36,13 @@ export default function Collector({ tick, refresh, setFull }) {
   // Full-screen work (number pad, card, forms) hides the app's tab bar.
   const full = !!(draft && shift) || (screen && screen !== 'entries' && screen !== 'history');
   useEffect(() => { setFull(!!full); }, [full, setFull]);
+
+  // While a shift is open, follow the phone's location so the supplier list can
+  // show distances and order itself nearest-first. Stops when no shift is open.
+  useEffect(() => {
+    if (shift) { startLocation(); return () => stopLocation(); }
+    return undefined;
+  }, [shift]);
 
   return (
     <View style={{ flex: 1 }}>
@@ -109,7 +125,7 @@ function StartShift({ tick, refresh, onOpen, onNav }) {
       <SyncBar tick={tick} />
       <ScrollView contentContainerStyle={[s.pad, { flexGrow: 1, justifyContent: 'center', gap: 16 }]}>
         <View style={{ alignItems: 'center' }}><Logo size={72} /></View>
-        <Text style={s.h1}>Assalomu alaykum, {me?.name || me?.login}</Text>
+        <Text style={s.h1}>{greetingFor(me?.name || me?.login)}</Text>
         <Text style={s.muted}>Sizga biriktirilgan yetkazib beruvchilar: {suppliers.length} ta</Text>
         {refused.map((r) => (
           <View key={r.uuid} style={[s.card, { borderColor: C.err, gap: 8 }]}>
@@ -148,6 +164,7 @@ function StartShift({ tick, refresh, onOpen, onNav }) {
 function ShiftView({ shift, tick, onPick, onNav }) {
   const [q, setQ] = useState('');
   const suppliers = api.getSuppliers();
+  const here = useMyLocation();
   const rows = useMemo(() => store.shiftCollections(shift.uuid), [shift.uuid, tick]);
 
   // Totals per supplier for this shift, so the collector sees who is already done.
@@ -157,9 +174,21 @@ function ShiftView({ shift, tick, onPick, onNav }) {
     return m;
   }, [rows]);
 
-  const list = useMemo(() => [...suppliers.filter((x) => matches(x, q))]
-    // Not yet visited first; keep the admin's route order within each group.
-    .sort((a, b) => (done[a.id] ? 1 : 0) - (done[b.id] ? 1 : 0)), [suppliers, q, done]);
+  // Distance from where the collector is now to each supplier (when both known).
+  const withDist = useMemo(() => suppliers.map((x) => ({
+    ...x, dist: here && x.lat != null ? distanceM(here, x) : null,
+  })), [suppliers, here]);
+
+  const list = useMemo(() => withDist.filter((x) => matches(x, q)).sort((a, b) => {
+    // Visited suppliers sink to the bottom; within each group, nearest first
+    // (those without a location keep the admin's route order, after the located).
+    const g = (done[a.id] ? 1 : 0) - (done[b.id] ? 1 : 0);
+    if (g) return g;
+    if (a.dist != null && b.dist != null) return a.dist - b.dist;
+    if (a.dist != null) return -1;
+    if (b.dist != null) return 1;
+    return 0;
+  }), [withDist, q, done]);
 
   const totalByProduct = rows.reduce((m, r) => ({ ...m, [r.product_name]: (m[r.product_name] || 0) + r.quantity }), {});
 
@@ -200,8 +229,15 @@ function ShiftView({ shift, tick, onPick, onNav }) {
             >
               <View style={{ flex: 1 }}>
                 <Text style={[s.text, { fontSize: 19, fontWeight: '600' }]}>{item.name}</Text>
-                {!!(item.address || item.phone) && <Text style={s.muted}>{[item.address, item.phone].filter(Boolean).join(' · ')}</Text>}
+                {!!(item.address || item.phone) && <Text style={s.muted} numberOfLines={1}>{[item.address, item.phone].filter(Boolean).join(' · ')}</Text>}
               </View>
+              {item.dist != null && (
+                // Small distance badge; tap it for turn-by-turn directions.
+                <Pressable onPress={() => openRoute(item)} hitSlop={10} style={{ alignItems: 'flex-end', marginRight: 6 }}>
+                  <Text style={{ fontSize: 12, color: C.accent, fontWeight: '700' }}>{fmtDistance(item.dist)} ›</Text>
+                  <Text style={{ fontSize: 10, color: C.muted }}>yo'l</Text>
+                </Pressable>
+              )}
               {got && (
                 <Text style={{ color: C.ok, fontSize: 18, fontWeight: '700' }}>
                   ✓ {fmtQty(got.reduce((a, r) => a + r.quantity, 0))}
@@ -246,6 +282,7 @@ function Entry({ draft, onChange, onCancel, onSave, onCard }) {
 }
 
 function QuantityPad({ title, onTitle, products, product, qty, onProduct, onQty, onCancel, onSave, saveLabel }) {
+  useBack(onCancel, !!onCancel);
   const value = toNumber(qty);
   const save = () => {
     if (!(value > 0)) return;

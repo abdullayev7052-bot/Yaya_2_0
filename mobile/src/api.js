@@ -65,7 +65,7 @@ async function call(method, path, body, { timeoutMs = 15000 } = {}) {
 
 // ---------------------------------------------------------------- branding
 // The logo is cached as a data URI so it shows even with no network.
-export const getBrand = () => store.getKv('brand', { companyName: '', version: '', logo: null });
+export const getBrand = () => store.getKv('brand', { companyName: '', version: '', greeting: '', logo: null, intro: null });
 const toDataUri = async (url) => {
   const blob = await (await fetch(url)).blob();
   return new Promise((resolve, reject) => {
@@ -81,7 +81,14 @@ export async function refreshBrand(knownVersion) {
   try {
     const b = await call('GET', '/api/public/brand');
     const logo = b.logoUrl ? await toDataUri(getServerUrl() + b.logoUrl) : null;
-    const next = { companyName: b.companyName, version: String(b.version), logo };
+    // The intro video is streamed from the server (not cached: it can be large).
+    const next = {
+      companyName: b.companyName,
+      greeting: b.greeting ?? '',
+      version: String(b.version),
+      logo,
+      intro: b.introUrl ? getServerUrl() + b.introUrl : null,
+    };
     store.setKv('brand', next);
     return next;
   } catch {
@@ -133,6 +140,13 @@ export const canAny = (...perms) => perms.some(can);
 export const admin = (method, path, body) => call(method, '/api/admin' + path, body);
 export const mobile = (method, path, body) => call(method, '/api/mobile' + path, body);
 export const changePassword = (current, next) => call('PUT', '/api/auth/password', { current, next });
+// Change own name/login (admins). Updates the cached session so the UI follows.
+export async function changeProfile({ name, login }) {
+  const r = await call('PUT', '/api/auth/profile', { name, login });
+  const sx = getSession();
+  if (sx && r.user) store.setKv('session', { ...sx, user: { ...sx.user, ...r.user } });
+  return r.user;
+}
 
 // ---------------------------------------------------------------- field data
 // Suppliers list is cached on the phone so the app works with no network at all.

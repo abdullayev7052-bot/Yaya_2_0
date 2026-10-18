@@ -1,8 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, Text, View } from 'react-native';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import * as lock from '../lock';
-import { Logo } from '../components';
+import { getBrand } from '../api';
 import { C, s } from '../ui';
+
+// The admin-set entry animation (short, silent). Falls back to nothing when
+// none is configured — no placeholder icon.
+function Intro() {
+  const brand = getBrand();
+  const player = useVideoPlayer(brand.intro || null, (p) => {
+    if (!p) return;
+    p.loop = true;
+    p.muted = true;
+    p.play();
+  });
+  if (!brand.intro) return null;
+  return (
+    <View style={{ width: 200, height: 130, borderRadius: 16, overflow: 'hidden', backgroundColor: '#000' }}>
+      <VideoView player={player} style={{ width: '100%', height: '100%' }} contentFit="cover" nativeControls={false} />
+    </View>
+  );
+}
 
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'bio', '0', '⌫'];
 
@@ -69,9 +88,10 @@ export function LockScreen({ user, onUnlock, onForgot }) {
       if (ok) tryBio();
     });
   }, [tryBio]);
+  const brand = getBrand();
   return (
     <View style={{ flex: 1, justifyContent: 'center', padding: 16, gap: 12 }}>
-      <View style={{ alignItems: 'center' }}><Logo size={64} /></View>
+      {!!brand.intro && <View style={{ alignItems: 'center' }}><Intro /></View>}
       <PinPad
         title={user?.name || user?.login || 'Yaya'}
         subtitle="Ilovani ochish uchun PIN kiriting"

@@ -16,7 +16,11 @@ export default function Profile({ tick, onLogout, setFull }) {
   const [settingPin, setSettingPin] = useState(false);
   const [bioOk, setBioOk] = useState(false);
   const [pw, setPw] = useState({ current: '', next: '' });
+  const [pwOpen, setPwOpen] = useState(false);
   const [pwBusy, setPwBusy] = useState(false);
+  const [acc, setAcc] = useState({ name: me?.name || '', login: me?.login || '' });
+  const [accBusy, setAccBusy] = useState(false);
+  const canEditAccount = api.can('staff.manage'); // admins may rename themselves
   useEffect(() => { lock.bioAvailable().then(setBioOk); }, []);
   useEffect(() => { setFull(settingPin); }, [settingPin, setFull]);
   const reload = () => setCfg(lock.getLock());
@@ -28,8 +32,16 @@ export default function Profile({ tick, onLogout, setFull }) {
     try {
       await api.changePassword(pw.current, pw.next);
       setPw({ current: '', next: '' });
+      setPwOpen(false);
       notify('Tayyor', 'Parol o\'zgartirildi');
     } catch (e) { notify('Bo\'lmadi', e.message); } finally { setPwBusy(false); }
+  };
+  const saveAccount = async () => {
+    setAccBusy(true);
+    try {
+      await api.changeProfile({ name: acc.name, login: acc.login });
+      notify('Tayyor', 'Ism va login saqlandi');
+    } catch (e) { notify('Bo\'lmadi', e.message); } finally { setAccBusy(false); }
   };
   const logout = () => {
     const pending = store.unsyncedCount();
@@ -83,11 +95,29 @@ export default function Profile({ tick, onLogout, setFull }) {
           )}
         </View>
 
+        {canEditAccount && (
+          <View style={[s.card, { gap: 10 }]}>
+            <Text style={[s.text, { fontWeight: '700' }]}>Ism va login</Text>
+            <TextInput style={s.input} value={acc.name} onChangeText={(v) => setAcc({ ...acc, name: v })} placeholder="Ism" />
+            <TextInput style={s.input} value={acc.login} onChangeText={(v) => setAcc({ ...acc, login: v })} placeholder="Login" autoCapitalize="none" autoCorrect={false} />
+            <Btn title={accBusy ? '...' : 'Saqlash'} disabled={accBusy || acc.login.trim().length < 3} onPress={saveAccount} />
+          </View>
+        )}
+
         <View style={[s.card, { gap: 10 }]}>
-          <Text style={[s.text, { fontWeight: '700' }]}>Parolni o'zgartirish</Text>
-          <TextInput style={s.input} value={pw.current} onChangeText={(v) => setPw({ ...pw, current: v })} placeholder="Joriy parol" secureTextEntry autoCapitalize="none" />
-          <TextInput style={s.input} value={pw.next} onChangeText={(v) => setPw({ ...pw, next: v })} placeholder="Yangi parol (kamida 6 belgi)" secureTextEntry autoCapitalize="none" />
-          <Btn title="O'zgartirish" disabled={pwBusy || !pw.current || pw.next.length < 6} onPress={changePw} />
+          {!pwOpen ? (
+            <Btn title="Parolni o'zgartirish" kind="ghost" onPress={() => setPwOpen(true)} />
+          ) : (
+            <>
+              <Text style={[s.text, { fontWeight: '700' }]}>Parolni o'zgartirish</Text>
+              <TextInput style={s.input} value={pw.current} onChangeText={(v) => setPw({ ...pw, current: v })} placeholder="Joriy parol" secureTextEntry autoCapitalize="none" autoFocus />
+              <TextInput style={s.input} value={pw.next} onChangeText={(v) => setPw({ ...pw, next: v })} placeholder="Yangi parol (kamida 6 belgi)" secureTextEntry autoCapitalize="none" />
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <Btn title="Bekor" kind="ghost" style={{ flex: 1 }} onPress={() => { setPwOpen(false); setPw({ current: '', next: '' }); }} />
+                <Btn title={pwBusy ? '...' : "O'zgartirish"} style={{ flex: 1 }} disabled={pwBusy || !pw.current || pw.next.length < 6} onPress={changePw} />
+              </View>
+            </>
+          )}
         </View>
 
         <Btn title="Hisobdan chiqish" kind="warn" onPress={logout} />
