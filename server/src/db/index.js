@@ -294,6 +294,8 @@ export function openDb(file) {
   const version = db.pragma('user_version', { simple: true });
   const fresh = !tableExists(db, 'users') && !tableExists(db, 'admins') && !tableExists(db, 'suppliers');
   if (!fresh && version < 4) {
+    // Keep an exact copy of the old database next to it before changing its structure.
+    if (file !== ':memory:') db.prepare('VACUUM INTO ?').run(`${file}.v${version}-${Date.now()}.bak`);
     if (version < 3) upgradeToV3(db);
     migrateV3toV4(db);
   }
