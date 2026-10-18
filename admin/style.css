@@ -106,3 +106,9 @@ fieldset legend { padding: 0 6px; }
 button.danger, .danger { background: var(--err); color: #fff; border-color: var(--err); }
 .danger-zone { border-color: color-mix(in srgb, var(--err) 40%, var(--line)); }
 code { background: color-mix(in srgb, var(--line) 50%, transparent); padding: 1px 5px; border-radius: 4px; }
+
+/* Entry-animation preview: a fixed box that contains any aspect ratio (9:16 too). */
+.intro-preview { width: 120px; height: 160px; border: 1px dashed var(--line); border-radius: 12px;
+  display: grid; place-items: center; overflow: hidden; background: #000; }
+.intro-preview video { width: 100%; height: 100%; object-fit: contain; }
+.intro-preview span { color: var(--muted); background: var(--card); padding: 4px 8px; border-radius: 8px; }

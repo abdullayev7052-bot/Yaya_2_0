@@ -462,12 +462,20 @@ export default async function adminRoutes(app, { db }) {
 
   app.get('/payments', need('debts.view'), async (req) => {
     const { from, to } = parseRange(req.query);
-    return db.prepare(`SELECT p.*, s.name AS supplier_name,
+    const p = { from, to, supplier: num(req.query.supplier), voided: req.query.voided === '1' ? 1 : 0 };
+    const pays = db.prepare(`SELECT p.id, 'payment' AS kind, p.supplier_id, s.name AS supplier_name, p.amount, p.method, p.note,
+        p.paid_at AS at, p.voided_at, p.void_reason,
         (SELECT COALESCE(u.name, u.login) FROM users u WHERE 'user:' || u.login = p.created_by) AS by_name
       FROM payments p JOIN suppliers s ON s.id = p.supplier_id
       WHERE date(p.paid_at, '+5 hours') BETWEEN @from AND @to AND (@supplier IS NULL OR p.supplier_id = @supplier)
-        AND (@voided = 1 OR p.voided_at IS NULL)
-      ORDER BY p.paid_at DESC LIMIT 2000`).all({ from, to, supplier: num(req.query.supplier), voided: req.query.voided === '1' ? 1 : 0 });
+        AND (@voided = 1 OR p.voided_at IS NULL)`).all(p);
+    // Manual balance corrections appear in the same history as "Balans tahrirlandi".
+    const adj = db.prepare(`SELECT a.id, 'adjust' AS kind, a.supplier_id, s.name AS supplier_name, a.delta AS amount, NULL AS method, a.note,
+        a.created_at AS at, NULL AS voided_at, NULL AS void_reason,
+        (SELECT COALESCE(u.name, u.login) FROM users u WHERE 'user:' || u.login = a.created_by) AS by_name
+      FROM adjustments a JOIN suppliers s ON s.id = a.supplier_id
+      WHERE date(a.created_at, '+5 hours') BETWEEN @from AND @to AND (@supplier IS NULL OR a.supplier_id = @supplier)`).all(p);
+    return [...pays, ...adj].sort((x, y) => String(y.at).localeCompare(String(x.at))).slice(0, 2000);
   });
 
   app.post('/payments', need('payments.create'), async (req, reply) => {

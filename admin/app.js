@@ -19,7 +19,8 @@ const addDays = (day, n) => new Date(Date.parse(day) + n * 864e5).toISOString().
 const dayLabel = (day) => `${day.slice(8, 10)}.${day.slice(5, 7)}`;
 const digits = (s) => String(s ?? '').replace(/\D/g, '');
 const METHOD = { cash: 'Naqd', card: 'Karta', transfer: 'O\'tkazma' };
-const SHIFT_STATUS = { open: ['Ochiq (qoralama)', 'pending'], closed: ['Qabul kutmoqda', 'pending'], accepted: ['Qabul qilingan', 'sent'], cancelled: ['Bekor qilingan', 'error'] };
+const SHIFT_STATUS = { open: ['Ochiq', 'pending'], closed: ['Qabul kutmoqda', 'pending'], accepted: ['Qabul qilingan', 'sent'], cancelled: ['Bekor qilingan', 'error'] };
+const cancelOn = () => brand.cancelEnabled !== false;
 
 let token = null;
 let me = null;
@@ -134,6 +135,26 @@ function openMap({ lat, lng, name, address }) {
   });
 }
 
+// Balance editing is opened with the admin's own password, then kept in memory
+// for the editor page's save.
+let BALANCE_PW = '';
+function openBalanceEditor() {
+  openForm({
+    title: 'Balanslarni tahrirlash',
+    intro: '<p class="muted">Bu bo\'lim admin paroli bilan ochiladi.</p>',
+    fields: [{ name: 'password', label: 'Admin parolingiz', type: 'password', required: true }],
+    submit: 'Ochish',
+    onSubmit: async (d) => {
+      // Verify by a no-op edit: wrong password errors, correct one reports "no items".
+      const res = await request('POST', '/api/admin/balances/edit', { password: d.password, items: [] });
+      const data = await res.json().catch(() => ({}));
+      if (/parol/i.test(data.error || '')) throw new Error('Parol noto\'g\'ri');
+      BALANCE_PW = d.password;
+      location.hash = 'balance-edit';
+    },
+  });
+}
+
 function paymentForm(supplier, balance) {
   openForm({
     title: `To'lov: ${supplier.name}`,
@@ -184,7 +205,7 @@ async function loadBrand() {
 
 const PAGES = [
   ['dashboard', 'Bugun', 'reports.view'], ['shifts', 'Smenalar', 'shifts.view_all'], ['reports', 'Hisobotlar', 'reports.view'],
-  ['debts', 'Qarzlar va to\'lovlar', 'debts.view'], ['suppliers', 'Yetkazib beruvchilar', 'suppliers.view'],
+  ['debts', 'Qarzlar va to\'lovlar', 'debts.view'], ['suppliers', 'Xonadonlar', 'suppliers.view'],
   ['staff', 'Xodimlar', 'staff.manage'], ['roles', 'Rollar va ruxsatlar', 'staff.manage'], ['devices', 'Qurilmalar', 'staff.manage'],
   ['catalog', 'Mahsulotlar', 'catalog.manage'], ['tester', 'Ilovani sinash', 'tester.use'], ['settings', 'Sozlamalar', null],
 ];
@@ -246,19 +267,14 @@ function dailyChart(host, byDay, from, to) {
   });
 }
 
-function costTable(c) {
-  const st = c.shifts;
-  const status = !c.products.length ? '' : c.final
-    ? '<span class="badge sent">Yakuniy — kunning barcha smenalari yopilgan va ko\'rib chiqilgan</span>'
-    : `<span class="badge pending">Hozircha — ochiq: ${st.open}, qabul kutmoqda: ${st.closed}</span>`;
+function costTable(products) {
   return `<div class="card">
-    <div class="row" style="justify-content:space-between;align-items:center"><h2>Qabul qilingan mahsulotlar va o'rtacha tannarx</h2>${status}</div>
-    <p class="muted">Faqat <b>qabul qilingan</b> smenalar hisobga olinadi. O'rtacha tannarx = jami summa ÷ jami miqdor (har mahsulot alohida).</p>
+    <h2>Mahsulotlar${money() ? ' va o\'rtacha tannarx' : ''}</h2>
     <div class="table-wrap"><table>
-      <tr><th>Mahsulot</th><th class="num">Yetkazib beruvchi</th><th class="num">Miqdor</th>${money() ? '<th class="num">Summa</th><th class="num">Min narx</th><th class="num">Max narx</th><th class="num">O\'rtacha tannarx</th>' : ''}</tr>
-      ${c.products.map((p) => `<tr><td>${esc(p.name)}</td><td class="num">${p.suppliers}</td><td class="num">${fmtNum(p.quantity)} ${esc(p.unit)}</td>
-        ${money() ? `<td class="num">${fmtMoney(p.amount)}</td><td class="num">${fmtMoney(p.min_price)}</td><td class="num">${fmtMoney(p.max_price)}</td><td class="num"><b>${fmtNum(p.avg_cost)}</b></td>` : ''}</tr>`).join('')
-        || '<tr><td colspan="7" class="muted">Bu kunda qabul qilingan smena yo\'q</td></tr>'}
+      <tr><th>Mahsulot</th><th class="num">Miqdor</th>${money() ? '<th class="num">O\'rtacha tannarx</th>' : ''}</tr>
+      ${products.map((p) => `<tr><td>${esc(p.name)}</td><td class="num">${fmtNum(p.quantity)} ${esc(p.unit)}</td>
+        ${money() ? `<td class="num"><b>${fmtNum(p.avg_cost)}</b> so'm/${esc(p.unit)}</td>` : ''}</tr>`).join('')
+        || `<tr><td colspan="${money() ? 3 : 2}" class="muted">Qabul qilingan smena yo'q</td></tr>`}
     </table></div></div>`;
 }
 
@@ -276,7 +292,7 @@ function shiftRows(list, { actions = true, showAmount = true } = {}) {
 }
 const shiftActions = (s) => [
   s.status === 'closed' && can('shifts.accept') ? `<button class="small" data-accept="${s.id}">Qabul qilish</button>` : '',
-  ['closed', 'accepted'].includes(s.status) && can('shifts.cancel') ? `<button class="small ghost" data-cancel="${s.id}">Bekor qilish</button>` : '',
+  s.status === 'closed' && can('shifts.cancel') && cancelOn() ? `<button class="small ghost" data-cancel="${s.id}">Bekor qilish</button>` : '',
   s.status === 'cancelled' && can('shifts.copy') ? `<button class="small ghost" data-copy="${s.id}">Nusxalash</button>` : '',
 ].join('');
 function bindShiftActions(v) {
@@ -292,30 +308,39 @@ function bindShiftActions(v) {
 const views = {
   // ------------------------------------------------------------------ day overview
   async dashboard(v) {
-    const day = hashParams().get('day') || todayLocal();
-    const d = await api('GET', `/dashboard?day=${day}`);
-    const t = d.day_summary.totals;
+    const p = hashParams();
+    const to = p.get('to') || todayLocal();
+    const from = p.get('from') || to;
+    const product = p.get('product') || '';
+    const [d, prods] = await Promise.all([
+      api('GET', `/dashboard?from=${from}&to=${to}${product ? `&product=${product}` : ''}`),
+      api('GET', '/products'),
+    ]);
+    const t = d.summary.totals;
+    const preset = (f, t2, label) => `<button class="ghost small" data-range="${f}|${t2}">${label}</button>`;
     v.innerHTML = `
-      <div class="row" style="align-items:center;justify-content:space-between">
-        <div class="row" style="align-items:center"><button class="ghost" id="prev">‹</button><input type="date" id="day" value="${day}"><button class="ghost" id="next" ${day >= todayLocal() ? 'disabled' : ''}>›</button>
-          ${day !== todayLocal() ? '<button class="ghost small" id="today">Bugun</button>' : ''}</div>
+      <div class="row" style="align-items:end;gap:12px;flex-wrap:wrap">
+        <label>Dan <input type="date" id="from" value="${from}" max="${todayLocal()}"></label>
+        <label>Gacha <input type="date" id="to" value="${to}" max="${todayLocal()}"></label>
+        <div class="row" style="gap:6px">${preset(todayLocal(), todayLocal(), 'Bugun')}${preset(addDays(todayLocal(), -6), todayLocal(), '7 kun')}${preset(addDays(todayLocal(), -29), todayLocal(), '30 kun')}</div>
+        <label>Mahsulot <select id="product"><option value="">Barchasi</option>${prods.filter((x) => x.active).map((x) => `<option value="${x.id}" ${String(x.id) === product ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
       </div>
       <div class="tiles" style="margin-top:12px">
         <div class="tile"><div class="k">Qabul qilingan sut</div><div class="v">${fmtNum(t.quantity)}</div><div class="s">kg · ${t.shifts} ta smena</div></div>
-        ${money() ? `<div class="tile"><div class="k">Summa</div><div class="v">${fmtMoney(t.amount)}</div><div class="s">so'm</div></div>
-        <div class="tile"><div class="k">O'rtacha tannarx</div><div class="v">${fmtMoney(d.cost.overall.avg_cost)}</div><div class="s">so'm/kg (barcha mahsulot)</div></div>` : ''}
-        ${d.debt ? `<div class="tile"><div class="k">Biz qarzmiz (jami)</div><div class="v">${fmtMoney(d.debt.weOwe)}</div><div class="s"><a href="#debts">batafsil</a></div></div>` : ''}
+        ${money() ? `<div class="tile"><div class="k">Summa</div><div class="v">${fmtMoney(t.amount)}</div><div class="s">so'm</div></div>` : ''}
+        ${d.debt ? `<div class="tile"><div class="k">Qarzdorlik</div><div class="v">${fmtMoney(d.debt.weOwe)}</div><div class="s"><a href="#debts">batafsil</a></div></div>` : ''}
       </div>
-      ${costTable(d.cost)}
-      ${d.live.length || can('shifts.view_all') ? `<div class="card"><h2>🟢 Jonli — hozir ochiq smenalar <span class="muted">(hisobga hali kirmaydi)</span></h2>${shiftRows(d.live, { actions: false })}</div>` : ''}
-      ${d.waiting.length ? `<div class="card"><h2>⏳ Qabul kutayotgan smenalar</h2>${shiftRows(d.waiting)}</div>` : ''}
-      <div class="card"><h2>Qabul qilingan smenalar — ${esc(day)}</h2>${shiftRows(d.accepted)}</div>
-      <div class="card"><h2>Oxirgi 30 kun — qabul qilingan sut (kg)</h2><div id="chart30"></div></div>`;
-    dailyChart($('#chart30', v), d.month.byDay, d.month.range.from, d.month.range.to);
-    $('#day', v).onchange = (e) => setHash('dashboard', { day: e.target.value });
-    $('#prev', v).onclick = () => setHash('dashboard', { day: addDays(day, -1) });
-    $('#next', v).onclick = () => setHash('dashboard', { day: addDays(day, 1) });
-    $('#today', v) && ($('#today', v).onclick = () => setHash('dashboard', {}));
+      ${costTable(d.summary.byProduct)}
+      ${d.live.length || can('shifts.view_all') ? `<div class="card"><h2>Ochiq smenalar <span class="muted">(hisobga kirmaydi)</span></h2>${shiftRows(d.live, { actions: false })}</div>` : ''}
+      ${d.waiting.length ? `<div class="card"><h2>Qabul kutayotgan smenalar</h2>${shiftRows(d.waiting)}</div>` : ''}
+      <div class="card"><h2>Qabul qilingan smenalar</h2>${shiftRows(d.accepted)}</div>
+      <div class="card"><h2>Kunlik qabul (kg)</h2><div id="chart30"></div></div>`;
+    dailyChart($('#chart30', v), d.summary.byDay, from, to);
+    const go = (f, t2) => setHash('dashboard', { from: f, to: t2, ...(product ? { product } : {}) });
+    $('#from', v).onchange = (e) => go(e.target.value, to > e.target.value ? to : e.target.value);
+    $('#to', v).onchange = (e) => go(from < e.target.value ? from : e.target.value, e.target.value);
+    $('#product', v).onchange = (e) => setHash('dashboard', { from, to, ...(e.target.value ? { product: e.target.value } : {}) });
+    $$('[data-range]', v).forEach((btn) => { btn.onclick = () => { const [f, t2] = btn.dataset.range.split('|'); go(f, t2); }; });
     bindShiftActions(v);
   },
 
@@ -328,14 +353,12 @@ const views = {
     const dated = !['open', 'closed'].includes(params.status);
     v.innerHTML = `
       <div class="card">
-        <div class="presets">${[['closed', '⏳ Qabul kutmoqda'], ['open', '🟢 Jonli (ochiq)'], ['accepted', 'Qabul qilingan'], ['cancelled', 'Bekor qilingan'], ['', 'Hammasi']]
+        <div class="presets">${[['closed', 'Qabul kutmoqda'], ['open', 'Ochiq'], ['accepted', 'Qabul qilingan'], ['cancelled', 'Bekor qilingan'], ['', 'Hammasi']]
           .map(([k, t]) => `<button class="ghost small ${k === params.status ? 'on' : ''}" data-st="${k}">${t}</button>`).join('')}</div>
         <div class="row" style="margin-top:8px">
           ${dated ? `<label>Dan <input type="date" id="from" value="${params.from}"></label><label>Gacha <input type="date" id="to" value="${params.to}"></label>` : ''}
           <label>Xodim <select id="emp"><option value="">Hammasi</option>${emps.map((e) => `<option value="${e.id}" ${String(e.id) === params.employee ? 'selected' : ''}>${esc(e.name || e.login)}</option>`).join('')}</select></label>
         </div>
-        <p class="muted">Ochiq smena — qoralama, hech qayerda hisobga kirmaydi. Yopilgan smena o'zgartirilmaydi: uni faqat qabul qilish yoki bekor qilish mumkin.
-          Bekor qilingan smenani nusxalasa, xuddi shu raqam bilan "-copy" ochiq smena bo'lib xodim ilovasiga qaytadi.</p>
       </div>
       <div class="card">${shiftRows(rows)}</div>`;
     $$('[data-st]', v).forEach((b) => { b.onclick = () => setHash('shifts', { ...params, status: b.dataset.st }); });
@@ -357,11 +380,11 @@ const views = {
           ${s.accepted_at ? `<div class="muted">Qabul qildi: ${esc(s.accepted_by?.replace(/^\w+:/, ''))} · ${esc(fmtDate(s.accepted_at))}</div>` : ''}
           ${s.cancelled_at ? `<div class="err">Bekor qildi: ${esc(s.cancelled_by?.replace(/^\w+:/, ''))} · ${esc(fmtDate(s.cancelled_at))} — ${esc(s.cancel_reason)}</div>` : ''}</div>
         <div class="row">${shiftActions({ ...s, id: s.id })}</div></div>
-        ${missing.length ? `<p class="err">Narx belgilanmagan: ${[...new Set(missing.map((r) => r.supplier_name))].map(esc).join(', ')} — "Yetkazib beruvchilar" bo'limida narx qo'ying, keyin qabul qiling.</p>` : ''}
+        ${missing.length ? `<p class="err">Narx belgilanmagan: ${[...new Set(missing.map((r) => r.supplier_name))].map(esc).join(', ')} — "Xonadonlar" bo'limida narx qo'ying, keyin qabul qiling.</p>` : ''}
       </div>
       <div class="tiles">${d.byProduct.map((p) => `<div class="tile"><div class="k">${esc(p.name)}</div><div class="v">${fmtNum(p.quantity)}</div><div class="s">${esc(p.unit)} · ${p.pickups} ta</div></div>`).join('')}</div>
       <div class="card"><div class="table-wrap"><table>
-        <tr><th>Vaqt</th><th>Yetkazib beruvchi</th><th>Mahsulot</th><th class="num">Miqdor</th>${money() ? '<th class="num">Narx</th><th class="num">Summa</th>' : ''}</tr>
+        <tr><th>Vaqt</th><th>Xonadon</th><th>Mahsulot</th><th class="num">Miqdor</th>${money() ? '<th class="num">Narx</th><th class="num">Summa</th>' : ''}</tr>
         ${d.rows.map((r) => `<tr><td>${esc(fmtDate(r.collected_at))}${r.edited_at ? ' <span class="muted" title="Ochiq paytida tahrirlangan">✎</span>' : ''}</td>
           <td><a href="#supplier?id=${r.supplier_id}">${esc(r.supplier_name)}</a></td><td>${esc(r.product_name)}</td><td class="num">${fmtNum(r.quantity)} ${esc(r.unit)}</td>
           ${money() ? `<td class="num">${r.price != null ? fmtMoney(r.price) : r.current_price != null ? `<span class="muted">${fmtMoney(r.current_price)}*</span>` : '<span class="err">yo\'q</span>'}</td><td class="num">${fmtMoney(r.amount)}</td>` : ''}</tr>`).join('')
@@ -391,18 +414,18 @@ const views = {
         <label>Dan <input type="date" id="from" value="${from}"></label>
         <label>Gacha <input type="date" id="to" value="${to}"></label>
         <label>Xodim <select id="emp"><option value="">Hammasi</option>${emps.filter((e) => !e.is_test).map((e) => `<option value="${e.id}" ${String(e.id) === filt.employee ? 'selected' : ''}>${esc(e.name || e.login)}</option>`).join('')}</select></label>
-        ${sups.length ? `<label>Yetkazib beruvchi <select id="sup"><option value="">Hammasi</option>${sups.map((x) => `<option value="${x.id}" ${String(x.id) === filt.supplier ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>` : ''}
+        ${sups.length ? `<label>Xonadon <select id="sup"><option value="">Hammasi</option>${sups.map((x) => `<option value="${x.id}" ${String(x.id) === filt.supplier ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>` : ''}
         ${can('reports.export') ? '<button type="button" class="ghost" id="csv">⬇ Excel (CSV)</button>' : ''}
       </div><p class="muted">Faqat qabul qilingan smenalar.</p></div>
       <div class="tiles">
         <div class="tile"><div class="k">Jami miqdor</div><div class="v">${fmtNum(s.totals.quantity)}</div><div class="s">kg · ${s.totals.shifts} smena</div></div>
         ${money() ? `<div class="tile"><div class="k">Summa</div><div class="v">${fmtMoney(s.totals.amount)}</div><div class="s">so'm</div></div>
           <div class="tile"><div class="k">O'rtacha tannarx</div><div class="v">${s.totals.quantity ? fmtMoney(s.totals.amount / s.totals.quantity) : '—'}</div><div class="s">so'm/kg</div></div>` : ''}
-        <div class="tile"><div class="k">Yetkazib berishlar</div><div class="v">${s.totals.pickups}</div><div class="s">${s.totals.suppliers} ta yetkazib beruvchidan</div></div>
+        <div class="tile"><div class="k">Yetkazib berishlar</div><div class="v">${s.totals.pickups}</div><div class="s">${s.totals.suppliers} ta xonadondan</div></div>
       </div>
       <div class="card"><h2>Kunlik miqdor (kg)</h2><div id="daily"></div></div>
       <div class="grid2">
-        <div class="card"><h2>Yetkazib beruvchilar bo'yicha (kg)</h2><div id="rankSup"></div></div>
+        <div class="card"><h2>Xonadonlar bo'yicha (kg)</h2><div id="rankSup"></div></div>
         <div class="card"><h2>Xodimlar bo'yicha (kg)</h2><div id="rankEmp"></div></div>
       </div>
       <div class="card"><h2>Mahsulotlar</h2><div class="table-wrap"><table>
@@ -430,13 +453,18 @@ const views = {
     const [b, pays] = await Promise.all([api('GET', '/balances?q=' + encodeURIComponent(params.q)), api('GET', `/payments?from=${params.from}&to=${params.to}&voided=1`)]);
     v.innerHTML = `
       <div class="tiles">
-        <div class="tile"><div class="k">Biz qarzmiz</div><div class="v">${fmtMoney(b.totals.weOwe)}</div><div class="s">so'm, ${b.rows.filter((r) => r.balance > 0).length} ta yetkazib beruvchiga</div></div>
-        <div class="tile"><div class="k">Bizga qarz (avans)</div><div class="v">${fmtMoney(b.totals.theyOwe)}</div><div class="s">so'm</div></div>
+        <div class="tile"><div class="k">Qarzdorlik</div><div class="v">${fmtMoney(b.totals.weOwe)}</div><div class="s">so'm, ${b.rows.filter((r) => r.balance > 0).length} ta xonadon</div></div>
+        <div class="tile"><div class="k">Haqdorlik</div><div class="v">${fmtMoney(b.totals.theyOwe)}</div><div class="s">so'm (avans)</div></div>
       </div>
       <div class="card">
-        <input id="q" value="${esc(params.q)}" placeholder="Ism, telefon yoki manzil bo'yicha qidirish..." style="width:100%">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <input id="q" value="${esc(params.q)}" placeholder="Ism, telefon yoki manzil bo'yicha qidirish..." style="flex:1">
+          <div class="row" style="gap:6px">
+            <button class="ghost small" id="xls">⬇ Excel</button>
+            ${can('payments.create') ? '<button class="small" id="editbal">Balanslarni tahrirlash</button>' : ''}</div>
+        </div>
         <div class="table-wrap"><table>
-          <tr><th>Yetkazib beruvchi</th><th>Telefon</th><th class="num">Olingan</th><th class="num">To'langan</th><th class="num">Qarz</th><th>Oxirgi to'lov</th><th></th></tr>
+          <tr><th>Xonadon</th><th>Telefon</th><th class="num">Olingan</th><th class="num">To'langan</th><th class="num">Balans</th><th>Oxirgi to'lov</th><th></th></tr>
           ${b.rows.map((r) => `<tr ${r.active ? '' : 'class="muted"'}>
             <td><a href="#supplier?id=${r.id}">${esc(r.name)}</a></td><td>${esc(r.phone)}</td>
             <td class="num">${fmtMoney(r.purchased)}</td><td class="num">${fmtMoney(r.paid)}</td>
@@ -444,17 +472,21 @@ const views = {
             <td>${esc(fmtDate(r.last_payment).slice(0, 10))}</td>
             <td>${can('payments.create') ? `<button class="small" data-pay="${r.id}">To'lov</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Topilmadi</td></tr>'}
         </table></div>
-        <p class="muted">Qarz = boshlang'ich qarz + qabul qilingan smenalardagi sut summasi − to'lovlar. Ochiq va kutayotgan smenalar qarzga kirmaydi; to'lov esa darhol ayiriladi.</p>
       </div>
       <div class="card"><div class="row" style="justify-content:space-between;align-items:end"><h2>To'lovlar tarixi</h2>
         <div class="row"><label>Dan <input type="date" id="from" value="${params.from}"></label><label>Gacha <input type="date" id="to" value="${params.to}"></label></div></div>
         <div class="table-wrap"><table>
-          <tr><th>Sana</th><th>Yetkazib beruvchi</th><th class="num">Summa</th><th>Usul</th><th>Izoh</th><th>Kim</th><th></th></tr>
-          ${pays.map((p) => `<tr class="${p.voided_at ? 'voided' : ''}"><td>${esc(fmtDate(p.paid_at))}</td><td><a href="#supplier?id=${p.supplier_id}">${esc(p.supplier_name)}</a></td>
-            <td class="num">${fmtMoney(p.amount)}</td><td>${METHOD[p.method]}</td><td>${esc(p.note)}</td><td class="muted">${esc(p.by_name || p.created_by.replace(/^\w+:/, ''))}</td>
+          <tr><th>Sana</th><th>Xonadon</th><th class="num">Summa</th><th>Usul</th><th>Izoh</th><th>Kim</th><th></th></tr>
+          ${pays.map((p) => p.kind === 'adjust'
+            ? `<tr><td>${esc(fmtDate(p.at))}</td><td><a href="#supplier?id=${p.supplier_id}">${esc(p.supplier_name)}</a></td>
+              <td class="num">${fmtMoney(p.amount)}</td><td colspan="2"><b>Balans tahrirlandi</b>${p.note ? ` — ${esc(p.note)}` : ''}</td><td class="muted">${esc(p.by_name || '')}</td><td></td></tr>`
+            : `<tr class="${p.voided_at ? 'voided' : ''}"><td>${esc(fmtDate(p.at))}</td><td><a href="#supplier?id=${p.supplier_id}">${esc(p.supplier_name)}</a></td>
+            <td class="num">${fmtMoney(p.amount)}</td><td>${METHOD[p.method]}</td><td>${esc(p.note)}</td><td class="muted">${esc(p.by_name || '')}</td>
             <td>${p.voided_at ? `<span class="muted">Bekor: ${esc(p.void_reason)}</span>` : can('payments.void') ? `<button class="small ghost" data-void="${p.id}">Bekor qilish</button>` : ''}</td></tr>`).join('')
-            || '<tr><td colspan="7" class="muted">Bu davrda to\'lov yo\'q</td></tr>'}
+            || '<tr><td colspan="7" class="muted">Bu davrda yozuv yo\'q</td></tr>'}
         </table></div></div>`;
+    $('#xls', v).onclick = act(() => download('GET', `/balances-export.xlsx?q=${encodeURIComponent(params.q)}`, 'yaya_qarzlar.xlsx'));
+    $('#editbal', v) && ($('#editbal', v).onclick = () => openBalanceEditor());
     let t;
     $('#q', v).oninput = (e) => { clearTimeout(t); t = setTimeout(() => setHash('debts', { ...params, q: e.target.value }), 400); };
     if (params.q) { $('#q', v).focus(); $('#q', v).setSelectionRange(params.q.length, params.q.length); }
@@ -464,6 +496,40 @@ const views = {
     $$('[data-void]', v).forEach((btn) => { btn.onclick = () => reasonForm('To\'lovni bekor qilish', `/payments/${btn.dataset.void}/void`); });
   },
 
+  // ------------------------------------------------------------------ edit balances
+  async ['balance-edit'](v) {
+    if (!BALANCE_PW) { location.hash = 'debts'; return; }
+    const q = hashParams().get('q') || '';
+    const b = await api('GET', '/balances?q=' + encodeURIComponent(q));
+    v.innerHTML = `
+      <p><a href="#debts">← Qarzlar va to'lovlar</a></p>
+      <div class="card">
+        <h2>Balanslarni tahrirlash</h2>
+        <p class="muted">Xonadonni tanlab, "Yangi balans" ustuniga haqiqiy summani yozing (musbat — biz qarzmiz, minus — bizga qarz). Faqat yozilgan qatorlar o'zgaradi.</p>
+        <input id="q" value="${esc(q)}" placeholder="Qidirish..." style="width:100%;margin-bottom:8px">
+        <div class="table-wrap"><table>
+          <tr><th>Xonadon</th><th class="num">Hozirgi balans</th><th class="num">Yangi balans (haqiqat)</th></tr>
+          ${b.rows.map((r) => `<tr><td>${esc(r.name)}</td><td class="num">${fmtMoney(r.balance)}</td>
+            <td class="num"><input type="number" step="1" class="newbal" data-id="${r.id}" data-cur="${r.balance}" placeholder="${r.balance}" style="width:140px;text-align:right"></td></tr>`).join('')}
+        </table></div>
+        <label style="margin-top:10px">Izoh (barcha o'zgarishlar uchun) <input id="note" maxlength="300" placeholder="Masalan: inventarizatsiya"></label>
+        <p class="err" id="err"></p>
+        <button id="save">Saqlash</button>
+      </div>`;
+    $('#q', v).onchange = (e) => setHash('balance-edit', { q: e.target.value });
+    $('#save', v).onclick = act(async () => {
+      const items = $$('.newbal', v).filter((i) => i.value.trim() !== '')
+        .map((i) => ({ supplierId: Number(i.dataset.id), target: Math.round(Number(i.value)) }));
+      if (!items.length) { $('#err', v).textContent = 'Hech bo\'lmasa bitta xonadonga yangi balans yozing'; return; }
+      const names = items.length;
+      if (!confirm(`${names} ta xonadon balansi o'zgaradi. Davom etasizmi?`)) return;
+      await api('POST', '/balances/edit', { password: BALANCE_PW, items, note: $('#note', v).value });
+      BALANCE_PW = '';
+      flash('Balanslar saqlandi');
+      location.hash = 'debts';
+    });
+  },
+
   // ------------------------------------------------------------------ supplier card
   async supplier(v) {
     const id = hashParams().get('id');
@@ -471,7 +537,7 @@ const views = {
     const s = c.supplier;
     const st = c.statement;
     v.innerHTML = `
-      <p><a href="#suppliers">← Yetkazib beruvchilar</a></p>
+      <p><a href="#suppliers">← Xonadonlar</a></p>
       <div class="card"><div class="row" style="justify-content:space-between;align-items:start">
         <div><h2 style="margin-bottom:4px">${esc(s.name)} ${s.active ? '' : '<span class="badge error">o\'chirilgan</span>'}</h2>
           <div class="muted">${esc(s.phone)}</div>
@@ -527,7 +593,7 @@ const views = {
     ];
     const prodOpts = prods.filter((p) => p.active).map((p) => [p.id, `${p.name} (${p.unit})`]);
     v.innerHTML = `
-      <div class="card"><div class="row" style="justify-content:space-between"><h2>Yetkazib beruvchilar (${sups.filter((s) => s.active).length})</h2>
+      <div class="card"><div class="row" style="justify-content:space-between"><h2>Xonadonlar (${sups.filter((s) => s.active).length})</h2>
         <div class="row">${can('suppliers.create') ? '<button id="add">+ Yangi</button>' : ''}
           ${can('suppliers.import') ? '<button class="ghost" id="exp">⬇ Excel\'ga eksport</button><button class="ghost" id="tpl">⬇ Bo\'sh shablon</button>' : ''}
           ${can('suppliers.import') && prices ? '<button class="ghost" id="imp">⬆ Excel\'dan import</button>' : ''}</div></div>
@@ -535,7 +601,7 @@ const views = {
       </div>
       <div id="impBox"></div>
       <div class="card"><div class="table-wrap"><table>
-        <tr><th>Yetkazib beruvchi</th><th>Sut yig'uvchi</th><th>Mahsulot${money() ? ' va narx' : ''}</th><th></th></tr>
+        <tr><th>Xonadon</th><th>Sut yig'uvchi</th><th>Mahsulot${money() ? ' va narx' : ''}</th><th></th></tr>
         ${sups.map((s) => `<tr data-name="${esc(`${s.name} ${s.address ?? ''}`.toLowerCase())}" data-phone="${digits(s.phone)}" ${s.active ? '' : 'class="muted"'}>
           <td><a href="#supplier?id=${s.id}"><b>${esc(s.name)}</b></a>${s.active ? '' : ' (o\'chirilgan)'}<div class="muted">${esc(s.phone)} ${esc(s.address)}</div>
             ${s.created_by?.startsWith('user:') && s.created_by !== `user:${me.login}` ? `<div class="muted">qo'shgan: ${esc(s.created_by.slice(5))}</div>` : ''}</td>
@@ -546,7 +612,7 @@ const views = {
               || '<span class="err">Mahsulot biriktirilmagan</span>'}</td>
           <td class="row">${prices ? `<button class="small" data-price="${s.id}|">+ Narx</button>` : ''}
             ${can('suppliers.edit') ? `<button class="small ghost" data-edit="${s.id}">Tahrirlash</button><button class="small ghost" data-toggle="${s.id}">${s.active ? 'O\'chirish' : 'Yoqish'}</button>` : ''}</td>
-        </tr>`).join('') || '<tr><td colspan="4" class="muted">Hali yetkazib beruvchi yo\'q</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="4" class="muted">Hali xonadon yo\'q</td></tr>'}
       </table></div></div>`;
     void staff;
     $('#flt', v).oninput = (e) => {
@@ -554,7 +620,7 @@ const views = {
       const d = digits(t);
       $$('tr[data-name]', v).forEach((tr) => { tr.hidden = !!t && !tr.dataset.name.includes(t) && !(d.length >= 2 && tr.dataset.phone.includes(d)); });
     };
-    $('#add', v) && ($('#add', v).onclick = () => openForm({ title: 'Yangi yetkazib beruvchi', fields: form(),
+    $('#add', v) && ($('#add', v).onclick = () => openForm({ title: 'Yangi xonadon', fields: form(),
       onSubmit: async (d) => { await api('POST', '/suppliers', { ...d, openingBalance: d.openingBalance === '' ? undefined : Number(d.openingBalance) }); flash('Qo\'shildi. Endi mahsulot va narx belgilang.'); } }));
     $('#tpl', v) && ($('#tpl', v).onclick = act(() => download('GET', '/suppliers-import/template.xlsx', 'yaya_yetkazib_beruvchilar_shablon.xlsx')));
     $('#exp', v) && ($('#exp', v).onclick = act(() => download('GET', '/suppliers-export.xlsx', `yaya_yetkazib_beruvchilar_${todayLocal()}.xlsx`)));
@@ -587,7 +653,7 @@ const views = {
       });
     }; });
     $$('[data-del]', v).forEach((b) => { b.onclick = act(async () => {
-      if (!confirm('Bu mahsulotni yetkazib beruvchidan olib tashlaysizmi?')) return;
+      if (!confirm('Bu mahsulotni xonadondan olib tashlaysizmi?')) return;
       await api('DELETE', '/supplier-products/' + b.dataset.del);
       route();
     }); });
@@ -609,10 +675,8 @@ const views = {
     const toBody = (d) => ({ ...d, roleId: Number(d.roleId), password: d.password || undefined });
     v.innerHTML = `
       <div class="card"><div class="row" style="justify-content:space-between"><h2>Xodimlar</h2><button id="add">+ Yangi xodim</button></div>
-      <p class="muted">Hamma xodim — admin, menejer, omborchi, buxgalter, sut yig'uvchi — mobil ilovaga <b>bitta login va parol</b> bilan kiradi.
-        Ilova kim kirganini o'zi taniydi va faqat uning roliga ruxsat etilgan bo'limlarni ochadi. Veb panelga faqat "Veb boshqaruv paneliga kirish" ruxsati borlar kiradi.</p>
       <div class="table-wrap"><table>
-        <tr><th>Ism</th><th>Login</th><th>Rol</th><th class="num">Yetkazib beruvchi</th><th>Qurilmalar</th><th>Oxirgi faollik</th><th></th></tr>
+        <tr><th>Ism</th><th>Login</th><th>Rol</th><th class="num">Xonadon</th><th>Qurilmalar</th><th>Oxirgi faollik</th><th></th></tr>
         ${rows.map((u) => `<tr ${u.active ? '' : 'class="muted"'}>
           <td>${esc(u.name)} ${u.is_test ? '<span class="badge test">test</span>' : ''}${u.active ? '' : ' (o\'chirilgan)'}<div class="muted">${esc(u.phone)}</div></td>
           <td><code>${esc(u.login)}</code></td><td>${esc(u.role_name)}</td>
@@ -621,7 +685,8 @@ const views = {
           <td>${esc(fmtDate(u.last_seen_at))}</td>
           <td class="row">${collectRoles.has(u.role_id) ? `<button class="small" data-assign="${u.id}">Biriktirish</button>` : ''}
             <button class="small ghost" data-edit="${u.id}">Tahrirlash</button>
-            <button class="small ghost" data-toggle="${u.id}">${u.active ? 'O\'chirish' : 'Yoqish'}</button></td></tr>`).join('')}
+            <button class="small ghost" data-toggle="${u.id}">${u.active ? 'O\'chirish' : 'Yoqish'}</button>
+            ${!u.active ? `<button class="small ghost" data-remove="${u.id}">Butunlay o'chirish</button>` : ''}</td></tr>`).join('')}
       </table></div></div>
       <div id="assign"></div>`;
     $('#add', v).onclick = () => openForm({ title: 'Yangi xodim', fields: form(), onSubmit: async (d) => { await api('POST', '/staff', toBody(d)); flash('Qo\'shildi. Unga 1 ta qurilma joyi ochildi.'); } });
@@ -635,6 +700,13 @@ const views = {
       await api('PATCH', `/staff/${u.id}`, { active: !u.active });
       route();
     }); });
+    $$('[data-remove]', v).forEach((b) => { b.onclick = act(async () => {
+      const u = rows.find((x) => String(x.id) === b.dataset.remove);
+      if (!confirm(`${u.name || u.login} tizimdan BUTUNLAY o'chiriladi. Bu amalni qaytarib bo'lmaydi. Davom etasizmi?`)) return;
+      await api('DELETE', `/staff/${u.id}`);
+      flash('Xodim butunlay o\'chirildi');
+      route();
+    }); });
     $$('[data-assign]', v).forEach((b) => { b.onclick = act(async () => {
       const id = b.dataset.assign;
       const u = rows.find((x) => String(x.id) === id);
@@ -643,13 +715,13 @@ const views = {
       const active = sups.filter((s) => s.active);
       const ordered = [...chosen.map((cid) => active.find((s) => s.id === cid)).filter(Boolean), ...active.filter((s) => !chosen.includes(s.id))];
       box.innerHTML = `<div class="card">
-        <h2>${esc(u.name || u.login)} — yetkazib beruvchilar</h2>
+        <h2>${esc(u.name || u.login)} — xonadonlar</h2>
         <p class="muted">Belgilanganlar ilovada shu tartibda (yo'nalish bo'yicha) chiqadi. ↑ ↓ bilan tartibni o'zgartiring.</p>
         <input id="flt" placeholder="Ism yoki telefon bo'yicha qidirish..." style="width:100%;margin-bottom:8px">
         <div id="list">${ordered.map((s) => `<div class="row" data-id="${s.id}" data-name="${esc(s.name.toLowerCase())}" data-phone="${digits(s.phone)}" style="align-items:center;padding:4px 0">
           <label style="display:flex;gap:8px;align-items:center;color:var(--text);flex:1"><input type="checkbox" ${chosen.includes(s.id) ? 'checked' : ''}> ${esc(s.name)} <span class="muted">${esc(s.phone)} ${esc(s.address)}</span></label>
           <button type="button" class="small ghost" data-up>↑</button><button type="button" class="small ghost" data-down>↓</button></div>`).join('')
-          || '<p class="muted">Avval yetkazib beruvchi qo\'shing.</p>'}</div>
+          || '<p class="muted">Avval xonadon qo\'shing.</p>'}</div>
         <p><button id="saveAssign">Saqlash</button></p></div>`;
       $('#flt', box).oninput = (e) => {
         const t = e.target.value.toLowerCase();
@@ -661,7 +733,7 @@ const views = {
       $('#saveAssign', box).onclick = act(async () => {
         const ids = $$('#list > div', box).filter((r) => $('input', r).checked).map((r) => Number(r.dataset.id));
         await api('PUT', `/staff/${id}/suppliers`, { supplierIds: ids });
-        flash(`${ids.length} ta yetkazib beruvchi biriktirildi`);
+        flash(`${ids.length} ta xonadon biriktirildi`);
         route();
       });
       box.scrollIntoView({ behavior: 'smooth' });
@@ -675,9 +747,6 @@ const views = {
     const list = userFilter ? staff.filter((u) => String(u.id) === userFilter) : staff.filter((u) => !u.is_test);
     v.innerHTML = `
       <div class="card"><h2>Qurilmalar</h2>
-        <p class="muted">Har bir xodim faqat o'ziga ochilgan <b>qurilma joylari</b> soniga teng qurilmadan kira oladi. Birinchi marta kirgan qurilma bo'sh joyga avtomatik biriktiriladi.
-          Barcha joylar band bo'lsa, login va parolni bilgan begona odam ham boshqa qurilmadan kira olmaydi.
-          Telefon yo'qolsa yoki almashsa — "Bo'shatish" ni bosing: eski qurilma darhol chiqarib yuboriladi va yangisi kira oladi.</p>
         ${userFilter ? '<p><a href="#devices">← Barcha xodimlar</a></p>' : ''}
       </div>
       ${list.map((u) => {
@@ -720,8 +789,6 @@ const views = {
     }
     v.innerHTML = `
       <div class="card"><div class="row" style="justify-content:space-between"><h2>Rollar (ruxsatlar to'plami)</h2><button id="addRole">+ Yangi rol</button></div>
-        <p class="muted">Rol — bu ruxsatlar to'plami. Mobil ilovada har bir xodim faqat o'z roliga ruxsat etilgan bo'limlarni ko'radi.
-          Masalan, omborchi smena ochmaydi, lekin kelgan smenalarni qabul qiladi va to'lov qiladi; sut yig'uvchi esa smena ochib sut qabul qiladi.</p>
         <div class="table-wrap"><table><tr><th>Rol</th><th class="num">Ruxsatlar</th><th class="num">Xodimlar</th><th></th></tr>
         ${roles.map((r) => `<tr><td><b>${esc(r.name)}</b>${r.locked ? ' <span class="muted">(doim barcha ruxsatlar)</span>' : ''}</td>
           <td class="num">${r.permissions.length} / ${perms.length}</td><td class="num">${r.users}</td>
@@ -816,7 +883,7 @@ const views = {
         { name: 'password', label: 'Parol', value: '111111', required: true },
         { name: 'roleId', label: 'Rol', type: 'select', options: roles.map((r) => [r.id, r.name]), value: roles.find((r) => r.code === 'collector')?.id },
       ],
-      onSubmit: async (d) => { await api('POST', '/staff', { ...d, roleId: Number(d.roleId), isTest: true }); flash('Test xodim yaratildi. Sut yig\'uvchi bo\'lsa, "Xodimlar"da yetkazib beruvchi biriktiring.'); },
+      onSubmit: async (d) => { await api('POST', '/staff', { ...d, roleId: Number(d.roleId), isTest: true }); flash('Test xodim yaratildi. Sut yig\'uvchi bo\'lsa, "Xodimlar"da xonadon biriktiring.'); },
     }));
     $('#clr', v) && ($('#clr', v).onclick = act(async () => {
       if (!confirm('Test xodimlar kiritgan barcha smena va to\'lovlar o\'chiriladi. Davom etasizmi?')) return;
@@ -833,25 +900,22 @@ const views = {
       ${st ? `<div class="card" style="max-width:760px">
         <h2>Brend</h2>
         <form id="brandForm">
-          <label>Kompaniya nomi (ilova va panelda ko'rinadi) <input name="companyName" value="${esc(st.companyName)}" maxlength="60"></label>
-          <label>Salomlashish matni (ilovada smena ekranida) <input name="greeting" value="${esc(st.greeting || '')}" maxlength="120" placeholder="Assalomu alaykum, {ism}"></label>
-          <p class="muted"><code>{ism}</code> — foydalanuvchining ismiga almashtiriladi. Bo'sh qoldirilsa, standart "Assalomu alaykum, [ism]" ishlatiladi.</p>
-          <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="locationEnabled" ${st.locationEnabled ? 'checked' : ''}> Joylashuv bilan ishlash (sut yig'uvchida eng yaqin yetkazib beruvchi tartibi va yo'l ko'rsatish)</label>
-          <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="locationPin" ${st.locationPin ? 'checked' : ''}> Smena ro'yxatida yetkazib beruvchi yonida joylashuv belgisini ko'rsatish</label>
-          <p class="muted">O'chirilsa, ilovada joylashuv ishlatilmaydi, lekin yetkazib beruvchilarning saqlangan manzili/joyi o'chmaydi.</p>
+          <label>Kompaniya nomi <input name="companyName" value="${esc(st.companyName)}" maxlength="60"></label>
+          <label>Salomlashish matni <input name="greeting" value="${esc(st.greeting || '')}" maxlength="120" placeholder="Assalomu alaykum, {ism}"></label>
+          <p class="muted"><code>{ism}</code> — foydalanuvchining ismiga almashtiriladi.</p>
+          <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="locationEnabled" ${st.locationEnabled ? 'checked' : ''}> Xarita rejimi (eng yaqin xonadon tartibi va yo'l ko'rsatish). O'chirilsa, faqat manzil ko'rinadi.</label>
+          <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="cancelEnabled" ${st.cancelEnabled ? 'checked' : ''}> "Bekor qilish" funksiyasi. O'chirilsa, hamma joyda faqat "Qabul qilish" qoladi.</label>
           <button>Saqlash</button>
         </form>
         <div class="row" style="align-items:center;margin-top:12px">
           <div class="logo-preview">${brand.logoUrl ? `<img src="${esc(brand.logoUrl)}" alt="Logo">` : '<span class="muted">Logo yo\'q</span>'}</div>
           <div><label style="display:inline-block"><input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp" hidden><span class="btnlike">⬆ Logo yuklash</span></label>
-            ${brand.logoUrl ? '<button class="ghost" id="logoDel">Logoni olib tashlash</button>' : ''}
-            <p class="muted">Panel, ilova va kirish ekranida darhol ko'rinadi. Telefondagi ilova belgisi keyingi APK yig'ishda shu logoga almashadi.</p></div>
+            ${brand.logoUrl ? '<button class="ghost" id="logoDel">Logoni olib tashlash</button>' : ''}</div>
         </div>
         <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
         <h2>Kirish animatsiyasi</h2>
-        <p class="muted">Ilova ochilganda (va qulfdan keyin) foydalanuvchiga ko'rinadigan qisqa, ovozsiz video. Qurilma xotirasidan yuklang: mp4, webm yoki gif (10 MB gacha).</p>
         <div class="row" style="align-items:center">
-          <div class="logo-preview" style="width:120px;height:80px">${st.hasIntro ? `<video src="${esc(brand.introUrl || '/api/public/intro')}" muted autoplay loop playsinline style="width:100%;height:100%;object-fit:cover"></video>` : '<span class="muted">Yo\'q</span>'}</div>
+          <div class="intro-preview">${st.hasIntro ? `<video src="${esc(brand.introUrl || '/api/public/intro')}" muted autoplay loop playsinline></video>` : '<span class="muted">Yo\'q</span>'}</div>
           <div><label style="display:inline-block"><input type="file" id="introFile" accept="video/mp4,video/webm" hidden><span class="btnlike">⬆ Video yuklash</span></label>
             ${st.hasIntro ? '<button class="ghost" id="introDel">Olib tashlash</button>' : ''}</div>
         </div>
@@ -872,7 +936,7 @@ const views = {
       ${can('data.backup') ? `
       <div class="card" style="max-width:760px">
         <h2>🔐 Zaxira nusxa (barcha ma'lumotlar)</h2>
-        <p class="muted">Butun tizim — xodimlar, rollar, yetkazib beruvchilar, narxlar, smenalar, to'lovlar, jurnal, logo — bitta <b>.yaya</b> faylga yoziladi
+        <p class="muted">Butun tizim — xodimlar, rollar, xonadonlar, narxlar, smenalar, to'lovlar, jurnal, logo — bitta <b>.yaya</b> faylga yoziladi
           va siz tanlagan parol bilan <b>AES-256</b> shifrlanadi. Parolsiz faylni hech kim ocha olmaydi. Yangi serverga ko'chishda shu faylni import qilasiz.</p>
         <form id="expForm" class="row" style="align-items:end">
           <label>Admin parolingiz <input name="password" type="password" required autocomplete="current-password"></label>
@@ -917,7 +981,7 @@ const views = {
         const f = e.target.elements;
         await api('PUT', '/settings', {
           companyName: f.companyName.value, greeting: f.greeting.value,
-          locationEnabled: f.locationEnabled.checked, locationPin: f.locationPin.checked,
+          locationEnabled: f.locationEnabled.checked, cancelEnabled: f.cancelEnabled.checked,
         });
         await loadBrand();
         flash('Saqlandi');
@@ -991,7 +1055,7 @@ function wipeWizard(box) {
   const render = () => {
     if (step === 1) {
       box.innerHTML = `<p class="err"><b>Diqqat!</b> Barcha smenalar, sut yozuvlari, to'lovlar va hisobotlar o'chiriladi.
-        Xodimlar, yetkazib beruvchilar, narxlar va sozlamalar qoladi.</p>
+        Xodimlar, xonadonlar, narxlar va sozlamalar qoladi.</p>
         <p class="muted">Tozalashdan oldin avtomatik zaxira olinadi va <b>3 kun</b> ichida tiklash mumkin. Shundan keyin qaytarib bo'lmaydi.
           Avval "Zaxirani yuklab olish" orqali o'zingizda ham nusxa saqlashni tavsiya qilamiz.</p>
         <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" id="w1"> Tushundim, davom etmoqchiman</label>
@@ -1091,7 +1155,7 @@ function importFlow(box) {
 const route = act(async () => {
   if (!me) return;
   const name = location.hash.slice(1).split('?')[0] || 'dashboard';
-  const parent = { supplier: 'suppliers', shift: 'shifts' }[name] ?? name;
+  const parent = { supplier: 'suppliers', shift: 'shifts', 'balance-edit': 'debts' }[name] ?? name;
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + parent));
   // Each navigation renders into a fresh container, so a slow, older page that
   // finishes loading late can never overwrite the page the user is now on.
