@@ -109,7 +109,7 @@ export function SupplierCard({ id, onBack, onPay }) {
                 </View>
               </View>
             ) : c.canEdit && <Btn title="Ismini tahrirlash" kind="ghost" onPress={() => setRenaming(c.supplier.name)} />}
-            {c.canSetLocation && (
+            {c.canSetLocation && api.locationEnabled() && (
               <View style={[s.card, { gap: 8 }]}>
                 <Text style={[s.text, { fontWeight: '700' }]}>📍 Manzil / joylashuv</Text>
                 <Text style={s.muted}>{c.supplier.address || 'Manzil kiritilmagan'}{c.supplier.lat != null ? ' · xaritada belgilangan' : ''}</Text>

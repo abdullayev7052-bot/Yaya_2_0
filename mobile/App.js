@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { AppState, View } from 'react-native';
+import { Component, useCallback, useEffect, useState } from 'react';
+import { AppState, Pressable, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import * as api from './src/api';
@@ -9,12 +9,35 @@ import Home from './src/screens/Home';
 import { LockScreen } from './src/screens/Lock';
 import { s } from './src/ui';
 
+// Catches any render error anywhere in the app and shows a recover screen
+// instead of letting the app close. Nothing the user entered is lost — it is
+// already saved on the phone and will still sync.
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error) { /* kept on screen; could be logged later */ }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', padding: 24, gap: 16 }}>
+        <Text style={s.h1}>Nimadir xato ketdi</Text>
+        <Text style={s.muted}>Ma'lumotlaringiz telefonda saqlangan va yo'qolmaydi. "Qayta urinish" ni bosing.</Text>
+        <Pressable style={s.btn} onPress={() => this.setState({ error: null })}>
+          <Text style={s.btnText}>Qayta urinish</Text>
+        </Pressable>
+      </View>
+    );
+  }
+}
+
 export default function App() {
   return (
     <SafeAreaProvider>
       <SafeAreaView style={s.screen} edges={['top', 'bottom']}>
         <StatusBar style="dark" />
-        <Root />
+        <ErrorBoundary>
+          <Root />
+        </ErrorBoundary>
       </SafeAreaView>
     </SafeAreaProvider>
   );

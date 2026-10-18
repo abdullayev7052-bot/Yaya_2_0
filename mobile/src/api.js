@@ -65,7 +65,11 @@ async function call(method, path, body, { timeoutMs = 15000 } = {}) {
 
 // ---------------------------------------------------------------- branding
 // The logo is cached as a data URI so it shows even with no network.
-export const getBrand = () => store.getKv('brand', { companyName: '', version: '', greeting: '', logo: null, intro: null });
+export const getBrand = () => store.getKv('brand', { companyName: '', version: '', greeting: '', logo: null, intro: null, locationEnabled: true, locationPin: true });
+// Admin switches: whether the app uses location at all, and whether the little
+// route pin shows in the shift list. Default on when the server hasn't said.
+export const locationEnabled = () => getBrand().locationEnabled !== false;
+export const locationPin = () => getBrand().locationPin !== false;
 const toDataUri = async (url) => {
   const blob = await (await fetch(url)).blob();
   return new Promise((resolve, reject) => {
@@ -88,6 +92,8 @@ export async function refreshBrand(knownVersion) {
       version: String(b.version),
       logo,
       intro: b.introUrl ? getServerUrl() + b.introUrl : null,
+      locationEnabled: b.locationEnabled !== false,
+      locationPin: b.locationPin !== false,
     };
     store.setKv('brand', next);
     return next;

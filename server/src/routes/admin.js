@@ -458,11 +458,18 @@ export default async function adminRoutes(app, { db }) {
     greeting: getSetting(db, 'greeting') ?? '',
     hasIntro: !!db.prepare("SELECT 1 FROM files WHERE key = 'intro'").get(),
     introMime: db.prepare("SELECT mime FROM files WHERE key = 'intro'").get()?.mime ?? null,
+    // Location features default ON; stored only when turned off.
+    locationEnabled: getSetting(db, 'location_enabled') !== '0',
+    locationPin: getSetting(db, 'location_pin') !== '0',
   }));
   app.put('/settings', need('settings.manage'), async (req) => {
     if (req.body?.companyName !== undefined) setSetting(db, 'company_name', str(req.body.companyName, 60));
     // Greeting shown on the collector's start screen; {ism} is replaced by the name.
     if (req.body?.greeting !== undefined) setSetting(db, 'greeting', str(req.body.greeting, 120));
+    // location_enabled: use the phone's location for the nearest-first list and route pin.
+    // location_pin: show the little route pin in the shift list. Supplier locations are kept either way.
+    if (req.body?.locationEnabled !== undefined) setSetting(db, 'location_enabled', req.body.locationEnabled ? '1' : '0');
+    if (req.body?.locationPin !== undefined) setSetting(db, 'location_pin', req.body.locationPin ? '1' : '0');
     setSetting(db, 'brand_version', Date.now());
     log(req, 'settings.update', { companyName: req.body?.companyName });
     return { ok: true };

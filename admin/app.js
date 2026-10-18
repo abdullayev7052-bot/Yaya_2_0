@@ -836,6 +836,9 @@ const views = {
           <label>Kompaniya nomi (ilova va panelda ko'rinadi) <input name="companyName" value="${esc(st.companyName)}" maxlength="60"></label>
           <label>Salomlashish matni (ilovada smena ekranida) <input name="greeting" value="${esc(st.greeting || '')}" maxlength="120" placeholder="Assalomu alaykum, {ism}"></label>
           <p class="muted"><code>{ism}</code> — foydalanuvchining ismiga almashtiriladi. Bo'sh qoldirilsa, standart "Assalomu alaykum, [ism]" ishlatiladi.</p>
+          <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="locationEnabled" ${st.locationEnabled ? 'checked' : ''}> Joylashuv bilan ishlash (sut yig'uvchida eng yaqin yetkazib beruvchi tartibi va yo'l ko'rsatish)</label>
+          <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="locationPin" ${st.locationPin ? 'checked' : ''}> Smena ro'yxatida yetkazib beruvchi yonida joylashuv belgisini ko'rsatish</label>
+          <p class="muted">O'chirilsa, ilovada joylashuv ishlatilmaydi, lekin yetkazib beruvchilarning saqlangan manzili/joyi o'chmaydi.</p>
           <button>Saqlash</button>
         </form>
         <div class="row" style="align-items:center;margin-top:12px">
@@ -911,7 +914,11 @@ const views = {
     if (st) {
       $('#brandForm', v).onsubmit = act(async (e) => {
         e.preventDefault();
-        await api('PUT', '/settings', { companyName: e.target.elements.companyName.value, greeting: e.target.elements.greeting.value });
+        const f = e.target.elements;
+        await api('PUT', '/settings', {
+          companyName: f.companyName.value, greeting: f.greeting.value,
+          locationEnabled: f.locationEnabled.checked, locationPin: f.locationPin.checked,
+        });
         await loadBrand();
         flash('Saqlandi');
       });

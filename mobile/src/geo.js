@@ -7,9 +7,18 @@ import * as api from './api';
 // distance and lets them mark where a supplier is. Office staff are never asked.
 
 let current = null; // { lat, lng } or null
-let watching = null;
+let watching = null; // the native subscription, when active
+let starting = false; // guards against concurrent start calls
 const listeners = new Set();
 const emit = () => listeners.forEach((fn) => fn(current));
+
+// Only report a move when it is real (>25 m). This keeps the supplier list from
+// reshuffling on GPS jitter and keeps re-renders rare — it never touches the server.
+function update(lat, lng) {
+  if (current && distanceM(current, { lat, lng }) < 25) return;
+  current = { lat, lng };
+  emit();
+}
 
 export function useMyLocation() {
   const [loc, setLoc] = useState(current);
@@ -17,30 +26,36 @@ export function useMyLocation() {
   return loc;
 }
 
-// Ask once, then keep a light watch while the app is open. Called only when a
-// shift is open and the user collects. Safe to call repeatedly.
+// Start following the phone's location ONCE. Calling it again while already
+// watching does nothing (no restart), so re-renders cannot churn the GPS watch.
 export async function startLocation() {
-  if (watching || Platform.OS === 'web') { if (Platform.OS === 'web') await webOnce(); return; }
+  if (watching || starting) return;
+  starting = true;
   try {
+    if (Platform.OS === 'web') { await webOnce(); return; }
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return;
+    if (watching) return; // another call won the race
     watching = await Location.watchPositionAsync(
-      { accuracy: Location.Accuracy.Balanced, timeInterval: 60000, distanceInterval: 50 },
-      (p) => { current = { lat: p.coords.latitude, lng: p.coords.longitude }; emit(); },
+      // At most one update every 15 s, and only after moving 30 m.
+      { accuracy: Location.Accuracy.Balanced, timeInterval: 15000, distanceInterval: 30 },
+      (p) => update(p.coords.latitude, p.coords.longitude),
     );
-  } catch { /* GPS off or denied: the app simply shows no distances */ }
+  } catch { /* GPS off or denied: the app simply shows no distances */ } finally {
+    starting = false;
+  }
 }
 export function stopLocation() {
-  if (watching && watching.remove) watching.remove();
+  try { if (watching && watching.remove) watching.remove(); } catch { /* ignore */ }
   watching = null;
 }
 
-// Browser tester: use the Geolocation API once.
+// Browser tester: use the Geolocation API once (no continuous watch on web).
 function webOnce() {
   return new Promise((resolve) => {
     if (!navigator?.geolocation) return resolve();
     navigator.geolocation.getCurrentPosition(
-      (p) => { current = { lat: p.coords.latitude, lng: p.coords.longitude }; emit(); resolve(); },
+      (p) => { update(p.coords.latitude, p.coords.longitude); resolve(); },
       () => resolve(), { enableHighAccuracy: true, timeout: 8000 },
     );
   });

@@ -4,7 +4,7 @@ import * as api from '../api';
 import * as store from '../db';
 import SyncBar from '../SyncBar';
 import { useBack } from '../back';
-import { fmtDistance, distanceM, openRoute, startLocation, stopLocation, useMyLocation } from '../geo';
+import { distanceM, openRoute, startLocation, stopLocation, useMyLocation } from '../geo';
 import { ask, notify } from '../dialog';
 import { Btn, Chip, Header, Keypad, Logo, ShiftBadge, fmtDT, matches, toNumber } from '../components';
 import { NewSupplier, PaymentForm, SupplierCard } from './Supplier';
@@ -37,12 +37,14 @@ export default function Collector({ tick, refresh, setFull }) {
   const full = !!(draft && shift) || (screen && screen !== 'entries' && screen !== 'history');
   useEffect(() => { setFull(!!full); }, [full, setFull]);
 
-  // While a shift is open, follow the phone's location so the supplier list can
-  // show distances and order itself nearest-first. Stops when no shift is open.
+  // While a shift is open (and the admin has location on), follow the phone's
+  // location so the list can order itself nearest-first. Keyed on the shift id
+  // (a stable value) so re-renders never restart the GPS watch.
+  const locationOn = api.locationEnabled();
   useEffect(() => {
-    if (shift) { startLocation(); return () => stopLocation(); }
+    if (shift?.uuid && locationOn) { startLocation(); return () => stopLocation(); }
     return undefined;
-  }, [shift]);
+  }, [shift?.uuid, locationOn]);
 
   return (
     <View style={{ flex: 1 }}>
@@ -164,6 +166,8 @@ function StartShift({ tick, refresh, onOpen, onNav }) {
 function ShiftView({ shift, tick, onPick, onNav }) {
   const [q, setQ] = useState('');
   const suppliers = api.getSuppliers();
+  const locationOn = api.locationEnabled();
+  const showPin = locationOn && api.locationPin();
   const here = useMyLocation();
   const rows = useMemo(() => store.shiftCollections(shift.uuid), [shift.uuid, tick]);
 
@@ -176,19 +180,18 @@ function ShiftView({ shift, tick, onPick, onNav }) {
 
   // Distance from where the collector is now to each supplier (when both known).
   const withDist = useMemo(() => suppliers.map((x) => ({
-    ...x, dist: here && x.lat != null ? distanceM(here, x) : null,
-  })), [suppliers, here]);
+    ...x, dist: locationOn && here && x.lat != null ? distanceM(here, x) : null,
+  })), [suppliers, here, locationOn]);
 
+  // Nearest first, farthest last. Suppliers with no location keep the admin's
+  // route order and come after the located ones. Order only changes when the
+  // collector actually moves (location updates are throttled), so the list is stable.
   const list = useMemo(() => withDist.filter((x) => matches(x, q)).sort((a, b) => {
-    // Visited suppliers sink to the bottom; within each group, nearest first
-    // (those without a location keep the admin's route order, after the located).
-    const g = (done[a.id] ? 1 : 0) - (done[b.id] ? 1 : 0);
-    if (g) return g;
     if (a.dist != null && b.dist != null) return a.dist - b.dist;
     if (a.dist != null) return -1;
     if (b.dist != null) return 1;
     return 0;
-  }), [withDist, q, done]);
+  }), [withDist, q]);
 
   const totalByProduct = rows.reduce((m, r) => ({ ...m, [r.product_name]: (m[r.product_name] || 0) + r.quantity }), {});
 
@@ -224,20 +227,20 @@ function ShiftView({ shift, tick, onPick, onNav }) {
               onPress={() => (noProduct
                 ? notify('Mahsulot yo\'q', 'Bu yetkazib beruvchiga admin mahsulot biriktirmagan.')
                 : onPick(item))}
-              style={({ pressed }) => [s.card, { flexDirection: 'row', alignItems: 'center', minHeight: 68 },
+              style={({ pressed }) => [s.card, { flexDirection: 'row', alignItems: 'center', minHeight: 68, paddingLeft: 10 },
                 got && { borderColor: C.ok }, pressed && { opacity: 0.6 }]}
             >
-              <View style={{ flex: 1 }}>
+              {/* Small location pin at the top-left; tap it to open the route in Google Maps. */}
+              {showPin && item.lat != null && (
+                <Pressable onPress={() => openRoute(item)} hitSlop={12}
+                  style={{ position: 'absolute', top: 6, left: 6, padding: 2 }} accessibilityLabel="Yo'l ko'rsatish">
+                  <Text style={{ fontSize: 15 }}>📍</Text>
+                </Pressable>
+              )}
+              <View style={{ flex: 1, paddingLeft: showPin && item.lat != null ? 14 : 0 }}>
                 <Text style={[s.text, { fontSize: 19, fontWeight: '600' }]}>{item.name}</Text>
                 {!!(item.address || item.phone) && <Text style={s.muted} numberOfLines={1}>{[item.address, item.phone].filter(Boolean).join(' · ')}</Text>}
               </View>
-              {item.dist != null && (
-                // Small distance badge; tap it for turn-by-turn directions.
-                <Pressable onPress={() => openRoute(item)} hitSlop={10} style={{ alignItems: 'flex-end', marginRight: 6 }}>
-                  <Text style={{ fontSize: 12, color: C.accent, fontWeight: '700' }}>{fmtDistance(item.dist)} ›</Text>
-                  <Text style={{ fontSize: 10, color: C.muted }}>yo'l</Text>
-                </Pressable>
-              )}
               {got && (
                 <Text style={{ color: C.ok, fontSize: 18, fontWeight: '700' }}>
                   ✓ {fmtQty(got.reduce((a, r) => a + r.quantity, 0))}
