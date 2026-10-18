@@ -103,3 +103,6 @@ dialog .actions { display: flex; gap: 8px; justify-content: flex-end; }
 .warn { color: var(--warn); }
 a { color: var(--accent); }
 fieldset legend { padding: 0 6px; }
+button.danger, .danger { background: var(--err); color: #fff; border-color: var(--err); }
+.danger-zone { border-color: color-mix(in srgb, var(--err) 40%, var(--line)); }
+code { background: color-mix(in srgb, var(--line) 50%, transparent); padding: 1px 5px; border-radius: 4px; }
