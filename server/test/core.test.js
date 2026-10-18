@@ -252,3 +252,23 @@ test('self profile: admin changes own login and name; payment records its author
   const s = await login(app, 'store', 'store123');
   assert.equal((await call(app, 'PUT', '/api/auth/profile', s, { login: 'x' })).status, 403);
 });
+
+test('signing out frees the device slot, so a new device can sign in without the admin', async () => {
+  const { app } = setup();
+  // ali has one device slot; device A takes it
+  const a = await login(app, '901112233', '1234', { device: 'phone-AAAAAA' });
+  // a second device is refused while A holds the only slot
+  assert.equal((await call(app, 'POST', '/api/auth/login', {}, { login: '901112233', password: '1234', deviceId: 'phone-BBBBBB' })).status, 403);
+  // signing out on A frees the slot
+  assert.equal((await call(app, 'POST', '/api/auth/logout', a)).status, 200);
+  // the same phone can come straight back (binds the now-free slot)
+  const a2 = await login(app, '901112233', '1234', { device: 'phone-AAAAAA' });
+  assert.ok(a2.authorization);
+  // sign out again, and a different/replaced phone can sign in on its own
+  assert.equal((await call(app, 'POST', '/api/auth/logout', a2)).status, 200);
+  const b = await login(app, '901112233', '1234', { device: 'phone-BBBBBB' });
+  assert.ok(b.authorization);
+  // the panel shows it as an automatic release
+  const log = (await call(app, 'GET', '/api/admin/audit', await boss(app))).body;
+  assert.ok(log.some((l) => /qurilma joyi avtomatik bo'shatildi/.test(l.what)));
+});

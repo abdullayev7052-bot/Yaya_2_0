@@ -16,6 +16,7 @@ const T = {
   'device.bound': (d) => `Yangi qurilma biriktirildi: ${d.device ?? ''} (${d.slot ?? ''})`,
   'device.add': (d) => `${d.user ?? ''} uchun qurilma joyi qo'shildi`,
   'device.free': (d) => `${d.user ?? ''} — "${d.slot ?? ''}" qurilma joyi bo'shatildi`,
+  'device.logout': (d) => `Ilovadan chiqdi — "${d.slot ?? ''}" qurilma joyi avtomatik bo'shatildi`,
   'device.delete': (d) => `${d.user ?? ''} — qurilma joyi o'chirildi`,
   'user.create': (d) => `Yangi xodim qo'shildi: ${d.name || d.login}`,
   'user.update': (d) => `Xodim ma'lumotlari o'zgartirildi: ${d.name || d.login || `#${d.id}`}${d.passwordChanged ? ' (parol yangilandi)' : ''}${d.active === false ? ' — o\'chirildi' : d.active === true ? ' — yoqildi' : ''}`,

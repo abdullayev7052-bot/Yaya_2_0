@@ -127,7 +127,24 @@ export async function login(loginName, password) {
 const sessionListeners = new Set();
 export const onSession = (fn) => { sessionListeners.add(fn); return () => sessionListeners.delete(fn); };
 
+// Best-effort: tell the server to release this phone's device slot so the
+// person can sign back in from the same (or a replaced) phone with no admin.
+// Uses the token directly, since the session is cleared right after.
+function releaseDeviceSlot(token) {
+  if (!token) return;
+  const ctrl = new AbortController();
+  setTimeout(() => ctrl.abort(), 8000);
+  fetch(getServerUrl() + '/api/auth/logout', {
+    method: 'POST', signal: ctrl.signal,
+    headers: { Authorization: `Bearer ${token}` },
+  }).catch(() => { /* offline: the same phone can still sign back in (its slot stays its own) */ });
+}
+
 export function logout(reason) {
+  const token = getSession()?.token;
+  // Only a deliberate sign-out frees the slot. A forced logout (revoked/expired
+  // token, reason set) would fail the call anyway and must not race.
+  if (token && !reason) releaseDeviceSlot(token);
   store.setKv('session', null);
   store.setKv('bootstrap', null);
   if (reason) store.setKv('logoutReason', reason);

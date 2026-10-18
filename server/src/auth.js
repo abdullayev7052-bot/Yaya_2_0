@@ -137,6 +137,20 @@ export default async function authRoutes(app, { db }) {
 
   app.get('/me', need(), async (req) => publicUser(req.me));
 
+  // Signing out releases this phone's device slot, so the person can sign back in
+  // from the same (or a replaced) phone with no admin needed to free it.
+  app.post('/logout', need(), async (req) => {
+    const { did } = req.user ?? {};
+    if (did && did !== 'recovery' && !req.me.is_test) {
+      const slot = db.prepare('SELECT id, name FROM devices WHERE user_id = ? AND device_id = ?').get(req.me.id, did);
+      if (slot) {
+        db.prepare('UPDATE devices SET device_id = NULL, device_label = NULL, bound_at = NULL WHERE id = ?').run(slot.id);
+        audit(db, req.actor, 'device.logout', { slot: slot.name });
+      }
+    }
+    return { ok: true };
+  });
+
   app.put('/password', need(), async (req, reply) => {
     const { current, next } = req.body ?? {};
     const row = db.prepare('SELECT * FROM users WHERE id = ?').get(req.me.id);
