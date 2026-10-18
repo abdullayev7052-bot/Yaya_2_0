@@ -17,3 +17,18 @@ export function createLoginGuard({ max = 8, windowMs = 15 * 60 * 1000 } = {}) {
     reset(key) { fails.delete(key); },
   };
 }
+
+// Fixed-window request counter per key (IP).
+export function createRateLimiter({ max, windowMs }) {
+  const hits = new Map();
+  let windowStart = Date.now();
+  return {
+    allow(key) {
+      const now = Date.now();
+      if (now - windowStart > windowMs) { hits.clear(); windowStart = now; }
+      const n = (hits.get(key) ?? 0) + 1;
+      hits.set(key, n);
+      return n <= max;
+    },
+  };
+}

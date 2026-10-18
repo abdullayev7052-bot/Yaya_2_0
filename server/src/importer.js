@@ -16,6 +16,7 @@ export const COLUMNS = [
   { key: 'product', header: 'Mahsulot', width: 18 },
   { key: 'price', header: 'Narx (so\'m)', width: 14 },
   { key: 'debt', header: 'Joriy qarz (so\'m)', width: 18 },
+  { key: 'collectors', header: 'Sut yig\'uvchilar (login, vergul bilan)', width: 30 },
 ];
 
 export async function templateXlsx(db) {
@@ -28,7 +29,9 @@ export async function templateXlsx(db) {
   ws.views = [{ state: 'frozen', ySplit: 1 }];
   const products = db.prepare('SELECT name FROM products WHERE active = 1 ORDER BY name').all().map((p) => p.name);
   const p1 = products[0] ?? 'Yog\'li sut';
-  ws.addRow({ name: 'Karimova Oydin', phone: '901234567', address: 'Qo\'qon, Navbahor 12', note: '', product: p1, price: 5500, debt: 120000 });
+  const collector = db.prepare(`SELECT u.login FROM users u JOIN roles r ON r.id = u.role_id
+    WHERE u.active = 1 AND u.is_test = 0 AND (r.code = 'collector' OR r.permissions LIKE '%collect.shift%') ORDER BY u.id LIMIT 1`).get()?.login ?? '901112233';
+  ws.addRow({ name: 'Karimova Oydin', phone: '901234567', address: 'Qo\'qon, Navbahor 12', note: '', product: p1, price: 5500, debt: 120000, collectors: collector });
   ws.addRow({ name: 'Karimova Oydin', phone: '901234567', product: products[1] ?? 'Yog\'siz sut', price: 3500 });
   ws.addRow({ name: 'Begmatov Sobir', phone: '+998 93 111 22 33', address: 'Dang\'ara', product: p1, price: 5400, debt: 0 });
 
@@ -40,7 +43,8 @@ export async function templateXlsx(db) {
     '2. F.I.Sh majburiy. Telefon bo\'lsa, mavjud yetkazib beruvchi telefon orqali topiladi va yangilanadi (aks holda — ism orqali).',
     '3. Mahsulot nomi tizimdagi nom bilan bir xil bo\'lsin. Topilmasa, yangi mahsulot yaratiladi.',
     '4. Joriy qarz — bugungi kunda BIZ yetkazib beruvchiga qancha qarzmiz. U bizga qarz bo\'lsa — minus bilan yozing.',
-    '5. Namuna qatorlarni o\'chirib, o\'z ma\'lumotlaringizni yozing. Import oldidan tizim tekshiradi va natijani ko\'rsatadi.',
+    '5. Sut yig\'uvchilar — xodimlarning logini (yoki ismi), bir nechtasi bo\'lsa vergul bilan: 901112233, 931234567. Yozilsa, yetkazib beruvchi aynan shularga biriktiriladi.',
+    '6. Namuna qatorlarni o\'chirib, o\'z ma\'lumotlaringizni yozing. Import oldidan tizim tekshiradi va natijani ko\'rsatadi.',
     `Tizimdagi mahsulotlar: ${products.join(', ') || '(hali yo\'q)'}`,
   ].forEach((t) => help.addRow([t]));
   return wb.xlsx.writeBuffer();
@@ -91,7 +95,8 @@ async function readRows(buffer) {
     if (n === 1) return;
     const get = (k) => (header[k] ? row.getCell(header[k]).value : null);
     const r = { row: n, name: text(get('name')), phone: normPhone(get('phone')), address: text(get('address')),
-      note: text(get('note')), product: text(get('product')), price: number(get('price')), debt: number(get('debt')) };
+      note: text(get('note')), product: text(get('product')), price: number(get('price')), debt: number(get('debt')),
+      collectors: text(get('collectors')) };
     if (Object.values(r).some((v, i) => i > 0 && v !== '' && v != null)) rows.push(r);
   });
   if (rows.length > 5000) throw new Error('Bir martada 5000 qatordan ko\'p bo\'lmasin');
@@ -107,6 +112,11 @@ export async function importSuppliers(db, buffer, { dryRun = true } = {}) {
   const findProduct = (name) => products.find((p) => p.name.toLowerCase() === name.toLowerCase());
   const byPhone = db.prepare("SELECT * FROM suppliers WHERE replace(replace(replace(replace(phone,' ',''),'-',''),'+',''),'(','') LIKE ?");
   const byName = db.prepare('SELECT * FROM suppliers WHERE lower(name) = lower(?)');
+  const users = db.prepare('SELECT id, login, name FROM users WHERE active = 1').all();
+  const findUser = (x) => {
+    const n = normPhone(x) || x.toLowerCase();
+    return users.find((u) => u.login.toLowerCase() === x.toLowerCase() || u.login === n || (u.name ?? '').toLowerCase() === x.toLowerCase());
+  };
 
   // Group rows into suppliers (by phone, else by name) preserving file order.
   const groups = new Map();
@@ -120,13 +130,17 @@ export async function importSuppliers(db, buffer, { dryRun = true } = {}) {
     if (r.product && r.price == null) errors.push('Mahsulot bor, lekin narx yo\'q');
     if (!r.product && r.price != null) errors.push('Narx bor, lekin mahsulot yo\'q');
     const key = r.phone ? `p:${r.phone}` : `n:${r.name.toLowerCase()}`;
-    report.push({ row: r.row, name: r.name, phone: r.phone, product: r.product, price: r.price, debt: r.debt, errors, actions: [] });
+    const people = r.collectors ? r.collectors.split(/[,;]+/).map((x) => x.trim()).filter(Boolean) : [];
+    const resolved = people.map((x) => findUser(x));
+    people.forEach((x, i) => { if (!resolved[i]) errors.push(`Xodim topilmadi: ${x}`); });
+    report.push({ row: r.row, name: r.name, phone: r.phone, product: r.product, price: r.price, debt: r.debt, collectors: r.collectors, errors, actions: [] });
     if (errors.length) continue;
     if (!groups.has(key)) groups.set(key, { ...r, items: [], rows: [] });
     const g = groups.get(key);
     g.rows.push(report[report.length - 1]);
     for (const f of ['address', 'note']) if (!g[f] && r[f]) g[f] = r[f];
     if (g.debt == null && r.debt != null) g.debt = r.debt;
+    if (resolved.length) g.assign = [...new Set([...(g.assign ?? []), ...resolved.map((u) => u.id)])];
     if (r.product) g.items.push({ product: r.product, price: r.price });
   }
 
@@ -163,6 +177,16 @@ export async function importSuppliers(db, buffer, { dryRun = true } = {}) {
           db.prepare('UPDATE suppliers SET opening_balance = ? WHERE id = ?').run(opening + (g.debt - current), id);
         }
       }
+      if (g.assign) {
+        first.actions.push(`biriktirish: ${g.assign.map((uid) => users.find((u) => u.id === uid)?.login).join(', ')}`);
+        if (!dryRun) {
+          db.prepare('DELETE FROM employee_suppliers WHERE supplier_id = ?').run(id);
+          for (const uid of g.assign) {
+            const order = (db.prepare('SELECT MAX(sort_order) AS n FROM employee_suppliers WHERE employee_id = ?').get(uid).n ?? -1) + 1;
+            db.prepare('INSERT OR IGNORE INTO employee_suppliers (employee_id, supplier_id, sort_order) VALUES (?, ?, ?)').run(uid, id, order);
+          }
+        }
+      }
       g.items.forEach((it, i) => {
         const row = g.rows.find((r) => r.product === it.product) ?? first;
         let prod = findProduct(it.product);
@@ -190,4 +214,28 @@ export async function importSuppliers(db, buffer, { dryRun = true } = {}) {
   };
   if (dryRun) apply(); else db.transaction(apply)();
   return { dryRun, summary, rows: report };
+}
+
+// Current suppliers in the same format as the template, so the file can be
+// edited and imported back.
+export async function exportSuppliersXlsx(db, balanceOf) {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Yaya';
+  const ws = wb.addWorksheet('Yetkazib beruvchilar');
+  ws.columns = COLUMNS.map((c) => ({ header: c.header, key: c.key, width: c.width }));
+  ws.getRow(1).font = { bold: true };
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  const sups = db.prepare('SELECT * FROM suppliers WHERE active = 1 ORDER BY name').all();
+  const prods = db.prepare(`SELECT sp.supplier_id, p.name, sp.price FROM supplier_products sp JOIN products p ON p.id = sp.product_id
+    ORDER BY sp.is_default DESC, p.name`).all();
+  const coll = db.prepare(`SELECT es.supplier_id, u.login FROM employee_suppliers es JOIN users u ON u.id = es.employee_id ORDER BY u.login`).all();
+  for (const s of sups) {
+    const items = prods.filter((p) => p.supplier_id === s.id);
+    const collectors = coll.filter((c) => c.supplier_id === s.id).map((c) => c.login).join(', ');
+    (items.length ? items : [{}]).forEach((it, i) => ws.addRow({
+      name: s.name, phone: s.phone, address: i ? '' : s.address, note: i ? '' : s.note, product: it.name, price: it.price,
+      debt: i ? null : balanceOf(s.id), collectors: i ? '' : collectors,
+    }));
+  }
+  return wb.xlsx.writeBuffer();
 }

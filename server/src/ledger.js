@@ -1,33 +1,37 @@
-// Supplier money: what we bought (pickups), what we paid, and what we still owe.
+// Supplier money: what we bought (accepted shifts only), what we paid, and what
+// we still owe.
 //
-//   balance = opening_balance + Σ round(quantity × price) − Σ payments
+//   balance = opening_balance + Σ round(quantity × price) over ACCEPTED shifts − Σ payments
 //
-// Positive balance = we owe the supplier ("qarzimiz"); negative = the supplier
-// owes us (an advance). Voided pickups/payments and test collectors' pickups
-// never count. Amounts are whole so'm.
+// Positive = we owe the supplier; negative = the supplier owes us (an advance).
+// Payments count immediately; milk counts only once its shift is accepted.
+// Voided payments and test users never count. Amounts are whole so'm.
 
 const PURCHASED = `COALESCE((SELECT SUM(ROUND(c.quantity * c.price)) FROM collections c
-  JOIN employees e ON e.id = c.employee_id
-  WHERE c.supplier_id = s.id AND c.voided_at IS NULL AND e.is_test = 0), 0)`;
-const NOT_TEST = 'NOT EXISTS (SELECT 1 FROM employees t WHERE t.id = p.employee_id AND t.is_test = 1)';
+  JOIN shifts sh ON sh.client_uuid = c.shift_uuid JOIN users u ON u.id = c.employee_id
+  WHERE c.supplier_id = s.id AND sh.status = 'accepted' AND u.is_test = 0), 0)`;
+const NOT_TEST = 'NOT EXISTS (SELECT 1 FROM users t WHERE t.id = p.employee_id AND t.is_test = 1)';
 const PAID = `COALESCE((SELECT SUM(p.amount) FROM payments p
   WHERE p.supplier_id = s.id AND p.voided_at IS NULL AND ${NOT_TEST}), 0)`;
 
 export const BALANCE_SQL = `ROUND(s.opening_balance + ${PURCHASED} - ${PAID})`;
 
-export function balances(db, { q } = {}) {
+const digits = (v) => String(v ?? '').replace(/\D/g, '');
+export function matchesSupplier(r, q) {
+  const needle = (q ?? '').trim().toLowerCase();
+  if (!needle) return true;
+  const d = digits(needle);
+  return r.name.toLowerCase().includes(needle) || (r.address ?? '').toLowerCase().includes(needle)
+    || (d.length >= 2 && digits(r.phone).includes(d));
+}
+
+export function balances(db, { q, ids } = {}) {
   const rows = db.prepare(`
     SELECT s.id, s.name, s.phone, s.address, s.active, s.opening_balance,
       ${PURCHASED} AS purchased, ${PAID} AS paid, ${BALANCE_SQL} AS balance,
-      (SELECT MAX(c.collected_at) FROM collections c WHERE c.supplier_id = s.id AND c.voided_at IS NULL) AS last_pickup,
       (SELECT MAX(p.paid_at) FROM payments p WHERE p.supplier_id = s.id AND p.voided_at IS NULL AND ${NOT_TEST}) AS last_payment
     FROM suppliers s ORDER BY balance DESC, s.name`).all();
-  const needle = (q ?? '').trim().toLowerCase();
-  const digits = needle.replace(/\D/g, '');
-  const list = needle
-    ? rows.filter((r) => r.name.toLowerCase().includes(needle) || (r.address ?? '').toLowerCase().includes(needle)
-      || (digits.length >= 2 && (r.phone ?? '').replace(/\D/g, '').includes(digits)))
-    : rows;
+  const list = rows.filter((r) => matchesSupplier(r, q) && (!ids || ids.has(r.id)));
   const totals = {
     weOwe: list.reduce((a, r) => a + Math.max(0, r.balance), 0),
     theyOwe: list.reduce((a, r) => a + Math.max(0, -r.balance), 0),
@@ -41,13 +45,14 @@ export function supplierBalance(db, supplierId) {
 
 // Chronological statement (akt-sverka) with a running balance.
 export function statement(db, supplierId, { limit = 500 } = {}) {
-  const s = db.prepare('SELECT opening_balance, created_at FROM suppliers WHERE id = ?').get(supplierId);
+  const s = db.prepare('SELECT opening_balance FROM suppliers WHERE id = ?').get(supplierId);
   if (!s) return null;
   const pickups = db.prepare(`
     SELECT 'pickup' AS kind, c.id, c.collected_at AS at, c.quantity, c.price, p.name AS product_name, p.unit,
-      CAST(ROUND(c.quantity * c.price) AS INTEGER) AS amount, e.name AS by_name, c.voided_at, c.void_reason
-    FROM collections c JOIN products p ON p.id = c.product_id JOIN employees e ON e.id = c.employee_id
-    WHERE c.supplier_id = ? AND e.is_test = 0`).all(supplierId);
+      CAST(ROUND(c.quantity * c.price) AS INTEGER) AS amount, u.name AS by_name, sh.number AS shift_number, sh.copy_no
+    FROM collections c JOIN shifts sh ON sh.client_uuid = c.shift_uuid JOIN products p ON p.id = c.product_id
+    JOIN users u ON u.id = c.employee_id
+    WHERE c.supplier_id = ? AND sh.status = 'accepted' AND u.is_test = 0`).all(supplierId);
   const pays = db.prepare(`
     SELECT 'payment' AS kind, id, paid_at AS at, amount, method, note, created_by AS by_name, voided_at, void_reason
     FROM payments p WHERE supplier_id = ? AND ${NOT_TEST}`).all(supplierId);
@@ -57,6 +62,5 @@ export function statement(db, supplierId, { limit = 500 } = {}) {
     if (!e.voided_at) running += e.kind === 'pickup' ? e.amount : -e.amount;
     e.balance = Math.round(running);
   }
-  // Newest first for display; keep the most recent `limit` rows.
   return { opening: s.opening_balance, balance: Math.round(running), entries: entries.reverse().slice(0, limit) };
 }

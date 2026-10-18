@@ -1,60 +1,80 @@
-// Catalogue of everything a role can be allowed to do. Roles are just named sets
-// of these keys; the admin builds them in the panel and assigns them to panel
-// users (managers, storekeepers, accountants) and to milk collectors.
+// Catalogue of everything a role can be allowed to do. Every staff member —
+// owner, manager, storekeeper, accountant, milk collector — is one user with one
+// role; the role's permissions decide what they see in the mobile app.
+// The web panel is a separate, admin-level tool (panel.access).
 
 export const PERMISSIONS = [
-  // --- management (panel and the manager mode of the mobile app)
-  { key: 'dashboard.view', group: 'Boshqaruv', label: 'Bugungi ko\'rsatkichlarni ko\'rish' },
-  { key: 'reports.view', group: 'Boshqaruv', label: 'Hisobotlar va o\'rtacha tannarx' },
-  { key: 'reports.export', group: 'Boshqaruv', label: 'Excel\'ga eksport qilish' },
-  { key: 'amounts.view', group: 'Boshqaruv', label: 'Narx va summalarni ko\'rish', hint: 'O\'chirilsa, faqat kg ko\'rinadi' },
+  // --- collecting milk (mobile app)
+  { key: 'collect.shift', group: 'Sut qabul qilish (smena)', label: 'Smena ochish, yetkazib beruvchidan sut qabul qilish va smenani yopish' },
+  { key: 'collect.edit_own', group: 'Sut qabul qilish (smena)', label: 'Ochiq smenadagi o\'z yozuvini tahrirlash' },
+  { key: 'collect.delete_own', group: 'Sut qabul qilish (smena)', label: 'Ochiq smenadagi o\'z yozuvini o\'chirish' },
+  { key: 'collect.copy_cancelled', group: 'Sut qabul qilish (smena)', label: 'O\'zining bekor qilingan smenasini nusxalash' },
 
-  { key: 'collections.view', group: 'Xaridlar', label: 'Xaridlarni ko\'rish' },
-  { key: 'collections.edit', group: 'Xaridlar', label: 'Har qanday xaridni tahrirlash (miqdor, mahsulot)' },
-  { key: 'collections.void', group: 'Xaridlar', label: 'Har qanday xaridni bekor qilish / tiklash' },
-
-  { key: 'shifts.view', group: 'Smenalar', label: 'Smenalar tarixini ko\'rish' },
-  { key: 'shifts.approve', group: 'Smenalar', label: 'Yopilgan smenani tasdiqlash yoki rad etish' },
-
-  { key: 'suppliers.view', group: 'Yetkazib beruvchilar', label: 'Yetkazib beruvchilar va kartochkasini ko\'rish' },
-  { key: 'suppliers.manage', group: 'Yetkazib beruvchilar', label: 'Qo\'shish, tahrirlash, Excel\'dan import' },
+  // --- suppliers
+  { key: 'suppliers.card_own', group: 'Yetkazib beruvchilar', label: 'O\'ziga biriktirilganlarning kartochkasi: kg tarixi va qarz qoldig\'i (narxsiz)' },
+  { key: 'suppliers.view', group: 'Yetkazib beruvchilar', label: 'Barcha yetkazib beruvchilar va kartochkalarini ko\'rish' },
+  { key: 'suppliers.create', group: 'Yetkazib beruvchilar', label: 'Yangi yetkazib beruvchi qo\'shish' },
+  { key: 'suppliers.edit', group: 'Yetkazib beruvchilar', label: 'Yetkazib beruvchi ma\'lumotlarini (ism, telefon, manzil) o\'zgartirish' },
+  { key: 'suppliers.import', group: 'Yetkazib beruvchilar', label: 'Excel orqali import va eksport' },
+  { key: 'prices.view', group: 'Yetkazib beruvchilar', label: 'Narx va summalarni ko\'rish', hint: 'O\'chirilsa, faqat kg ko\'rinadi' },
   { key: 'prices.manage', group: 'Yetkazib beruvchilar', label: 'Narxlarni belgilash' },
 
-  { key: 'payments.view', group: 'To\'lovlar', label: 'Qarzlar va to\'lovlar tarixini ko\'rish' },
-  { key: 'payments.create', group: 'To\'lovlar', label: 'To\'lov kiritish' },
-  { key: 'payments.void', group: 'To\'lovlar', label: 'To\'lovni bekor qilish' },
+  // --- shifts
+  { key: 'shifts.view_all', group: 'Smenalar', label: 'Barcha smenalarni, jumladan hozir ochiq (jonli) smenalarni ko\'rish' },
+  { key: 'shifts.accept', group: 'Smenalar', label: 'Yopilgan smenani qabul qilish' },
+  { key: 'shifts.cancel', group: 'Smenalar', label: 'Smenani bekor qilish' },
+  { key: 'shifts.copy', group: 'Smenalar', label: 'Har qanday bekor qilingan smenani nusxalash' },
 
-  { key: 'employees.manage', group: 'Xodimlar', label: 'Sut yig\'uvchilarni boshqarish va biriktirish' },
-  { key: 'catalog.manage', group: 'Xodimlar', label: 'Mahsulot va omborlarni boshqarish' },
-  { key: 'tester.use', group: 'Xodimlar', label: 'Ilovani brauzerda sinash' },
+  // --- money
+  { key: 'debts.view', group: 'Qarzlar va to\'lovlar', label: 'Qarzlar va to\'lovlar tarixini ko\'rish' },
+  { key: 'payments.create', group: 'Qarzlar va to\'lovlar', label: 'Yetkazib beruvchiga to\'lov qilish' },
+  { key: 'payments.void', group: 'Qarzlar va to\'lovlar', label: 'To\'lovni bekor qilish' },
 
-  { key: 'users.manage', group: 'Tizim', label: 'Foydalanuvchilar va ruxsatlarni boshqarish' },
-  { key: 'settings.manage', group: 'Tizim', label: 'Sozlamalar (logo va boshqalar)' },
-  { key: 'audit.view', group: 'Tizim', label: 'Harakatlar jurnalini ko\'rish' },
+  // --- reports
+  { key: 'reports.view', group: 'Hisobotlar', label: 'Hisobotlar, o\'rtacha tannarx, kunlik ko\'rsatkichlar' },
+  { key: 'reports.export', group: 'Hisobotlar', label: 'Hisobotni Excel\'ga yuklab olish' },
 
-  // --- milk collector (mobile app, collector mode)
-  { key: 'app.collect', group: 'Sut yig\'uvchi ilovasi', label: 'Sut qabul qilish' },
-  { key: 'app.edit_own', group: 'Sut yig\'uvchi ilovasi', label: 'O\'z yozuvini tahrirlash (smena tasdiqlanguncha)' },
-  { key: 'app.void_own', group: 'Sut yig\'uvchi ilovasi', label: 'O\'z yozuvini bekor qilish (smena tasdiqlanguncha)' },
-  { key: 'app.history', group: 'Sut yig\'uvchi ilovasi', label: 'O\'z yopilgan smenalari tarixini ko\'rish' },
-  { key: 'app.pay', group: 'Sut yig\'uvchi ilovasi', label: 'Yetkazib beruvchiga naqd to\'lov kiritish' },
+  // --- administration
+  { key: 'panel.access', group: 'Boshqaruv', label: 'Veb boshqaruv paneliga kirish' },
+  { key: 'staff.manage', group: 'Boshqaruv', label: 'Xodimlar, rollar, ruxsatlar va qurilmalarni boshqarish' },
+  { key: 'catalog.manage', group: 'Boshqaruv', label: 'Mahsulotlarni boshqarish' },
+  { key: 'settings.manage', group: 'Boshqaruv', label: 'Sozlamalar (logo, kompaniya nomi)' },
+  { key: 'audit.view', group: 'Boshqaruv', label: 'Harakatlar jurnalini ko\'rish' },
+  { key: 'data.backup', group: 'Boshqaruv', label: 'Zaxira nusxa: eksport, import, tarixni tozalash' },
+  { key: 'tester.use', group: 'Boshqaruv', label: 'Ilovani brauzerda sinash' },
 ];
 
 export const PERMISSION_KEYS = new Set(PERMISSIONS.map((p) => p.key));
 const ALL = PERMISSIONS.map((p) => p.key);
-const MANAGEMENT = ALL.filter((k) => !k.startsWith('app.'));
 
 // Built-in roles created on first start. "admin" is locked to every permission
 // so the owner can never lock themselves out.
 export const BUILTIN_ROLES = [
   { code: 'admin', name: 'Admin', locked: 1, perms: ALL },
-  { code: 'manager', name: 'Menejer', locked: 0, perms: MANAGEMENT.filter((k) => !['users.manage', 'settings.manage', 'audit.view'].includes(k)) },
+  { code: 'manager', name: 'Menejer', locked: 0,
+    perms: ALL.filter((k) => !['panel.access', 'staff.manage', 'settings.manage', 'audit.view', 'data.backup', 'tester.use',
+      'collect.shift', 'collect.edit_own', 'collect.delete_own', 'collect.copy_cancelled'].includes(k)) },
   { code: 'storekeeper', name: 'Omborchi', locked: 0,
-    perms: ['dashboard.view', 'collections.view', 'collections.edit', 'collections.void', 'shifts.view', 'shifts.approve', 'suppliers.view'] },
-  { code: 'viewer', name: 'Kuzatuvchi (buxgalter)', locked: 0,
-    perms: ['dashboard.view', 'reports.view', 'reports.export', 'amounts.view', 'collections.view', 'shifts.view', 'suppliers.view', 'payments.view'] },
-  { code: 'collector', name: 'Sut yig\'uvchi', locked: 0, perms: ['app.collect', 'app.edit_own', 'app.void_own', 'app.history'] },
+    perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'shifts.copy', 'suppliers.view', 'debts.view', 'payments.create', 'reports.view'] },
+  { code: 'viewer', name: 'Buxgalter', locked: 0,
+    perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'suppliers.view', 'prices.view', 'debts.view', 'payments.create',
+      'payments.void', 'reports.view', 'reports.export'] },
+  { code: 'collector', name: 'Sut yig\'uvchi', locked: 0,
+    perms: ['collect.shift', 'collect.edit_own', 'collect.delete_own', 'collect.copy_cancelled', 'suppliers.card_own'] },
 ];
+
+// v3 permission keys -> v4 keys (used once by the v3 -> v4 migration).
+export const V3_TO_V4 = {
+  'dashboard.view': ['reports.view'], 'reports.view': ['reports.view'], 'reports.export': ['reports.export'],
+  'amounts.view': ['prices.view'], 'collections.view': ['shifts.view_all'], 'collections.edit': ['shifts.cancel'],
+  'collections.void': ['shifts.cancel'], 'shifts.view': ['shifts.view_all'], 'shifts.approve': ['shifts.accept', 'shifts.cancel', 'shifts.copy'],
+  'suppliers.view': ['suppliers.view'], 'suppliers.manage': ['suppliers.create', 'suppliers.edit', 'suppliers.import'],
+  'prices.manage': ['prices.manage'], 'payments.view': ['debts.view'], 'payments.create': ['payments.create'],
+  'payments.void': ['payments.void'], 'employees.manage': ['staff.manage'], 'catalog.manage': ['catalog.manage'],
+  'tester.use': ['tester.use'], 'users.manage': ['staff.manage'], 'settings.manage': ['settings.manage'], 'audit.view': ['audit.view'],
+  'app.collect': ['collect.shift'], 'app.edit_own': ['collect.edit_own'], 'app.void_own': ['collect.delete_own'],
+  'app.history': ['collect.copy_cancelled'], 'app.pay': ['payments.create', 'suppliers.card_own'],
+};
 
 export function permsOf(db, roleId) {
   const r = db.prepare('SELECT code, permissions FROM roles WHERE id = ?').get(roleId);

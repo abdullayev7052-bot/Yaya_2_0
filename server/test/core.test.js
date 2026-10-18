@@ -1,0 +1,181 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { setup, call, login, ali, boss, now, runShift } from './helpers.js';
+
+test('smart login: one form for everyone; phone formats; panel only for admin', async () => {
+  const { app } = setup();
+  // collector typed with country code and spaces
+  const r = await call(app, 'POST', '/api/auth/login', {}, { login: '+998 90 111 22 33', password: '1234', deviceId: 'phone-0001' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.user.roleCode, 'collector');
+  assert.ok(r.body.user.permissions.includes('collect.shift'));
+  // collector cannot use the web panel
+  const p = await call(app, 'POST', '/api/auth/login', {}, { login: '901112233', password: '1234', deviceId: 'laptop-01', client: 'panel' });
+  assert.equal(p.status, 403);
+  // admin can; storekeeper cannot
+  assert.equal((await call(app, 'POST', '/api/auth/login', {}, { login: 'boss', password: 'secret123', deviceId: 'laptop-01', client: 'panel' })).status, 200);
+  assert.equal((await call(app, 'POST', '/api/auth/login', {}, { login: 'store', password: 'store123', deviceId: 'laptop-02', client: 'panel' })).status, 403);
+  assert.equal((await call(app, 'POST', '/api/auth/login', {}, { login: 'boss', password: 'nope', deviceId: 'laptop-01' })).status, 401);
+});
+
+test('device slots: a second device is refused until the admin frees or adds a slot', async () => {
+  const { app, db, ids } = setup();
+  const h1 = await login(app, '901112233', '1234', { device: 'phone-AAAA' });
+  const r2 = await call(app, 'POST', '/api/auth/login', {}, { login: '901112233', password: '1234', deviceId: 'phone-BBBB' });
+  assert.equal(r2.status, 403);
+  assert.match(r2.body.error, /qurilma/);
+  const b = await boss(app);
+  const slot = db.prepare('SELECT id FROM devices WHERE user_id = ?').get(ids.ali);
+  assert.equal((await call(app, 'PATCH', `/api/admin/devices/${slot.id}`, b, { free: true })).status, 200);
+  // old device is signed out on its next request; the new one may sign in
+  assert.equal((await call(app, 'GET', '/api/mobile/bootstrap', h1)).status, 401);
+  assert.equal((await call(app, 'POST', '/api/auth/login', {}, { login: '901112233', password: '1234', deviceId: 'phone-BBBB' })).status, 200);
+  // adding a slot allows another device
+  await call(app, 'POST', '/api/admin/devices', b, { userId: ids.ali });
+  assert.equal((await call(app, 'POST', '/api/auth/login', {}, { login: '901112233', password: '1234', deviceId: 'phone-CCCC' })).status, 200);
+});
+
+test('shift lifecycle: draft counts nowhere; closed is frozen; accepted is real; cancelled disappears', async () => {
+  const { app } = setup();
+  const h = await ali(app);
+  const b = await boss(app);
+  const balance = async () => (await call(app, 'GET', '/api/admin/balances', b)).body.rows.find((r) => r.id === 1).balance;
+  const today = async () => (await call(app, 'GET', '/api/admin/reports/daily-cost', b)).body;
+
+  await runShift(app, h, 's1', [{ supplierId: 1, quantity: 20 }, { supplierId: 2, quantity: 10 }]);
+  assert.equal(await balance(), 100000, 'open shift does not create debt');
+  assert.equal((await today()).products.length, 0);
+  // payments count immediately, whatever the shift state
+  await call(app, 'POST', '/api/admin/payments', b, { supplierId: 1, amount: 30000 });
+  assert.equal(await balance(), 70000);
+
+  // live view shows the open shift with its running kg
+  const live = (await call(app, 'GET', '/api/admin/dashboard', b)).body.live;
+  assert.equal(live[0].quantity, 30);
+  assert.equal(live[0].label, '#1');
+
+  // close; afterwards pickups and corrections are refused
+  await call(app, 'POST', '/api/mobile/sync', h, { shifts: [{ uuid: 's1', openedAt: now(), closedAt: now() }] });
+  const late = (await call(app, 'POST', '/api/mobile/sync', h, {
+    collections: [{ uuid: 'late', shiftUuid: 's1', supplierId: 1, productId: 1, quantity: 5, collectedAt: now() }],
+    ops: [{ uuid: 'op-late', type: 'edit', target: 's1-c0', quantity: 99 }],
+  })).body;
+  assert.equal(late.rejected.length, 1);
+  assert.equal(late.ops.rejected.length, 1);
+  assert.equal(await balance(), 70000, 'closed but not accepted: still no debt');
+
+  // a new shift cannot be opened while the previous one is not accepted
+  const blocked = await runShift(app, h, 's2', [{ supplierId: 1, quantity: 1 }]);
+  assert.equal(blocked.shifts.rejected[0].uuid, 's2');
+
+  const shifts = (await call(app, 'GET', '/api/admin/shifts?status=closed', b)).body;
+  assert.equal((await call(app, 'POST', `/api/admin/shifts/${shifts[0].id}/accept`, b)).status, 200);
+  assert.equal(await balance(), 70000 + 20 * 5000);
+  const cost = await today();
+  assert.equal(cost.products[0].avg_cost, 5333.33); // (20×5000 + 10×6000) / 30
+  assert.equal(cost.final, true);
+
+  // cancelling an accepted shift removes it from debts and reports
+  assert.equal((await call(app, 'POST', `/api/admin/shifts/${shifts[0].id}/cancel`, b, {})).status, 400, 'reason required');
+  await call(app, 'POST', `/api/admin/shifts/${shifts[0].id}/cancel`, b, { reason: 'kg xato' });
+  assert.equal(await balance(), 70000);
+  assert.equal((await today()).products.length, 0);
+
+  // the collector copies it: same number with -copy, open, contents kept, and the phone gets it
+  const hist = (await call(app, 'GET', '/api/mobile/history', h)).body;
+  const copy = (await call(app, 'POST', `/api/mobile/shifts/${hist[0].id}/copy`, h)).body;
+  assert.equal(copy.label, '#1-copy');
+  const boot = (await call(app, 'GET', '/api/mobile/bootstrap', h)).body;
+  assert.equal(boot.openShift.label, '#1-copy');
+  assert.equal(boot.openShift.collections.length, 2);
+  // fix one line in the copy, close, accept
+  const target = boot.openShift.collections.find((c) => c.supplier_id === 1).uuid;
+  await call(app, 'POST', '/api/mobile/sync', h, { ops: [{ uuid: 'fix1', type: 'edit', target, quantity: 18 }],
+    shifts: [{ uuid: copy.uuid, openedAt: now(), closedAt: now() }] });
+  const waiting = (await call(app, 'GET', '/api/admin/shifts?status=closed', b)).body;
+  assert.equal(waiting[0].label, '#1-copy');
+  await call(app, 'POST', `/api/admin/shifts/${waiting[0].id}/accept`, b);
+  assert.equal(await balance(), 70000 + 18 * 5000);
+});
+
+test('own drafts: edit and delete while open; delete removes the line for good', async () => {
+  const { app, db } = setup();
+  const h = await ali(app);
+  await runShift(app, h, 's1', [{ supplierId: 1, quantity: 20 }, { supplierId: 2, quantity: 10 }]);
+  const r = (await call(app, 'POST', '/api/mobile/sync', h, { ops: [
+    { uuid: 'o1', type: 'edit', target: 's1-c0', quantity: 22, productId: 2 },
+    { uuid: 'o2', type: 'delete', target: 's1-c1' },
+    { uuid: 'o3', type: 'delete', target: 'never-uploaded' },
+  ] })).body;
+  assert.deepEqual(r.ops.accepted, ['o1', 'o2', 'o3']);
+  assert.deepEqual(db.prepare('SELECT quantity, product_id FROM collections').all(), [{ quantity: 22, product_id: 2 }]);
+});
+
+test('field supplier without price: shift cannot be accepted until the price is set', async () => {
+  const { app, db, ids } = setup();
+  const b = await boss(app);
+  // give collectors the right to add suppliers
+  const role = db.prepare("SELECT id, permissions FROM roles WHERE code = 'collector'").get();
+  await call(app, 'PATCH', `/api/admin/roles/${role.id}`, b, { permissions: [...JSON.parse(role.permissions), 'suppliers.create'] });
+  const h = await ali(app);
+  const created = (await call(app, 'POST', '/api/mobile/suppliers', h, { name: 'Yangi Fermer', phone: '+998 97 777 77 77', productIds: [1] })).body;
+  assert.ok(created.supplier.products.length === 1);
+  assert.ok(db.prepare('SELECT 1 FROM employee_suppliers WHERE employee_id = ? AND supplier_id = ?').get(ids.ali, created.id), 'auto-assigned');
+  await runShift(app, h, 's1', [{ supplierId: created.id, quantity: 12 }], { close: true });
+  const sh = (await call(app, 'GET', '/api/admin/shifts?status=closed', b)).body[0];
+  const fail = await call(app, 'POST', `/api/admin/shifts/${sh.id}/accept`, b);
+  assert.equal(fail.status, 400);
+  assert.match(fail.body.error, /Yangi Fermer/);
+  await call(app, 'PUT', '/api/admin/supplier-products', b, { supplierId: created.id, productId: 1, price: 5100, isDefault: true });
+  assert.equal((await call(app, 'POST', `/api/admin/shifts/${sh.id}/accept`, b)).status, 200);
+  assert.equal(db.prepare('SELECT price FROM collections').get().price, 5100, 'price stamped at acceptance');
+});
+
+test('roles: storekeeper accepts without seeing prices; collector card shows balance but no prices', async () => {
+  const { app } = setup();
+  const h = await ali(app);
+  await runShift(app, h, 's1', [{ supplierId: 1, quantity: 10 }], { close: true });
+  const st = await login(app, 'store', 'store123');
+  const list = (await call(app, 'GET', '/api/admin/shifts?status=closed', st)).body;
+  assert.equal((await call(app, 'POST', `/api/admin/shifts/${list[0].id}/accept`, st)).status, 200);
+  const detail = (await call(app, 'GET', `/api/admin/shifts/${list[0].id}`, st)).body;
+  assert.equal(detail.rows[0].quantity, 10);
+  assert.equal(detail.rows[0].price, undefined);
+  assert.equal(detail.rows[0].amount, undefined);
+  // storekeeper is not allowed to manage staff
+  assert.equal((await call(app, 'GET', '/api/admin/staff', st)).status, 403);
+
+  const card = (await call(app, 'GET', '/api/mobile/suppliers/1/card', h)).body;
+  assert.equal(card.balance, 100000 + 10 * 5000);
+  assert.equal(card.lastPickup.quantity, 10);
+  assert.ok(!JSON.stringify(card).includes('5000,'), 'no prices in the card');
+  assert.equal(card.canPay, false);
+  // not assigned -> no card
+  const other = (await call(app, 'POST', '/api/mobile/suppliers', h, { name: 'X', productIds: [1] })).status;
+  assert.equal(other, 403, 'collector cannot add suppliers by default');
+});
+
+test('payments from the field are offline-safe and need permission', async () => {
+  const { app, db } = setup();
+  const h = await ali(app);
+  const r = (await call(app, 'POST', '/api/mobile/sync', h, { payments: [{ uuid: 'p1', supplierId: 1, amount: 5000, paidAt: now() }] })).body;
+  assert.equal(r.payments.rejected.length, 1, 'collector has no payments.create by default');
+  const role = db.prepare("SELECT id, permissions FROM roles WHERE code = 'collector'").get();
+  await call(app, 'PATCH', `/api/admin/roles/${role.id}`, await boss(app), { permissions: [...JSON.parse(role.permissions), 'payments.create'] });
+  const ok = (await call(app, 'POST', '/api/mobile/sync', h, { payments: [{ uuid: 'p1', supplierId: 1, amount: 5000, paidAt: now() }] })).body;
+  assert.deepEqual(ok.payments.accepted, ['p1']);
+  const again = (await call(app, 'POST', '/api/mobile/sync', h, { payments: [{ uuid: 'p1', supplierId: 1, amount: 5000, paidAt: now() }] })).body;
+  assert.deepEqual(again.payments.accepted, ['p1']);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM payments').get().n, 1);
+});
+
+test('test users never count', async () => {
+  const { app } = setup();
+  const t = await login(app, '900000000', '1111');
+  await runShift(app, t, 't1', [{ supplierId: 1, quantity: 50 }], { close: true });
+  const b = await boss(app);
+  const sh = (await call(app, 'GET', '/api/admin/shifts?status=closed', b)).body[0];
+  await call(app, 'POST', `/api/admin/shifts/${sh.id}/accept`, b);
+  assert.equal((await call(app, 'GET', '/api/admin/balances', b)).body.rows.find((r) => r.id === 1).balance, 100000);
+  assert.equal((await call(app, 'GET', '/api/admin/reports/daily-cost', b)).body.products.length, 0);
+});
