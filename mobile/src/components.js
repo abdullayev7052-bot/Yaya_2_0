@@ -1,7 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Image, Platform, Pressable, Text, View } from 'react-native';
 import { getBrand } from './api';
-import { C, s } from './ui';
+import { C, fmtTime, s } from './ui';
 
 export const fmtMoney = (n) => (n == null ? '—' : String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '));
 
@@ -36,7 +36,7 @@ export function Tile({ label, value, sub, wide }) {
 }
 
 const STATUS = {
-  open: ['Ochiq', C.warn], closed: ['Tasdiq kutmoqda', C.warn], approved: ['Tasdiqlangan', C.ok], rejected: ['Rad etilgan', C.err],
+  open: ['Ochiq (qoralama)', C.warn], closed: ['Qabul kutmoqda', C.warn], accepted: ['Qabul qilingan', C.ok], cancelled: ['Bekor qilingan', C.err],
 };
 export function ShiftBadge({ status }) {
   const [t, color] = STATUS[status] ?? [status, C.muted];
@@ -115,4 +115,57 @@ export function matches(item, query) {
   const d = digitsOf(q);
   return item.name.toLowerCase().includes(q) || (item.address ?? '').toLowerCase().includes(q)
     || (d.length >= 2 && digitsOf(item.phone).includes(d));
+}
+
+// ---- dates (Tashkent business day = UTC+5) ----
+export const todayLocal = () => new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10);
+export const addDays = (day, n) => new Date(Date.parse(day) + n * 864e5).toISOString().slice(0, 10);
+export const fmtDay = (d) => `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}`;
+export const fmtDT = (iso) => {
+  if (!iso) return '';
+  const d = new Date(/Z|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso.replace(' ', 'T')}Z`);
+  return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')} ${fmtTime(d.toISOString())}`;
+};
+export const METHOD = { cash: 'Naqd', card: 'Karta', transfer: 'O\'tkazma' };
+
+// Loads data and keeps error/refresh state in one place.
+export function useLoad(fn, deps) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    setBusy(true);
+    setErr('');
+    try { setData(await fn()); } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  useEffect(() => { load(); }, [load]);
+  return { data, err, busy, load, setData };
+}
+
+export const Err = ({ err }) => (err ? <Text style={[s.err, { padding: 12 }]}>{err}</Text> : null);
+
+export function DayPicker({ day, onChange }) {
+  const today = todayLocal();
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+      <Pressable style={[s.btnGhost, { paddingHorizontal: 18 }]} onPress={() => onChange(addDays(day, -1))}><Text style={s.btnGhostText}>‹</Text></Pressable>
+      <Pressable style={{ flex: 1 }} onPress={() => onChange(today)}>
+        <Text style={[s.h2, { textAlign: 'center' }]}>{day === today ? `Bugun, ${fmtDay(day)}` : fmtDay(day)}</Text>
+      </Pressable>
+      <Pressable style={[s.btnGhost, { paddingHorizontal: 18 }, day >= today && { opacity: 0.3 }]} disabled={day >= today}
+        onPress={() => onChange(addDays(day, 1))}><Text style={s.btnGhostText}>›</Text></Pressable>
+    </View>
+  );
+}
+
+export function Btn({ title, onPress, kind = 'main', disabled, style }) {
+  const ghost = kind !== 'main' && kind !== 'danger';
+  return (
+    <Pressable onPress={onPress} disabled={disabled}
+      style={[ghost ? s.btnGhost : s.btn, kind === 'danger' && { backgroundColor: C.err }, { paddingVertical: 12, paddingHorizontal: 14 },
+        disabled && { opacity: 0.4 }, style]}>
+      <Text style={[ghost ? s.btnGhostText : [s.btnText, { fontSize: 17 }], kind === 'warn' && { color: C.err }]}>{title}</Text>
+    </Pressable>
+  );
 }

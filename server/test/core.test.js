@@ -149,7 +149,7 @@ test('roles: storekeeper accepts without seeing prices; collector card shows bal
   assert.equal(card.balance, 100000 + 10 * 5000);
   assert.equal(card.lastPickup.quantity, 10);
   assert.ok(!JSON.stringify(card).includes('5000,'), 'no prices in the card');
-  assert.equal(card.canPay, false);
+  assert.equal(card.canPay, true, 'collectors can pay suppliers by default');
   // not assigned -> no card
   const other = (await call(app, 'POST', '/api/mobile/suppliers', h, { name: 'X', productIds: [1] })).status;
   assert.equal(other, 403, 'collector cannot add suppliers by default');
@@ -158,12 +158,13 @@ test('roles: storekeeper accepts without seeing prices; collector card shows bal
 test('payments from the field are offline-safe and need permission', async () => {
   const { app, db } = setup();
   const h = await ali(app);
-  const r = (await call(app, 'POST', '/api/mobile/sync', h, { payments: [{ uuid: 'p1', supplierId: 1, amount: 5000, paidAt: now() }] })).body;
-  assert.equal(r.payments.rejected.length, 1, 'collector has no payments.create by default');
-  const role = db.prepare("SELECT id, permissions FROM roles WHERE code = 'collector'").get();
-  await call(app, 'PATCH', `/api/admin/roles/${role.id}`, await boss(app), { permissions: [...JSON.parse(role.permissions), 'payments.create'] });
   const ok = (await call(app, 'POST', '/api/mobile/sync', h, { payments: [{ uuid: 'p1', supplierId: 1, amount: 5000, paidAt: now() }] })).body;
-  assert.deepEqual(ok.payments.accepted, ['p1']);
+  assert.deepEqual(ok.payments.accepted, ['p1'], 'collectors pay by default');
+  // the admin can take the permission away
+  const role = db.prepare("SELECT id, permissions FROM roles WHERE code = 'collector'").get();
+  await call(app, 'PATCH', `/api/admin/roles/${role.id}`, await boss(app), { permissions: JSON.parse(role.permissions).filter((x) => x !== 'payments.create') });
+  const no = (await call(app, 'POST', '/api/mobile/sync', h, { payments: [{ uuid: 'p2', supplierId: 1, amount: 5000, paidAt: now() }] })).body;
+  assert.equal(no.payments.rejected.length, 1);
   const again = (await call(app, 'POST', '/api/mobile/sync', h, { payments: [{ uuid: 'p1', supplierId: 1, amount: 5000, paidAt: now() }] })).body;
   assert.deepEqual(again.payments.accepted, ['p1']);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM payments').get().n, 1);

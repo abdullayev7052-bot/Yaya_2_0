@@ -60,7 +60,7 @@ export const BUILTIN_ROLES = [
     perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'suppliers.view', 'prices.view', 'debts.view', 'payments.create',
       'payments.void', 'reports.view', 'reports.export'] },
   { code: 'collector', name: 'Sut yig\'uvchi', locked: 0,
-    perms: ['collect.shift', 'collect.edit_own', 'collect.delete_own', 'collect.copy_cancelled', 'suppliers.card_own'] },
+    perms: ['collect.shift', 'collect.edit_own', 'collect.delete_own', 'collect.copy_cancelled', 'suppliers.card_own', 'payments.create'] },
 ];
 
 // v3 permission keys -> v4 keys (used once by the v3 -> v4 migration).

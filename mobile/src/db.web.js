@@ -17,7 +17,7 @@ const uuid = () => (globalThis.crypto?.randomUUID ? crypto.randomUUID()
 const nowIso = () => new Date().toISOString();
 
 const shifts = () => load('shifts', []);
-const collections = () => load('collections', []);
+const collections = () => load('collections', []).filter((c) => !c.voided_at);
 const ops = () => load('ops', []);
 const payments = () => load('payments', []);
 
@@ -32,22 +32,33 @@ export function setKv(key, value) {
 }
 
 export function getOpenShift() {
-  return shifts().filter((s) => !s.closed_at).sort((a, b) => b.opened_at.localeCompare(a.opened_at))[0] ?? null;
+  return shifts().filter((s) => !s.closed_at && !s.error).sort((a, b) => b.opened_at.localeCompare(a.opened_at))[0] ?? null;
 }
+export const allShifts = () => shifts().sort((a, b) => b.opened_at.localeCompare(a.opened_at));
 export function openShift() {
-  const shift = { uuid: uuid(), opened_at: nowIso(), closed_at: null, dirty: 1 };
+  const shift = { uuid: uuid(), opened_at: nowIso(), closed_at: null, dirty: 1, error: null };
   save('shifts', [...shifts(), shift]);
   return shift;
 }
 export function closeShift(id) {
   save('shifts', shifts().map((s) => (s.uuid === id ? { ...s, closed_at: nowIso(), dirty: 1 } : s)));
 }
+export function adoptShift(s) {
+  if (!shifts().some((x) => x.uuid === s.uuid)) save('shifts', [...shifts(), { uuid: s.uuid, opened_at: s.opened_at, closed_at: null, dirty: 0, error: null }]);
+  const have = new Set(collections().map((c) => c.uuid));
+  save('collections', [...collections(), ...s.collections.filter((c) => !have.has(c.uuid)).map((c) => ({
+    ...c, shift_uuid: s.uuid, unit: c.unit ?? 'kg', synced_at: nowIso(), error: null, edited_at: null }))]);
+}
+export function discardShift(id) {
+  save('collections', collections().filter((c) => c.shift_uuid !== id));
+  save('shifts', shifts().filter((s) => s.uuid !== id));
+}
 
 export function addCollectionAndClearDraft({ shiftUuid, supplier, product, quantity }) {
   save('collections', [...collections(), {
     uuid: uuid(), shift_uuid: shiftUuid, supplier_id: supplier.id, supplier_name: supplier.name,
     product_id: product.id, product_name: product.name, unit: product.unit ?? 'kg', quantity,
-    collected_at: nowIso(), synced_at: null, error: null, voided_at: null, edited_at: null,
+    collected_at: nowIso(), synced_at: null, error: null, edited_at: null,
   }]);
   setKv('draft', null);
 }
@@ -55,17 +66,13 @@ export function shiftCollections(shiftUuid) {
   return collections().filter((c) => c.shift_uuid === shiftUuid).sort((a, b) => b.collected_at.localeCompare(a.collected_at));
 }
 export function editCollection(id, { quantity, product }) {
-  const c = collections().find((x) => x.uuid === id);
-  if (!c) return;
   save('collections', collections().map((x) => (x.uuid === id
     ? { ...x, quantity, product_id: product.id, product_name: product.name, unit: product.unit ?? 'kg', edited_at: nowIso() } : x)));
-  if (c.synced_at) save('ops', [...ops(), { uuid: uuid(), type: 'edit', target: id, quantity, product_id: product.id, created_at: nowIso(), synced_at: null, error: null }]);
+  save('ops', [...ops(), { uuid: uuid(), type: 'edit', target: id, quantity, product_id: product.id, created_at: nowIso(), synced_at: null, error: null }]);
 }
-export function voidCollection(id, reason) {
-  const c = collections().find((x) => x.uuid === id);
-  if (!c || c.voided_at) return;
-  save('collections', collections().map((x) => (x.uuid === id ? { ...x, voided_at: nowIso() } : x)));
-  if (c.synced_at) save('ops', [...ops(), { uuid: uuid(), type: 'void', target: id, reason: reason ?? null, created_at: nowIso(), synced_at: null, error: null }]);
+export function deleteCollection(id) {
+  save('collections', collections().filter((x) => x.uuid !== id));
+  save('ops', [...ops(), { uuid: uuid(), type: 'delete', target: id, created_at: nowIso(), synced_at: null, error: null }]);
 }
 
 export function addPayment({ supplier, amount, method, note }) {
@@ -74,27 +81,33 @@ export function addPayment({ supplier, amount, method, note }) {
 }
 export const recentPayments = () => payments().sort((a, b) => b.paid_at.localeCompare(a.paid_at)).slice(0, 50);
 
-const pendingCol = (c) => !c.synced_at && !c.error && !c.voided_at;
 const pending = (x) => !x.synced_at && !x.error;
-export const unsyncedCount = () => collections().filter(pendingCol).length + ops().filter(pending).length + payments().filter(pending).length;
-export const errorCount = () => [...collections(), ...ops(), ...payments()].filter((x) => x.error).length;
+export const unsyncedCount = () => collections().filter(pending).length + ops().filter(pending).length
+  + payments().filter(pending).length + shifts().filter((s) => s.dirty && !s.error).length;
+export const errorCount = () => [...collections(), ...ops(), ...payments(), ...shifts()].filter((x) => x.error).length;
 export const errors = () => [
-  ...collections().filter((x) => x.error).map((x) => ({ kind: 'pickup', name: x.supplier_name, error: x.error })),
-  ...ops().filter((x) => x.error).map((x) => ({ kind: 'fix', name: x.target, error: x.error })),
-  ...payments().filter((x) => x.error).map((x) => ({ kind: 'payment', name: x.supplier_name, error: x.error })),
+  ...shifts().filter((x) => x.error).map((x) => ({ kind: 'shift', uuid: x.uuid, name: 'Smena', error: x.error })),
+  ...collections().filter((x) => x.error).map((x) => ({ kind: 'pickup', uuid: x.uuid, name: x.supplier_name, error: x.error })),
+  ...ops().filter((x) => x.error).map((x) => ({ kind: 'fix', uuid: x.uuid, name: 'Tuzatish', error: x.error })),
+  ...payments().filter((x) => x.error).map((x) => ({ kind: 'payment', uuid: x.uuid, name: x.supplier_name, error: x.error })),
 ];
 
 export function pendingUpload() {
   return {
-    shifts: shifts().filter((s) => s.dirty).map(({ uuid: u, opened_at, closed_at }) => ({ uuid: u, opened_at, closed_at })),
-    collections: collections().filter(pendingCol).slice(0, 200),
-    ops: ops().filter(pending).slice(0, 200),
+    shifts: shifts().filter((s) => s.dirty && !s.error).map(({ uuid: u, opened_at, closed_at }) => ({ uuid: u, opened_at, closed_at })),
+    collections: collections().filter(pending).sort((a, b) => a.collected_at.localeCompare(b.collected_at)).slice(0, 300),
+    ops: ops().filter(pending).slice(0, 300),
     payments: payments().filter(pending).slice(0, 200),
   };
 }
 export function markUploaded(sentShifts, r) {
   const now = nowIso();
-  save('shifts', shifts().map((s) => (sentShifts.some((x) => x.uuid === s.uuid && x.closed_at === s.closed_at) ? { ...s, dirty: 0 } : s)));
+  const rejShift = new Map((r.shifts?.rejected ?? []).map((x) => [x.uuid, x.error]));
+  save('shifts', shifts().map((s) => {
+    let x = sentShifts.some((y) => y.uuid === s.uuid && y.closed_at === s.closed_at) ? { ...s, dirty: 0 } : s;
+    if (rejShift.has(s.uuid)) x = { ...x, error: rejShift.get(s.uuid) };
+    return x;
+  }));
   const apply = (key, list, acc = [], rej = []) => {
     const a = new Set(acc);
     const e = new Map(rej.map((x) => [x.uuid, x.error]));
@@ -105,11 +118,16 @@ export function markUploaded(sentShifts, r) {
   apply('payments', payments(), r.payments?.accepted, r.payments?.rejected);
 }
 export function retryErrors() {
+  save('shifts', shifts().map((s) => (s.error ? { ...s, error: null, dirty: 1 } : s)));
   for (const [k, list] of [['collections', collections()], ['ops', ops()], ['payments', payments()]]) save(k, list.map((x) => ({ ...x, error: null })));
 }
 export function pruneOld() {
   const cutoff = new Date(Date.now() - 30 * 864e5).toISOString();
-  save('collections', collections().filter((c) => !((c.synced_at || c.voided_at) && c.collected_at < cutoff)));
+  save('collections', collections().filter((c) => !(c.synced_at && c.collected_at < cutoff)));
   save('ops', ops().filter((o) => !(o.synced_at && o.created_at < cutoff)));
   save('payments', payments().filter((p) => !(p.synced_at && p.paid_at < cutoff)));
+}
+export function wipeLocal() {
+  for (const k of ['collections', 'ops', 'payments', 'shifts']) save(k, []);
+  for (const k of ['draft', 'bootstrap', 'lastSync']) setKv(k, null);
 }
