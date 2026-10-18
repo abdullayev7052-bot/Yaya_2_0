@@ -1,12 +1,12 @@
 # Yaya
 
-Sut yig'uvchilar uchun oflayn ishlaydigan mobil ilova + boshqaruv paneli. To'liq mustaqil tizim.
+Sut xaridi uchun korporativ tizim: barcha xodimlar uchun oflayn ishlaydigan mobil ilova + admin uchun veb panel. To'liq mustaqil tizim.
 Reja: [docs/PLAN.md](docs/PLAN.md) · Deploy va o'rnatish: [docs/DEPLOY.md](docs/DEPLOY.md) · Keyingi bosqichlar: [docs/NEXT.md](docs/NEXT.md)
 
 ## Tuzilma
 - `server/` — Node.js API (mobil sinxron, panel, hisobotlar), SQLite
 - `admin/` — boshqaruv paneli (`/admin/`)
-- `mobile/` — Android ilova (Expo / React Native). Brauzer versiyasi `/app/` da (test uchun)
+- `mobile/` — mobil ilova, barcha xodimlar uchun (Expo / React Native). Brauzer versiyasi `/app/` da (test uchun)
 - `.github/workflows/android.yml` — APK avtomatik yig'iladi
 
 ## Lokal ishga tushirish

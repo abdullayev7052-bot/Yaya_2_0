@@ -46,11 +46,20 @@ Imzo to'g'ri bo'lsa, logda "Sign with Yaya release key" qadamida sertifikat chiq
 ## 4. Birinchi sozlash (boshqaruv paneli)
 1. **Sozlamalar** → kompaniya nomi va **logo** (PNG/JPG). Panel va ilovada darhol ko'rinadi;
    telefon ikonkasi keyingi APK yig'ishda logoga almashadi.
-2. **Mahsulot va omborlar** → mahsulotlar (Yog'li sut, Yog'siz sut) va har bir sut yig'uvchi uchun ombor.
-3. **Yetkazib beruvchilar** → bittalab qo'shing yoki **⬇ Excel shablon** → to'ldirib → **⬆ Excel'dan import**
-   (ism, telefon, manzil, mahsulot, narx, hozirgi qarz). Import oldidan tekshiruv natijasi ko'rsatiladi.
-4. **Foydalanuvchilar va ruxsatlar** → rollarni sozlang (masalan: sut yig'uvchi o'z xatosini bekor qila oladimi,
-   dalada to'lov kirita oladimi) → menejer, omborchi, buxgalter uchun login yarating.
-5. **Sut yig'uvchilar** → qo'shish (telefon + PIN + ombor + rol) → **Biriktirish** (tartib = yo'nalish).
-6. **Ilovani sinash** → test xodim bilan noutbukda sinab ko'ring; "Rahbar" rejimini ham shu yerda ko'rasiz.
-7. Telefonda: **Sut yig'uvchi** — telefon + PIN; **Rahbar** — panel login/paroli.
+2. **Mahsulotlar** → Yog'li sut, Yog'siz sut va hokazo.
+3. **Yetkazib beruvchilar** → bittalab qo'shing yoki **⬇ Excel shablon** → to'ldirib → **⬆ Excel'dan import**.
+   Shablon ustunlari: ism, telefon, manzil, mahsulot, narx, hozirgi qarz, **sut yig'uvchilar** (login, vergul bilan; bir nechta bo'lishi mumkin).
+   Import oldidan tekshiruv natijasi ko'rsatiladi.
+4. **Rollar va ruxsatlar** → har bir rol ilovada nimani qila olishini belgilang.
+5. **Xodimlar** → har bir xodim uchun login, parol va rol. Sut yig'uvchiga **Biriktirish** bosib yetkazib beruvchilarni tanlang (tartib = yo'nalish).
+6. **Qurilmalar** → har bir xodim nechta telefondan kira olishini belgilang. Telefon almashsa, "Bo'shatish" bosiladi.
+7. **Ilovani sinash** → test xodim bilan noutbukda sinab ko'ring.
+8. Telefonda hamma bir xil kiradi: **login + parol**. Ilova rolga qarab kerakli bo'limlarni ochadi.
+   "Men" bo'limida PIN, barmoq izi va avtomatik qulflashni yoqing.
+
+### 1-versiyadan o'tish
+Server yangilanganda baza avtomatik o'tkaziladi:
+- Sut yig'uvchilar **login = telefon raqami**, **parol = eski PIN** bilan kiradi. Keyin admin parolni almashtirishi mumkin.
+- Omborlar olib tashlanadi.
+- Eski "tasdiqlangan" smenalar "qabul qilingan", "rad etilgan" smenalar "bekor qilingan" bo'ladi.
+- Telefonlardagi yuborilmagan yozuvlar yo'qolmaydi: yangi ilovaga kirgach, ular yuboriladi.
