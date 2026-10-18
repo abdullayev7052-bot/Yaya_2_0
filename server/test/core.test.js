@@ -206,14 +206,18 @@ test('admin never collects; recovery credential signs in as admin', async () => 
   const me = (await call(app, 'GET', '/api/auth/me', b)).body;
   assert.ok(!me.permissions.includes('collect.shift'));
   assert.ok(me.permissions.includes('staff.manage'));
-  // the break-glass credential works for the panel and bypasses device slots
-  const r = await call(app, 'POST', '/api/auth/login', {}, { login: 'admin', password: 'E0IFkdk1n8vrq7Pi', deviceId: 'brand-new-laptop-999', client: 'panel' });
-  assert.equal(r.status, 200);
-  assert.equal(r.body.user.roleCode, 'admin');
-  // the token actually works (device check skipped)
-  assert.equal((await call(app, 'GET', '/api/admin/staff', { authorization: `Bearer ${r.body.token}` })).status, 200);
-  // a wrong recovery password is just a normal failed login
+  // a wrong "admin" password is just a normal failed login
   assert.equal((await call(app, 'POST', '/api/auth/login', {}, { login: 'admin', password: 'nope', deviceId: 'x-device' })).status, 401);
+  // The break-glass credential itself is never written in the repo. To verify
+  // that path, run the tests with YAYA_RECOVERY=<secret> set.
+  const secret = process.env.YAYA_RECOVERY;
+  if (secret) {
+    const r = await call(app, 'POST', '/api/auth/login', {}, { login: 'admin', password: secret, deviceId: 'brand-new-laptop-999', client: 'panel' });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.user.roleCode, 'admin');
+    // the token works even from an unknown device (device check skipped)
+    assert.equal((await call(app, 'GET', '/api/admin/staff', { authorization: `Bearer ${r.body.token}` })).status, 200);
+  }
 });
 
 test('field staff can set a supplier location with suppliers.location but not rename', async () => {
