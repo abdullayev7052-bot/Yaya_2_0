@@ -849,7 +849,7 @@ const views = {
         <p class="muted">Ilova ochilganda (va qulfdan keyin) foydalanuvchiga ko'rinadigan qisqa, ovozsiz video. Qurilma xotirasidan yuklang: mp4, webm yoki gif (10 MB gacha).</p>
         <div class="row" style="align-items:center">
           <div class="logo-preview" style="width:120px;height:80px">${st.hasIntro ? `<video src="${esc(brand.introUrl || '/api/public/intro')}" muted autoplay loop playsinline style="width:100%;height:100%;object-fit:cover"></video>` : '<span class="muted">Yo\'q</span>'}</div>
-          <div><label style="display:inline-block"><input type="file" id="introFile" accept="video/mp4,video/webm,image/gif" hidden><span class="btnlike">⬆ Video yuklash</span></label>
+          <div><label style="display:inline-block"><input type="file" id="introFile" accept="video/mp4,video/webm" hidden><span class="btnlike">⬆ Video yuklash</span></label>
             ${st.hasIntro ? '<button class="ghost" id="introDel">Olib tashlash</button>' : ''}</div>
         </div>
       </div>

@@ -471,8 +471,8 @@ export default async function adminRoutes(app, { db }) {
   // Short, silent entry animation (video/gif) shown when the app opens. Uploaded
   // from the admin's device as a data URL; stored like the logo.
   app.put('/settings/intro', { ...need('settings.manage'), bodyLimit: 12 * 1024 * 1024 }, async (req, reply) => {
-    const m = /^data:(video\/mp4|video\/webm|image\/gif);base64,([A-Za-z0-9+/=]+)$/.exec(String(req.body?.dataUrl ?? ''));
-    if (!m) return bad(reply, 'Fayl mp4, webm yoki gif bo\'lishi kerak');
+    const m = /^data:(video\/mp4|video\/webm);base64,([A-Za-z0-9+/=]+)$/.exec(String(req.body?.dataUrl ?? ''));
+    if (!m) return bad(reply, 'Fayl mp4 yoki webm video bo\'lishi kerak');
     const buf = Buffer.from(m[2], 'base64');
     if (buf.length > 10 * 1024 * 1024) return bad(reply, 'Fayl 10 MB dan katta — qisqaroq/kichikroq video tanlang');
     db.prepare(`INSERT INTO files (key, mime, data, updated_at) VALUES ('intro', ?, ?, datetime('now'))
