@@ -109,7 +109,7 @@ export function loadSafety(db, id) {
 // prices, products, settings) stays.
 export function wipeHistory(db, { resetOpening = false } = {}) {
   db.transaction(() => {
-    for (const t of ['collections', 'payments', 'applied_ops', 'events']) db.exec(`DELETE FROM ${t}`);
+    for (const t of ['collections', 'payments', 'adjustments', 'applied_ops', 'events']) db.exec(`DELETE FROM ${t}`);
     db.exec('DELETE FROM shifts');
     if (resetOpening) db.exec('UPDATE suppliers SET opening_balance = 0');
   })();

@@ -75,27 +75,36 @@ test('shift lifecycle: draft counts nowhere; closed is frozen; accepted is real;
   assert.equal(cost.products[0].avg_cost, 5333.33); // (20×5000 + 10×6000) / 30
   assert.equal(cost.final, true);
 
-  // cancelling an accepted shift removes it from debts and reports
-  assert.equal((await call(app, 'POST', `/api/admin/shifts/${shifts[0].id}/cancel`, b, {})).status, 400, 'reason required');
-  await call(app, 'POST', `/api/admin/shifts/${shifts[0].id}/cancel`, b, { reason: 'kg xato' });
-  assert.equal(await balance(), 70000);
-  assert.equal((await today()).products.length, 0);
+  // an accepted shift is final: it can no longer be cancelled
+  assert.equal((await call(app, 'POST', `/api/admin/shifts/${shifts[0].id}/cancel`, b, { reason: 'kech' })).status, 400, 'accepted shift cannot be cancelled');
+  assert.equal(await balance(), 170000, 'accepted shift stays in the debt');
 
-  // the collector copies it: same number with -copy, open, contents kept, and the phone gets it
+  // a CLOSED (waiting) shift CAN be cancelled; cancelling drops it from debts
+  await runShift(app, h, 's2', [{ supplierId: 1, quantity: 10 }], { close: true });
+  const waiting0 = (await call(app, 'GET', '/api/admin/shifts?status=closed', b)).body;
+  assert.equal(waiting0[0].label, '#2');
+  assert.equal((await call(app, 'POST', `/api/admin/shifts/${waiting0[0].id}/cancel`, b, {})).status, 400, 'reason required');
+  await call(app, 'POST', `/api/admin/shifts/${waiting0[0].id}/cancel`, b, { reason: 'kg xato' });
+  assert.equal(await balance(), 170000, 'cancelled shift does not count');
+
+  // cannot open a new shift while #2 is cancelled and not yet fixed
+  assert.equal((await runShift(app, h, 's3', [{ supplierId: 1, quantity: 1 }])).shifts.rejected[0].uuid, 's3');
+
+  // the collector copies the cancelled shift, fixes a line, closes and it is accepted
   const hist = (await call(app, 'GET', '/api/mobile/history', h)).body;
-  const copy = (await call(app, 'POST', `/api/mobile/shifts/${hist[0].id}/copy`, h)).body;
-  assert.equal(copy.label, '#1-copy');
+  const cancelled = hist.find((x) => x.status === 'cancelled');
+  const copy = (await call(app, 'POST', `/api/mobile/shifts/${cancelled.id}/copy`, h)).body;
+  assert.equal(copy.label, '#2-copy');
   const boot = (await call(app, 'GET', '/api/mobile/bootstrap', h)).body;
-  assert.equal(boot.openShift.label, '#1-copy');
-  assert.equal(boot.openShift.collections.length, 2);
-  // fix one line in the copy, close, accept
-  const target = boot.openShift.collections.find((c) => c.supplier_id === 1).uuid;
-  await call(app, 'POST', '/api/mobile/sync', h, { ops: [{ uuid: 'fix1', type: 'edit', target, quantity: 18 }],
+  assert.equal(boot.openShift.label, '#2-copy');
+  assert.equal(boot.openShift.collections.length, 1);
+  const target = boot.openShift.collections[0].uuid;
+  await call(app, 'POST', '/api/mobile/sync', h, { ops: [{ uuid: 'fix1', type: 'edit', target, quantity: 8 }],
     shifts: [{ uuid: copy.uuid, openedAt: now(), closedAt: now() }] });
   const waiting = (await call(app, 'GET', '/api/admin/shifts?status=closed', b)).body;
-  assert.equal(waiting[0].label, '#1-copy');
+  assert.equal(waiting[0].label, '#2-copy');
   await call(app, 'POST', `/api/admin/shifts/${waiting[0].id}/accept`, b);
-  assert.equal(await balance(), 70000 + 18 * 5000);
+  assert.equal(await balance(), 170000 + 8 * 5000);
 });
 
 test('own drafts: edit and delete while open; delete removes the line for good', async () => {
@@ -271,4 +280,24 @@ test('signing out frees the device slot, so a new device can sign in without the
   // the panel shows it as an automatic release
   const log = (await call(app, 'GET', '/api/admin/audit', await boss(app))).body;
   assert.ok(log.some((l) => /qurilma joyi avtomatik bo'shatildi/.test(l.what)));
+});
+
+test('balances: as-of a past date, and manual balance edit records an adjustment', async () => {
+  const { app, db } = setup();
+  const b = await boss(app);
+  const bal = async (q = '') => (await call(app, 'GET', `/api/admin/balances${q}`, b)).body.rows.find((r) => r.id === 1).balance;
+  // supplier 1 opening debt is 100000; add a payment dated today
+  await call(app, 'POST', '/api/admin/payments', b, { supplierId: 1, amount: 40000 });
+  assert.equal(await bal(), 60000, 'today: opening minus payment');
+  // as of yesterday, the payment had not happened yet
+  const y = new Date(Date.now() + 5 * 3600e3 - 864e5).toISOString().slice(0, 10);
+  assert.equal(await bal(`?asOf=${y}`), 100000, 'as-of yesterday ignores today\'s payment');
+  // set the balance to an exact value; needs the admin password
+  assert.equal((await call(app, 'POST', '/api/admin/balances/edit', b, { password: 'nope', items: [{ supplierId: 1, target: 0 }] })).status, 400);
+  const r = await call(app, 'POST', '/api/admin/balances/edit', b, { password: 'secret123', items: [{ supplierId: 1, target: 0 }], note: 'Hisob tenglashtirildi' });
+  assert.equal(r.status, 200);
+  assert.equal(await bal(), 0, 'balance set to exactly 0');
+  // the change shows up in the statement
+  const card = (await call(app, 'GET', '/api/admin/suppliers/1/card', b)).body;
+  assert.ok(card.statement.entries.some((e) => e.kind === 'adjust'), 'adjustment in the akt-sverka');
 });

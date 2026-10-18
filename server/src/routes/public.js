@@ -14,7 +14,7 @@ export default async function publicRoutes(app, { db }) {
       introUrl: intro ? `/api/public/intro?v=${version}` : null,
       introMime: intro?.mime ?? null,
       locationEnabled: getSetting(db, 'location_enabled') !== '0',
-      locationPin: getSetting(db, 'location_pin') !== '0',
+      cancelEnabled: getSetting(db, 'cancel_enabled') !== '0',
     };
   });
 

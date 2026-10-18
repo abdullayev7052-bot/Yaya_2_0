@@ -22,7 +22,7 @@ export const COLUMNS = [
 export async function templateXlsx(db) {
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Yaya';
-  const ws = wb.addWorksheet('Yetkazib beruvchilar');
+  const ws = wb.addWorksheet('Xonadonlar');
   ws.columns = COLUMNS.map((c) => ({ header: c.header, key: c.key, width: c.width }));
   ws.getRow(1).font = { bold: true };
   ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F3EE' } };
@@ -39,11 +39,11 @@ export async function templateXlsx(db) {
   help.columns = [{ width: 110 }];
   [
     'Qanday to\'ldiriladi:',
-    '1. Bitta qator = bitta yetkazib beruvchi + bitta mahsulot. Bir nechta mahsulot bo\'lsa, keyingi qatorga shu ism/telefon bilan yozing.',
-    '2. F.I.Sh majburiy. Telefon bo\'lsa, mavjud yetkazib beruvchi telefon orqali topiladi va yangilanadi (aks holda — ism orqali).',
+    '1. Bitta qator = bitta xonadon + bitta mahsulot. Bir nechta mahsulot bo\'lsa, keyingi qatorga shu ism/telefon bilan yozing.',
+    '2. F.I.Sh majburiy. Telefon bo\'lsa, mavjud xonadon telefon orqali topiladi va yangilanadi (aks holda — ism orqali).',
     '3. Mahsulot nomi tizimdagi nom bilan bir xil bo\'lsin. Topilmasa, yangi mahsulot yaratiladi.',
-    '4. Joriy qarz — bugungi kunda BIZ yetkazib beruvchiga qancha qarzmiz. U bizga qarz bo\'lsa — minus bilan yozing.',
-    '5. Sut yig\'uvchilar — xodimlarning logini (yoki ismi), bir nechtasi bo\'lsa vergul bilan: 901112233, 931234567. Yozilsa, yetkazib beruvchi aynan shularga biriktiriladi.',
+    '4. Joriy qarz — bugungi kunda BIZ xonadonga qancha qarzmiz. U bizga qarz bo\'lsa — minus bilan yozing.',
+    '5. Sut yig\'uvchilar — xodimlarning logini (yoki ismi), bir nechtasi bo\'lsa vergul bilan: 901112233, 931234567. Yozilsa, xonadon aynan shularga biriktiriladi.',
     '6. Namuna qatorlarni o\'chirib, o\'z ma\'lumotlaringizni yozing. Import oldidan tizim tekshiradi va natijani ko\'rsatadi.',
     `Tizimdagi mahsulotlar: ${products.join(', ') || '(hali yo\'q)'}`,
   ].forEach((t) => help.addRow([t]));
@@ -161,7 +161,7 @@ export async function importSuppliers(db, buffer, { dryRun = true } = {}) {
             .run(g.name, g.phone, g.address, g.note, id);
         }
       } else {
-        first.actions.push('yangi yetkazib beruvchi');
+        first.actions.push('yangi xonadon');
         summary.suppliersCreated++;
         if (!dryRun) {
           id = db.prepare('INSERT INTO suppliers (name, phone, address, note) VALUES (?, ?, ?, ?)')
@@ -221,7 +221,7 @@ export async function importSuppliers(db, buffer, { dryRun = true } = {}) {
 export async function exportSuppliersXlsx(db, balanceOf) {
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Yaya';
-  const ws = wb.addWorksheet('Yetkazib beruvchilar');
+  const ws = wb.addWorksheet('Xonadonlar');
   ws.columns = COLUMNS.map((c) => ({ header: c.header, key: c.key, width: c.width }));
   ws.getRow(1).font = { bold: true };
   ws.views = [{ state: 'frozen', ySplit: 1 }];

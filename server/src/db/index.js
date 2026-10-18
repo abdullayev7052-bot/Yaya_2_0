@@ -156,6 +156,18 @@ CREATE TABLE IF NOT EXISTS payments (
   void_reason TEXT,
   voided_by TEXT
 );
+
+-- Manual balance corrections. delta is signed so'm added to the balance
+-- (positive increases our debt). Grouped by batch_id when several are saved together.
+CREATE TABLE IF NOT EXISTS adjustments (
+  id INTEGER PRIMARY KEY,
+  supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+  delta INTEGER NOT NULL,
+  note TEXT,
+  batch_id TEXT,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE INDEX IF NOT EXISTS idx_payments_supplier ON payments(supplier_id, paid_at);
 
 -- Offline corrections from phones already applied (makes re-sends harmless).

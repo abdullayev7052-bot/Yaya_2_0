@@ -18,8 +18,21 @@ export class ShiftError extends Error {
 const now = () => new Date().toISOString();
 const nextNumber = (db) => (db.prepare('SELECT MAX(number) AS n FROM shifts').get().n ?? 0) + 1;
 
-// A user with an open or not-yet-accepted shift cannot start another one.
-export const blockingShift = (db, userId) => db.prepare(`SELECT * FROM shifts WHERE employee_id = ? AND status IN ('open', 'closed')
+// A collector cannot start a new shift while any of their shift numbers is
+// unresolved: still open/closed (waiting acceptance) OR cancelled and not yet
+// replaced by an accepted copy. Returns the shift to show (an active one first,
+// else the cancelled one), or null when everything is resolved.
+export const blockingShift = (db, userId) => {
+  const unresolved = db.prepare(`SELECT number FROM shifts WHERE employee_id = ? GROUP BY number
+    HAVING MAX(status = 'accepted') = 0 AND MAX(status IN ('open', 'closed', 'cancelled')) = 1`).all(userId).map((r) => r.number);
+  if (!unresolved.length) return null;
+  return db.prepare(`SELECT * FROM shifts WHERE employee_id = ? AND number IN (${unresolved.join(',')})
+    ORDER BY (status IN ('open', 'closed')) DESC, opened_at DESC LIMIT 1`).get(userId);
+};
+
+// Only an open/closed shift blocks copying (the cancelled one being copied is
+// expected). Used so a collector can fix a cancelled shift but not run two at once.
+export const activeShift = (db, userId) => db.prepare(`SELECT * FROM shifts WHERE employee_id = ? AND status IN ('open', 'closed')
   ORDER BY opened_at DESC LIMIT 1`).get(userId);
 
 export function shiftTotals(db, uuid) {
@@ -79,7 +92,11 @@ export function acceptShift(db, id, actor) {
 export function cancelShift(db, id, actor, reason) {
   const s = db.prepare('SELECT * FROM shifts WHERE id = ?').get(id);
   if (!s) throw new ShiftError('Smena topilmadi');
-  if (!['closed', 'accepted'].includes(s.status)) throw new ShiftError('Faqat yopilgan yoki qabul qilingan smenani bekor qilish mumkin');
+  if (s.status !== 'closed') {
+    throw new ShiftError(s.status === 'accepted'
+      ? 'Qabul qilingan smenani bekor qilib bo\'lmaydi'
+      : 'Faqat kutayotgan (yopilgan) smenani bekor qilish mumkin');
+  }
   if (!reason) throw new ShiftError('Bekor qilish sababini yozing');
   db.prepare("UPDATE shifts SET status = 'cancelled', cancelled_by = ?, cancelled_at = ?, cancel_reason = ? WHERE id = ?")
     .run(actor, now(), reason, s.id);
@@ -94,8 +111,8 @@ export function copyShift(db, id, actor) {
   const s = db.prepare('SELECT * FROM shifts WHERE id = ?').get(id);
   if (!s) throw new ShiftError('Smena topilmadi');
   if (s.status !== 'cancelled') throw new ShiftError('Faqat bekor qilingan smenani nusxalash mumkin');
-  const blocking = blockingShift(db, s.employee_id);
-  if (blocking) throw new ShiftError(`Bu xodimda ${shiftLabel(blocking)} smena hali ${blocking.status === 'open' ? 'ochiq' : 'qabul qilinmagan'}`);
+  const active = activeShift(db, s.employee_id);
+  if (active) throw new ShiftError(`Bu xodimda ${shiftLabel(active)} smena hali ${active.status === 'open' ? 'ochiq' : 'qabul qilinmagan'}`);
   const copyNo = (db.prepare('SELECT MAX(copy_no) AS n FROM shifts WHERE number = ?').get(s.number).n ?? 0) + 1;
   const uuid = randomUUID();
   db.transaction(() => {

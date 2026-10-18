@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs';
+import ExcelJS from 'exceljs';
 import { randomInt, randomUUID } from 'node:crypto';
 import { audit, ensureDeviceSlots, roleIdByCode } from '../db/index.js';
 import { makeGuard, normalizeLogin } from '../auth.js';
@@ -38,6 +39,9 @@ export default async function adminRoutes(app, { db }) {
   const coord = (v) => (v == null || v === '' ? null : (Number.isFinite(Number(v)) && Math.abs(Number(v)) <= 180 ? Number(v) : null));
   const has = (req, p) => req.me.perms.has(p);
   const log = (req, action, details) => audit(db, req.actor, action, details);
+  // Admin can switch off cancelling shifts everywhere (default on).
+  const cancelAllowed = () => getSetting(db, 'cancel_enabled') !== '0';
+  const asOfParam = (q) => (/^\d{4}-\d{2}-\d{2}$/.test(q.asOf ?? '') && q.asOf < todayLocal() ? q.asOf : null);
   const shiftErr = (reply, e) => {
     if (e instanceof ShiftError) return reply.code(400).send({ error: e.message, details: e.details });
     throw e;
@@ -144,6 +148,28 @@ export default async function adminRoutes(app, { db }) {
         b.password ? bcrypt.hashSync(String(b.password), 10) : null, b.active == null ? null : Number(!!b.active),
         b.isTest == null ? null : Number(!!b.isTest), id);
     log(req, 'user.update', { id, login: login ?? target.login, name: b.name ?? target.name, roleId, active: b.active, passwordChanged: !!b.password });
+    return { ok: true };
+  });
+
+  // Permanently remove a deactivated staff member from the system. Only possible
+  // when they have no history (shifts, pickups, payments) that must be kept.
+  app.delete('/staff/:id', need('staff.manage'), async (req, reply) => {
+    const id = Number(req.params.id);
+    const u = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+    if (!u) return reply.code(404).send({ error: 'Topilmadi' });
+    if (u.active) return bad(reply, 'Avval xodimni o\'chiring (nofaol qiling), keyin butunlay o\'chirish mumkin');
+    if (u.role_id === adminRole() && activeAdmins() <= 1) return bad(reply, 'Oxirgi adminni o\'chirib bo\'lmaydi');
+    const refs = db.prepare(`SELECT
+        (SELECT COUNT(*) FROM shifts WHERE employee_id = @id) +
+        (SELECT COUNT(*) FROM collections WHERE employee_id = @id) +
+        (SELECT COUNT(*) FROM payments WHERE employee_id = @id) AS n`).get({ id }).n;
+    if (refs > 0) return bad(reply, 'Bu xodimda smena yoki to\'lov tarixi bor — butunlay o\'chirib bo\'lmaydi. Nofaol holatda qoladi.');
+    db.transaction(() => {
+      db.prepare('DELETE FROM employee_suppliers WHERE employee_id = ?').run(id);
+      db.prepare('DELETE FROM devices WHERE user_id = ?').run(id);
+      db.prepare('DELETE FROM users WHERE id = ?').run(id);
+    })();
+    log(req, 'user.delete', { id, login: u.login, name: u.name });
     return { ok: true };
   });
 
@@ -363,6 +389,7 @@ export default async function adminRoutes(app, { db }) {
   });
 
   app.post('/shifts/:id/cancel', need('shifts.cancel'), async (req, reply) => {
+    if (!cancelAllowed()) return reply.code(403).send({ error: 'Bekor qilish o\'chirilgan' });
     try {
       const s = cancelShift(db, Number(req.params.id), req.actor, str(req.body?.reason, 300));
       const u = db.prepare('SELECT name FROM users WHERE id = ?').get(s.employee_id);
@@ -381,7 +408,57 @@ export default async function adminRoutes(app, { db }) {
   });
 
   // ---------------------------------------------------------------- payments & debts
-  app.get('/balances', need('debts.view'), async (req) => balances(db, { q: req.query.q }));
+  app.get('/balances', need('debts.view'), async (req) => balances(db, { q: req.query.q, asOf: asOfParam(req.query) }));
+
+  // Edit balances: set one or more households to an exact balance. Each becomes a
+  // signed adjustment (target − current) so the whole history stays intact. Guarded
+  // by the admin's own password because it rewrites money directly.
+  app.post('/balances/edit', need('payments.create'), async (req, reply) => {
+    const b = req.body ?? {};
+    const self = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.me.id);
+    if (!self || !bcrypt.compareSync(String(b.password ?? ''), self.password_hash)) return bad(reply, 'Parol noto\'g\'ri');
+    const items = Array.isArray(b.items) ? b.items : [];
+    const note = str(b.note, 300);
+    const clean = items.map((x) => ({ supplierId: num(x.supplierId), target: Math.round(Number(x.target)) }))
+      .filter((x) => x.supplierId && Number.isFinite(x.target));
+    if (!clean.length) return bad(reply, 'Hech bir xonadon tanlanmadi');
+    const batch = randomUUID();
+    const done = db.transaction(() => {
+      const ins = db.prepare('INSERT INTO adjustments (supplier_id, delta, note, batch_id, created_by) VALUES (?, ?, ?, ?, ?)');
+      const out = [];
+      for (const it of clean) {
+        const cur = supplierBalance(db, it.supplierId);
+        const delta = it.target - cur;
+        if (delta === 0) continue;
+        ins.run(it.supplierId, delta, note, batch, req.actor);
+        out.push({ supplierId: it.supplierId, from: cur, to: it.target });
+      }
+      return out;
+    })();
+    log(req, 'balance.edit', { count: done.length, note });
+    return { ok: true, changed: done.length };
+  });
+
+  app.get('/balances-export.xlsx', need('debts.view'), async (req, reply) => {
+    const rows = balances(db, { q: req.query.q, asOf: asOfParam(req.query) }).rows;
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Qarzlar');
+    ws.columns = [
+      { header: 'Xonadon', key: 'name', width: 28 }, { header: 'Telefon', key: 'phone', width: 16 },
+      { header: 'Manzil', key: 'address', width: 24 },
+      { header: 'Qarzdorlik (so\'m)', key: 'owe', width: 18 }, { header: 'Haqdorlik (so\'m)', key: 'credit', width: 18 },
+      { header: 'Balans (so\'m)', key: 'balance', width: 16 },
+    ];
+    ws.getRow(1).font = { bold: true };
+    for (const r of rows) {
+      ws.addRow({ name: r.name, phone: r.phone ?? '', address: r.address ?? '',
+        owe: Math.max(0, r.balance), credit: Math.max(0, -r.balance), balance: r.balance });
+    }
+    log(req, 'report.export', { from: 'balances', to: asOfParam(req.query) ?? todayLocal() });
+    reply.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    reply.header('Content-Disposition', 'attachment; filename="yaya_qarzlar.xlsx"');
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  });
 
   app.get('/payments', need('debts.view'), async (req) => {
     const { from, to } = parseRange(req.query);
@@ -398,7 +475,7 @@ export default async function adminRoutes(app, { db }) {
     const amount = Math.round(Number(req.body?.amount));
     const method = METHODS.includes(req.body?.method) ? req.body.method : 'cash';
     const s = supplierId && db.prepare('SELECT name FROM suppliers WHERE id = ?').get(supplierId);
-    if (!s) return bad(reply, 'Yetkazib beruvchini tanlang');
+    if (!s) return bad(reply, 'Xonadonni tanlang');
     if (!(amount > 0) || amount > 1e11) return bad(reply, 'Summa noto\'g\'ri');
     const paidAt = req.body?.paidAt && !Number.isNaN(Date.parse(req.body.paidAt)) ? new Date(req.body.paidAt).toISOString() : new Date().toISOString();
     const id = db.prepare(`INSERT INTO payments (client_uuid, supplier_id, amount, method, note, paid_at, created_by, employee_id)
@@ -425,7 +502,7 @@ export default async function adminRoutes(app, { db }) {
 
   app.get('/reports/export.csv', need('reports.export'), async (req, reply) => {
     const { from, to } = parseRange(req.query);
-    const cols = [['id', 'ID'], ['shift', 'Smena'], ['local_time', 'Vaqt'], ['employee', 'Sut yig\'uvchi'], ['supplier', 'Yetkazib beruvchi'],
+    const cols = [['id', 'ID'], ['shift', 'Smena'], ['local_time', 'Vaqt'], ['employee', 'Sut yig\'uvchi'], ['supplier', 'Xonadon'],
       ['product', 'Mahsulot'], ['unit', 'Birlik'], ['quantity', 'Miqdor']];
     if (has(req, 'prices.view')) cols.push(['price', 'Narx'], ['amount', 'Summa']);
     const csv = toCsv(exportRows(db, req.query), cols);
@@ -436,19 +513,21 @@ export default async function adminRoutes(app, { db }) {
   });
 
   // Day overview: accepted shifts are the truth; open shifts are shown live.
+  // Dashboard for a day OR a range (from/to), optionally filtered to one product.
+  // Debt totals are valued AS OF the end of the range, not as of now.
   app.get('/dashboard', need('reports.view'), async (req) => {
-    const day = /^\d{4}-\d{2}-\d{2}$/.test(req.query.day ?? '') ? req.query.day : todayLocal();
-    const d30 = new Date(Date.parse(day) - 29 * 864e5).toISOString().slice(0, 10);
+    const { from, to } = parseRange(req.query);
+    const product = num(req.query.product);
+    const q = { from, to, ...(product ? { product } : {}) };
     const out = {
-      day,
-      cost: dailyCost(db, day),
-      day_summary: summary(db, { from: day, to: day }),
-      month: summary(db, { from: d30, to: day }),
-      accepted: listShifts(db, { from: day, to: day, status: 'accepted' }).filter((s) => !s.is_test),
+      from, to, product: product ?? null,
+      summary: summary(db, q),
+      accepted: listShifts(db, { from, to, status: 'accepted' }).filter((s) => !s.is_test),
       live: has(req, 'shifts.view_all') ? listShifts(db, { status: 'open' }).filter((s) => !s.is_test) : [],
       waiting: has(req, 'shifts.view_all') ? listShifts(db, { status: 'closed' }).filter((s) => !s.is_test) : [],
     };
-    if (has(req, 'debts.view')) out.debt = balances(db).totals;
+    // When viewing today, "as of now"; for a past range, as of that day's end.
+    if (has(req, 'debts.view')) out.debt = balances(db, { asOf: to >= todayLocal() ? null : to }).totals;
     return out;
   });
 
@@ -458,18 +537,19 @@ export default async function adminRoutes(app, { db }) {
     greeting: getSetting(db, 'greeting') ?? '',
     hasIntro: !!db.prepare("SELECT 1 FROM files WHERE key = 'intro'").get(),
     introMime: db.prepare("SELECT mime FROM files WHERE key = 'intro'").get()?.mime ?? null,
-    // Location features default ON; stored only when turned off.
+    // Location (map) and cancelling default ON; stored only when turned off.
     locationEnabled: getSetting(db, 'location_enabled') !== '0',
-    locationPin: getSetting(db, 'location_pin') !== '0',
+    cancelEnabled: getSetting(db, 'cancel_enabled') !== '0',
   }));
   app.put('/settings', need('settings.manage'), async (req) => {
     if (req.body?.companyName !== undefined) setSetting(db, 'company_name', str(req.body.companyName, 60));
     // Greeting shown on the collector's start screen; {ism} is replaced by the name.
     if (req.body?.greeting !== undefined) setSetting(db, 'greeting', str(req.body.greeting, 120));
-    // location_enabled: use the phone's location for the nearest-first list and route pin.
-    // location_pin: show the little route pin in the shift list. Supplier locations are kept either way.
+    // location_enabled: map mode — nearest-first list and route from the phone's
+    // location. Off = households show only their address. Locations are kept either way.
     if (req.body?.locationEnabled !== undefined) setSetting(db, 'location_enabled', req.body.locationEnabled ? '1' : '0');
-    if (req.body?.locationPin !== undefined) setSetting(db, 'location_pin', req.body.locationPin ? '1' : '0');
+    // cancel_enabled: when off, no "Bekor qilish" anywhere — only accepting shifts.
+    if (req.body?.cancelEnabled !== undefined) setSetting(db, 'cancel_enabled', req.body.cancelEnabled ? '1' : '0');
     setSetting(db, 'brand_version', Date.now());
     log(req, 'settings.update', { companyName: req.body?.companyName });
     return { ok: true };

@@ -79,7 +79,7 @@ export default async function mobileRoutes(app, { db }) {
     const me = req.me;
     const assigned = !!db.prepare('SELECT 1 FROM employee_suppliers WHERE employee_id = ? AND supplier_id = ?').get(me.id, id);
     if (!(me.perms.has('suppliers.view') || (assigned && me.perms.has('suppliers.card_own')))) {
-      return reply.code(403).send({ error: 'Bu yetkazib beruvchi kartochkasiga ruxsat yo\'q' });
+      return reply.code(403).send({ error: 'Bu xonadon kartochkasiga ruxsat yo\'q' });
     }
     const s = db.prepare('SELECT id, name, phone, address, note, lat, lng, active FROM suppliers WHERE id = ?').get(id);
     if (!s) return reply.code(404).send({ error: 'Topilmadi' });
@@ -107,7 +107,7 @@ export default async function mobileRoutes(app, { db }) {
     const id = Number(req.params.id);
     const me = req.me;
     const assigned = !!db.prepare('SELECT 1 FROM employee_suppliers WHERE employee_id = ? AND supplier_id = ?').get(me.id, id);
-    if (!(me.perms.has('suppliers.view') || assigned)) return reply.code(403).send({ error: 'Bu yetkazib beruvchiga ruxsat yo\'q' });
+    if (!(me.perms.has('suppliers.view') || assigned)) return reply.code(403).send({ error: 'Bu xonadonga ruxsat yo\'q' });
     const s = db.prepare('SELECT id, name FROM suppliers WHERE id = ?').get(id);
     if (!s) return reply.code(404).send({ error: 'Topilmadi' });
     const b = req.body ?? {};
@@ -196,8 +196,8 @@ export default async function mobileRoutes(app, { db }) {
         if (!can('collect.shift')) { reject('Sut qabul qilishga ruxsat yo\'q'); continue; }
         if (!sh || sh.employee_id !== me.id) { reject('Smena topilmadi'); continue; }
         if (sh.status !== 'open') { reject(`${shiftLabel(sh)} smena yopilgan — o'zgartirib bo'lmaydi`); continue; }
-        if (!assigned.get(me.id, c.supplierId)) { reject('Yetkazib beruvchi sizga biriktirilmagan'); continue; }
-        if (!linked.get(c.supplierId, c.productId)) { reject('Bu mahsulot yetkazib beruvchiga biriktirilmagan'); continue; }
+        if (!assigned.get(me.id, c.supplierId)) { reject('Xonadon sizga biriktirilmagan'); continue; }
+        if (!linked.get(c.supplierId, c.productId)) { reject('Bu mahsulot xonadonga biriktirilmagan'); continue; }
         db.prepare(`INSERT INTO collections (client_uuid, shift_uuid, employee_id, supplier_id, product_id, quantity, collected_at)
           VALUES (?, ?, ?, ?, ?, ?, ?)`).run(c.uuid, c.shiftUuid, me.id, c.supplierId, c.productId, c.quantity, c.collectedAt);
         out.accepted.push(c.uuid);
@@ -221,7 +221,7 @@ export default async function mobileRoutes(app, { db }) {
         } else {
           if (!can('collect.edit_own')) { reject('Tahrirlashga ruxsat yo\'q'); continue; }
           const productId = op.productId ?? c.product_id;
-          if (!linked.get(c.supplier_id, productId)) { reject('Bu mahsulot yetkazib beruvchiga biriktirilmagan'); continue; }
+          if (!linked.get(c.supplier_id, productId)) { reject('Bu mahsulot xonadonga biriktirilmagan'); continue; }
           db.prepare("UPDATE collections SET quantity = ?, product_id = ?, edited_at = datetime('now'), edited_by = ? WHERE id = ?")
             .run(op.quantity ?? c.quantity, productId, actor, c.id);
         }
@@ -245,7 +245,7 @@ export default async function mobileRoutes(app, { db }) {
         if (db.prepare('SELECT 1 FROM payments WHERE client_uuid = ?').get(p.uuid)) { out.payments.accepted.push(p.uuid); continue; }
         if (!can('payments.create')) { out.payments.rejected.push({ uuid: p.uuid, error: 'To\'lov qilishga ruxsat yo\'q' }); continue; }
         const visible = can('suppliers.view') || assigned.get(me.id, p.supplierId);
-        if (!visible) { out.payments.rejected.push({ uuid: p.uuid, error: 'Yetkazib beruvchi sizga biriktirilmagan' }); continue; }
+        if (!visible) { out.payments.rejected.push({ uuid: p.uuid, error: 'Xonadon sizga biriktirilmagan' }); continue; }
         db.prepare(`INSERT INTO payments (client_uuid, supplier_id, amount, method, note, paid_at, created_by, employee_id)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(p.uuid, p.supplierId, Math.round(p.amount), p.method ?? 'cash',
           p.note ? String(p.note).slice(0, 300) : null, p.paidAt, actor, me.id);

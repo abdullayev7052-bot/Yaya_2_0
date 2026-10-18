@@ -5,20 +5,20 @@
 
 export const PERMISSIONS = [
   // --- collecting milk (mobile app)
-  { key: 'collect.shift', group: 'Sut qabul qilish (smena)', label: 'Smena ochish, yetkazib beruvchidan sut qabul qilish va smenani yopish' },
+  { key: 'collect.shift', group: 'Sut qabul qilish (smena)', label: 'Smena ochish, xonadondan sut qabul qilish va smenani yopish' },
   { key: 'collect.edit_own', group: 'Sut qabul qilish (smena)', label: 'Ochiq smenadagi o\'z yozuvini tahrirlash' },
   { key: 'collect.delete_own', group: 'Sut qabul qilish (smena)', label: 'Ochiq smenadagi o\'z yozuvini o\'chirish' },
   { key: 'collect.copy_cancelled', group: 'Sut qabul qilish (smena)', label: 'O\'zining bekor qilingan smenasini nusxalash' },
 
   // --- suppliers
-  { key: 'suppliers.card_own', group: 'Yetkazib beruvchilar', label: 'O\'ziga biriktirilganlarning kartochkasi: kg tarixi va qarz qoldig\'i (narxsiz)' },
-  { key: 'suppliers.view', group: 'Yetkazib beruvchilar', label: 'Barcha yetkazib beruvchilar va kartochkalarini ko\'rish' },
-  { key: 'suppliers.create', group: 'Yetkazib beruvchilar', label: 'Yangi yetkazib beruvchi qo\'shish' },
-  { key: 'suppliers.edit', group: 'Yetkazib beruvchilar', label: 'Yetkazib beruvchi ma\'lumotlarini (ism, telefon) o\'zgartirish' },
-  { key: 'suppliers.location', group: 'Yetkazib beruvchilar', label: 'Yetkazib beruvchi manzili va xaritadagi joyini belgilash/tahrirlash' },
-  { key: 'suppliers.import', group: 'Yetkazib beruvchilar', label: 'Excel orqali import va eksport' },
-  { key: 'prices.view', group: 'Yetkazib beruvchilar', label: 'Narx va summalarni ko\'rish', hint: 'O\'chirilsa, faqat kg ko\'rinadi' },
-  { key: 'prices.manage', group: 'Yetkazib beruvchilar', label: 'Narxlarni belgilash' },
+  { key: 'suppliers.card_own', group: 'Xonadonlar', label: 'O\'ziga biriktirilganlarning kartochkasi: kg tarixi va qarz qoldig\'i (narxsiz)' },
+  { key: 'suppliers.view', group: 'Xonadonlar', label: 'Barcha xonadonlar va kartochkalarini ko\'rish' },
+  { key: 'suppliers.create', group: 'Xonadonlar', label: 'Yangi xonadon qo\'shish' },
+  { key: 'suppliers.edit', group: 'Xonadonlar', label: 'Xonadon ma\'lumotlarini (ism, telefon) o\'zgartirish' },
+  { key: 'suppliers.location', group: 'Xonadonlar', label: 'Xonadon manzili va xaritadagi joyini belgilash/tahrirlash' },
+  { key: 'suppliers.import', group: 'Xonadonlar', label: 'Excel orqali import va eksport' },
+  { key: 'prices.view', group: 'Xonadonlar', label: 'Narx va summalarni ko\'rish', hint: 'O\'chirilsa, faqat kg ko\'rinadi' },
+  { key: 'prices.manage', group: 'Xonadonlar', label: 'Narxlarni belgilash' },
 
   // --- shifts
   { key: 'shifts.view_all', group: 'Smenalar', label: 'Barcha smenalarni, jumladan hozir ochiq (jonli) smenalarni ko\'rish' },
@@ -28,7 +28,7 @@ export const PERMISSIONS = [
 
   // --- money
   { key: 'debts.view', group: 'Qarzlar va to\'lovlar', label: 'Qarzlar va to\'lovlar tarixini ko\'rish' },
-  { key: 'payments.create', group: 'Qarzlar va to\'lovlar', label: 'Yetkazib beruvchiga to\'lov qilish' },
+  { key: 'payments.create', group: 'Qarzlar va to\'lovlar', label: 'Xonadonga to\'lov qilish' },
   { key: 'payments.void', group: 'Qarzlar va to\'lovlar', label: 'To\'lovni bekor qilish' },
 
   // --- reports
