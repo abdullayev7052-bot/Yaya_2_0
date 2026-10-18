@@ -95,3 +95,14 @@ Ruxsatlar **serverda** tekshiriladi. Narxlarni ko'rish ruxsati bo'lmasa, server 
 | 6 | Telegram'ga kunlik hisobot | ⏳ tayyorgarlik: [NEXT.md](NEXT.md) |
 | 7 | Manzil va geolokatsiya | ⏳ tayyorgarlik: [NEXT.md](NEXT.md) |
 | 8 | iOS versiya | ⏳ tayyorgarlik: [NEXT.md](NEXT.md) |
+
+## Qo'shimcha imkoniyatlar (2.1)
+- **Joylashuv va marshrut:** yetkazib beruvchi kartochkasida (panel va ilova) manzil va xaritadagi nuqta belgilanadi
+  (hozirgi joy yoki xaritadan tanlab). Sut yig'uvchida smena ochiq paytda ro'yxat eng yaqinidan tartiblanadi,
+  har birining yonida masofa (m/km) ko'rsatiladi; bosilsa Google xaritada marshrut ochiladi. Faqat sut yig'uvchidan joylashuv so'raladi.
+- **Narx va qarz:** narx qabul qilish payti muhrlanadi — keyin narx o'zgartirilsa, eski qarz o'zgarmaydi, yangi narx faqat keyingi xaridlarga.
+- **Ruxsatlar:** "manzil/joylashuvni belgilash" alohida ruxsat (ism/telefon tahriridan ayrim).
+- **Sozlamalar:** salomlashish matni ({ism}) va kirish animatsiyasi (qisqa ovozsiz video).
+- **To'lovlar:** har bir to'lov kim tomonidan (qaysi xodim) kiritilgani yoziladi va ko'rinadi.
+- **Hisob:** admin va boshqa sut yig'maydigan xodimlar uchun ilovada smena ochilmaydi (ular qabul qiladi, to'laydi, boshqaradi).
+  Admin o'z ism/login/parolini o'zgartira oladi. Parolni esdan chiqargan admin uchun dasturchida zaxira kirish usuli bor.

@@ -40,36 +40,7 @@ Bu ishni siz qilasiz, taxminan 5 daqiqa.
 - Bot faqat ro'yxatdagi guruh(lar)ga yozadi.
 - Botga kelgan buyruqlar bajarilmaydi: bot faqat xabar yuboradi.
 
-## 2. Manzil, geolokatsiya va marshrut
-
-### Nima bo'ladi
-- **Yetkazib beruvchi manzili:**
-  - Panelda va Excel importda "Manzil", "Kenglik", "Uzunlik" ustunlari bo'ladi.
-  - Sut yig'uvchi uy oldida "📍 Joylashuvni saqlash" tugmasini bosadi. Ruxsat bilan boshqariladi.
-- **Real vaqtda joylashuv:**
-  - Smena ochiq paytda ilova xodimning joylashuvini har 1–2 daqiqada yuboradi.
-  - Smena yopilishi bilan kuzatuv to'xtaydi; smenadan tashqarida kuzatilmaydi.
-- **Marshrut:**
-  - Ilovada ro'yxat eng yaqin yetkazib beruvchidan boshlab tartiblanadi.
-  - "Yo'l ko'rsatish" tugmasi Google Maps yoki Yandex Navigatorni ochadi, yo'nalish xodimning hozirgi joyidan yetkazib beruvchigacha.
-- **Panelda xarita:**
-  - xodimlarning jonli nuqtalari;
-  - yetkazib beruvchilar (qarz va kg bo'yicha rang);
-  - bugungi bosib o'tilgan yo'l.
-
-### Tayyor
-- Bazada `suppliers.lat` va `suppliers.lng` ustunlari bor.
-- Ilovada yetkazib beruvchi kartochkasi bor, unga "Yo'l ko'rsatish" tugmasi qo'shiladi.
-
-### Texnik reja
-- `expo-location`; fon kuzatuvi faqat ochiq smenada ishlaydi va telefonda doimiy bildirishnoma ko'rinib turadi (Android talabi).
-- Yangi ruxsatlar:
-  - `geo.set_supplier_location` — yetkazib beruvchi joylashuvini saqlash;
-  - `geo.view_live` — xodimlarni xaritada ko'rish.
-- Joylashuv tarixi 30 kun saqlanadi.
-- Xarita: Leaflet + OpenStreetMap. Bepul, kalit kerak emas.
-
-## 3. iOS versiya
+## 2. iOS versiya
 
 ### Tayyor
 - Ilova React Native (Expo): **kodning o'zi iOS'da ham ishlaydi**.

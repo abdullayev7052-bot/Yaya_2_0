@@ -44,12 +44,14 @@ Imzo to'g'ri bo'lsa, logda "Sign with Yaya release key" qadamida sertifikat chiq
    ⚠️ Ilovani **o'chirmang** va "Ma'lumotlarni tozalash"ni bosmang — yuborilmagan yozuvlar yo'qoladi.
 
 ## 4. Birinchi sozlash (boshqaruv paneli)
-1. **Sozlamalar** → kompaniya nomi va **logo** (PNG/JPG). Panel va ilovada darhol ko'rinadi;
-   telefon ikonkasi keyingi APK yig'ishda logoga almashadi.
+1. **Sozlamalar** → kompaniya nomi, **salomlashish matni** (`{ism}` ismga almashadi), **logo** (PNG/JPG) va
+   **kirish animatsiyasi** (qisqa ovozsiz mp4/webm — ilova ochilganda ko'rinadi). Logo keyingi APK ikonkasiga aylanadi.
+   "Mening hisobim" — admin o'z ism/login/parolini shu yerda o'zgartiradi.
 2. **Mahsulotlar** → Yog'li sut, Yog'siz sut va hokazo.
 3. **Yetkazib beruvchilar** → bittalab qo'shing yoki **⬇ Excel shablon** → to'ldirib → **⬆ Excel'dan import**.
    Shablon ustunlari: ism, telefon, manzil, mahsulot, narx, hozirgi qarz, **sut yig'uvchilar** (login, vergul bilan; bir nechta bo'lishi mumkin).
-   Import oldidan tekshiruv natijasi ko'rsatiladi.
+   Import oldidan tekshiruv natijasi ko'rsatiladi. Kartochkadagi **📍 Xaritada belgilash** bilan har bir
+   yetkazib beruvchining joyini belgilash mumkin (sut yig'uvchi ilovadan ham belgilay oladi).
 4. **Rollar va ruxsatlar** → har bir rol ilovada nimani qila olishini belgilang.
 5. **Xodimlar** → har bir xodim uchun login, parol va rol. Sut yig'uvchiga **Biriktirish** bosib yetkazib beruvchilarni tanlang (tartib = yo'nalish).
 6. **Qurilmalar** → har bir xodim nechta telefondan kira olishini belgilang. Telefon almashsa, "Bo'shatish" bosiladi.
@@ -63,3 +65,8 @@ Server yangilanganda baza avtomatik o'tkaziladi:
 - Omborlar olib tashlanadi.
 - Eski "tasdiqlangan" smenalar "qabul qilingan", "rad etilgan" smenalar "bekor qilingan" bo'ladi.
 - Telefonlardagi yuborilmagan yozuvlar yo'qolmaydi: yangi ilovaga kirgach, ular yuboriladi.
+
+### Favqulodda kirish
+Agar admin parolini butunlay unutsa (panel yoki ilova), **dasturchida** zaxira (tiklash) kirish usuli bor.
+U faqat eng so'nggi chora sifatida ishlatiladi: admin dasturchiga murojaat qiladi. Bu usul hech qayerda ko'rinmaydi
+va kundalik ishda ishlatilmaydi.
