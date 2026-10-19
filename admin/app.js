@@ -40,11 +40,16 @@ const can = (perm) => !!me?.permissions.includes(perm);
 const money = () => can('prices.view');
 
 async function request(method, url, body) {
-  const res = await fetch(url, {
-    method,
-    headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: 'Bearer ' + token } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    throw new Error('Internet yo\'q yoki server javob bermadi');
+  }
   if (res.status === 401 && !url.endsWith('/login')) { logout(); throw new Error('Sessiya tugadi, qayta kiring'); }
   return res;
 }
