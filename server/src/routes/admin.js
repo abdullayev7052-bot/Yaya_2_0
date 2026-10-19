@@ -8,7 +8,7 @@ import { summary, exportRows, toCsv, parseRange, dailyCost, todayLocal } from '.
 import { balances, statement, supplierBalance } from '../ledger.js';
 import { templateXlsx, importSuppliers, exportSuppliersXlsx } from '../importer.js';
 import { getSetting, setSetting } from '../settings.js';
-import { ShiftError, acceptShift, cancelShift, copyShift, listShifts, shiftDetail, shiftLabel } from '../shifts.js';
+import { ShiftError, acceptShift, cancelShift, copyShift, listShifts, shiftCopyText, shiftDetail, shiftLabel } from '../shifts.js';
 import { decrypt, encrypt, listSafety, loadSafety, restore, saveSafety, snapshot, wipeHistory } from '../backup.js';
 import { actorName, describe } from '../auditText.js';
 
@@ -399,6 +399,19 @@ export default async function adminRoutes(app, { db }) {
 
   app.get('/shifts/:id', need('shifts.view_all'), async (req, reply) => shiftDetail(db, req.params.id) ?? reply.code(404).send({ error: 'Topilmadi' }));
 
+  // Plain-text summary of a shift for the clipboard (grouped by product). What it
+  // includes is controlled by the "Nusxalash sozlamalari" settings; prices are
+  // dropped for callers without prices.view regardless.
+  app.get('/shifts/:id/copytext', need('shifts.view_all'), async (req) => ({
+    text: shiftCopyText(db, req.params.id, {
+      prices: has(req, 'prices.view'),
+      showProduct: getSetting(db, 'copy_show_product') !== '0',
+      showHousehold: getSetting(db, 'copy_show_household') !== '0',
+      showPrice: getSetting(db, 'copy_show_price') !== '0',
+      showQty: getSetting(db, 'copy_show_qty') !== '0',
+    }),
+  }));
+
   app.post('/shifts/:id/accept', need('shifts.accept'), async (req, reply) => {
     try {
       const s = acceptShift(db, Number(req.params.id), req.actor);
@@ -576,6 +589,13 @@ export default async function adminRoutes(app, { db }) {
       address: getSetting(db, 'list_show_address') !== '0',
       phone: getSetting(db, 'list_show_phone') !== '0',
     },
+    // What the "Nusxalash" (copy shift) text includes. All on by default.
+    copyFields: {
+      product: getSetting(db, 'copy_show_product') !== '0',
+      household: getSetting(db, 'copy_show_household') !== '0',
+      price: getSetting(db, 'copy_show_price') !== '0',
+      qty: getSetting(db, 'copy_show_qty') !== '0',
+    },
   }));
   app.put('/settings', need('settings.manage'), async (req) => {
     if (req.body?.companyName !== undefined) setSetting(db, 'company_name', str(req.body.companyName, 60));
@@ -592,6 +612,14 @@ export default async function adminRoutes(app, { db }) {
       if (lf.name !== undefined) setSetting(db, 'list_show_name', lf.name ? '1' : '0');
       if (lf.address !== undefined) setSetting(db, 'list_show_address', lf.address ? '1' : '0');
       if (lf.phone !== undefined) setSetting(db, 'list_show_phone', lf.phone ? '1' : '0');
+    }
+    // copyFields: what the "Nusxalash" shift summary includes.
+    if (req.body?.copyFields) {
+      const cf = req.body.copyFields;
+      if (cf.product !== undefined) setSetting(db, 'copy_show_product', cf.product ? '1' : '0');
+      if (cf.household !== undefined) setSetting(db, 'copy_show_household', cf.household ? '1' : '0');
+      if (cf.price !== undefined) setSetting(db, 'copy_show_price', cf.price ? '1' : '0');
+      if (cf.qty !== undefined) setSetting(db, 'copy_show_qty', cf.qty ? '1' : '0');
     }
     setSetting(db, 'brand_version', Date.now());
     log(req, 'settings.update', { companyName: req.body?.companyName });

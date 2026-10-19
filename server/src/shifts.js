@@ -40,6 +40,56 @@ export function shiftTotals(db, uuid) {
     COUNT(DISTINCT supplier_id) AS suppliers FROM collections WHERE shift_uuid = ?`).get(uuid);
 }
 
+// Plain-text summary of a shift to copy to the clipboard, grouped by product:
+//   Yog'li sut - 98.5 kg x 4961.93 (o'rtacha)
+//    Yoqutxon - 65 kg x 5200
+// Each part (product header, per-household line, quantity, price) can be turned
+// off. Prices use the stamped price (accepted) or the current price otherwise.
+export function shiftCopyText(db, shiftId, opts = {}) {
+  const { prices = true, showProduct = true, showHousehold = true, showPrice = true, showQty = true } = opts;
+  const price = showPrice && prices;
+  const rows = db.prepare(`
+    SELECT s.name AS supplier, p.id AS product_id, p.name AS product, p.unit,
+      ROUND(SUM(c.quantity), 2) AS qty,
+      CAST(ROUND(AVG(COALESCE(c.price, sp.price))) AS INTEGER) AS unit_price
+    FROM collections c
+    JOIN shifts sh ON sh.client_uuid = c.shift_uuid
+    JOIN suppliers s ON s.id = c.supplier_id
+    JOIN products p ON p.id = c.product_id
+    LEFT JOIN supplier_products sp ON sp.supplier_id = c.supplier_id AND sp.product_id = c.product_id
+    WHERE sh.id = ?
+    GROUP BY c.supplier_id, c.product_id
+    ORDER BY p.name, s.name`).all(shiftId);
+  const q = (n) => String(Math.round(Number(n) * 100) / 100);
+  const avg2 = (n) => (Math.round(Number(n) * 100) / 100).toFixed(2);
+  const groups = new Map();
+  for (const r of rows) {
+    if (!groups.has(r.product_id)) groups.set(r.product_id, { name: r.product, unit: r.unit, rows: [], qty: 0, amount: 0 });
+    const g = groups.get(r.product_id);
+    g.rows.push(r);
+    g.qty = Math.round((g.qty + r.qty) * 100) / 100;
+    g.amount += Math.round(r.qty * (r.unit_price ?? 0));
+  }
+  const lines = [];
+  for (const g of groups.values()) {
+    if (showProduct) {
+      let line = g.name;
+      if (showQty) line += ` - ${q(g.qty)} ${g.unit}`;
+      if (price && g.qty) line += ` x ${avg2(g.amount / g.qty)} (o'rtacha)`;
+      lines.push(line);
+    }
+    if (showHousehold) {
+      for (const r of g.rows) {
+        let line = ` ${r.supplier}`;
+        if (showQty) line += ` - ${q(r.qty)} ${r.unit}`;
+        if (price && r.unit_price != null) line += ` x ${r.unit_price}`;
+        lines.push(line);
+      }
+    }
+  }
+  return lines.join('\n');
+}
+
 function eventPayload(db, s) {
   const u = db.prepare('SELECT name, login FROM users WHERE id = ?').get(s.employee_id);
   const byProduct = db.prepare(`SELECT p.name, p.unit, ROUND(SUM(c.quantity), 2) AS quantity FROM collections c

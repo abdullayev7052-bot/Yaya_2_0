@@ -384,7 +384,7 @@ const views = {
           <div class="muted">Ochilgan: ${esc(fmtDate(s.opened_at))} · Yopilgan: ${esc(fmtDate(s.closed_at)) || '—'}</div>
           ${s.accepted_at ? `<div class="muted">Qabul qildi: ${esc(s.accepted_by?.replace(/^\w+:/, ''))} · ${esc(fmtDate(s.accepted_at))}</div>` : ''}
           ${s.cancelled_at ? `<div class="err">Bekor qildi: ${esc(s.cancelled_by?.replace(/^\w+:/, ''))} · ${esc(fmtDate(s.cancelled_at))} — ${esc(s.cancel_reason)}</div>` : ''}</div>
-        <div class="row">${shiftActions({ ...s, id: s.id })}</div></div>
+        <div class="row">${d.rows.length ? '<button class="small ghost" id="copyText">📋 Nusxalash</button>' : ''}${shiftActions({ ...s, id: s.id })}</div></div>
         ${missing.length ? `<p class="err">Narx belgilanmagan: ${[...new Set(missing.map((r) => r.supplier_name))].map(esc).join(', ')} — "Xonadonlar" bo'limida narx qo'ying, keyin qabul qiling.</p>` : ''}
       </div>
       <div class="tiles">${d.byProduct.map((p) => `<div class="tile"><div class="k">${esc(p.name)}</div><div class="v">${fmtNum(p.quantity)}</div><div class="s">${esc(p.unit)} · ${p.pickups} ta</div></div>`).join('')}</div>
@@ -396,6 +396,16 @@ const views = {
           || '<tr><td colspan="6" class="muted">Bo\'sh smena</td></tr>'}
       </table></div>${money() && s.status !== 'accepted' ? '<p class="muted">* joriy narx; qabul qilinganda shu narx yoziladi.</p>' : ''}</div>`;
     bindShiftActions(v);
+    const cb = $('#copyText', v);
+    if (cb) cb.onclick = act(async () => {
+      const { text } = await api('GET', `/shifts/${s.id}/copytext`);
+      if (!text) return flash('Nusxalash uchun ma\'lumot yo\'q');
+      try { await navigator.clipboard.writeText(text); } catch {
+        const ta = Object.assign(document.createElement('textarea'), { value: text });
+        document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+      }
+      flash('Smena klaviaturaga nusxalandi');
+    });
   },
 
   // ------------------------------------------------------------------ analytics
@@ -912,6 +922,12 @@ const views = {
             <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="lf_address" ${st.listFields.address ? 'checked' : ''}> Manzili</label>
             <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="lf_phone" ${st.listFields.phone ? 'checked' : ''}> Telefon raqami</label>
           </div>
+          <div style="margin-top:10px"><b>Nusxalash sozlamalari</b><p class="muted" style="margin:2px 0 6px">Yopilgan smenani "Nusxalash"da nimalar bo'lsin:</p>
+            <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="cf_product" ${st.copyFields.product ? 'checked' : ''}> Mahsulot</label>
+            <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="cf_household" ${st.copyFields.household ? 'checked' : ''}> Xonadon</label>
+            <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="cf_qty" ${st.copyFields.qty ? 'checked' : ''}> Miqdori</label>
+            <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="cf_price" ${st.copyFields.price ? 'checked' : ''}> Narxi</label>
+          </div>
           <button>Saqlash</button>
         </form>
         <div class="row" style="align-items:center;margin-top:12px">
@@ -990,6 +1006,7 @@ const views = {
           companyName: f.companyName.value, greeting: f.greeting.value,
           locationEnabled: f.locationEnabled.checked, cancelEnabled: f.cancelEnabled.checked,
           listFields: { name: f.lf_name.checked, address: f.lf_address.checked, phone: f.lf_phone.checked },
+          copyFields: { product: f.cf_product.checked, household: f.cf_household.checked, qty: f.cf_qty.checked, price: f.cf_price.checked },
         });
         await loadBrand();
         flash('Saqlandi');

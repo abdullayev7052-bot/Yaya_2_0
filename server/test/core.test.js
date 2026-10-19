@@ -389,3 +389,31 @@ test('households: all visible by default; admin can hide some from one collector
   assert.equal(r.body.rejected.length, 1, 'pickup for a hidden household is rejected');
   assert.match(r.body.rejected[0].error, /ko'rinmaydi/);
 });
+
+test('copy shift text: grouped by product with weighted averages; settings toggle parts off', async () => {
+  const { app } = setup();
+  const b = await boss(app);
+  const h = await ali(app);
+  // supplier 1: Yog'li sut 5000, Yog'siz sut 3000; supplier 2: Yog'li sut 6000
+  await runShift(app, h, 's1', [
+    { supplierId: 1, productId: 1, quantity: 10 },
+    { supplierId: 1, productId: 2, quantity: 5 },
+    { supplierId: 2, productId: 1, quantity: 8 },
+  ], { close: true });
+  const sh = (await call(app, 'GET', '/api/admin/shifts?status=closed', b)).body[0];
+  await call(app, 'POST', `/api/admin/shifts/${sh.id}/accept`, b);
+  const full = (await call(app, 'GET', `/api/admin/shifts/${sh.id}/copytext`, b)).body.text;
+  // Yog'li sut: (10*5000 + 8*6000) / 18 = 5444.44 weighted average
+  assert.match(full, /Yog'li sut - 18 kg x 5444\.44 \(o'rtacha\)/);
+  assert.match(full, / Karimova Oydin - 10 kg x 5000/);
+  assert.match(full, / Begmatov - 8 kg x 6000/);
+  assert.match(full, /Yog'siz sut - 5 kg x 3000\.00/);
+  // turn the price off -> no "x <price>" anywhere
+  await call(app, 'PUT', '/api/admin/settings', b, { copyFields: { price: false } });
+  const noPrice = (await call(app, 'GET', `/api/admin/shifts/${sh.id}/copytext`, b)).body.text;
+  assert.ok(!/ x /.test(noPrice), 'prices are gone when the toggle is off');
+  assert.match(noPrice, /Yog'li sut - 18 kg/);
+  // a collector has no prices.view, so their copy never shows prices
+  const asCollector = (await call(app, 'PUT', '/api/admin/settings', b, { copyFields: { price: true } }));
+  assert.equal(asCollector.status, 200);
+});
