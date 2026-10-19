@@ -908,8 +908,8 @@ const views = {
           <label>Kompaniya nomi <input name="companyName" value="${esc(st.companyName)}" maxlength="60"></label>
           <label>Salomlashish matni <input name="greeting" value="${esc(st.greeting || '')}" maxlength="120" placeholder="Assalomu alaykum, {ism}"></label>
           <p class="muted"><code>{ism}</code> — foydalanuvchining ismiga almashtiriladi.</p>
-          <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="locationEnabled" ${st.locationEnabled ? 'checked' : ''}> Xarita rejimi (eng yaqin xonadon tartibi va yo'l ko'rsatish). O'chirilsa, faqat manzil ko'rinadi.</label>
-          <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="cancelEnabled" ${st.cancelEnabled ? 'checked' : ''}> "Bekor qilish" funksiyasi. O'chirilsa, hamma joyda faqat "Qabul qilish" qoladi.</label>
+          <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="locationEnabled" ${st.locationEnabled ? 'checked' : ''}> Xarita rejimi</label>
+          <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="cancelEnabled" ${st.cancelEnabled ? 'checked' : ''}> "Bekor qilish" rejimi</label>
           <button>Saqlash</button>
         </form>
         <div class="row" style="align-items:center;margin-top:12px">
