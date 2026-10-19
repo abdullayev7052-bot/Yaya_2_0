@@ -12,11 +12,18 @@ export default async function mobileRoutes(app, { db }) {
   const need = makeGuard(app, db);
   const str = (v, max = 200) => (v == null ? null : String(v).trim().slice(0, max) || null);
 
+  // Every household is visible to every collector, except those explicitly
+  // hidden from them in the panel.
+  const isHidden = (userId, supplierId) =>
+    !!db.prepare('SELECT 1 FROM employee_hidden_suppliers WHERE employee_id = ? AND supplier_id = ?').get(userId, supplierId);
+
   const assignedSuppliers = (userId) => {
     const suppliers = db.prepare(`
       SELECT s.id, s.name, s.phone, s.address, s.lat, s.lng
-      FROM employee_suppliers es JOIN suppliers s ON s.id = es.supplier_id AND s.active = 1
-      WHERE es.employee_id = ? ORDER BY es.sort_order, s.name`).all(userId);
+      FROM suppliers s
+      WHERE s.active = 1
+        AND s.id NOT IN (SELECT supplier_id FROM employee_hidden_suppliers WHERE employee_id = ?)
+      ORDER BY s.name`).all(userId);
     const productsOf = db.prepare(`SELECT p.id, p.name, p.unit, sp.is_default FROM supplier_products sp
       JOIN products p ON p.id = sp.product_id AND p.active = 1 WHERE sp.supplier_id = ? ORDER BY sp.is_default DESC, p.name`);
     for (const s of suppliers) s.products = productsOf.all(s.id).map((p) => ({ id: p.id, name: p.name, unit: p.unit, isDefault: !!p.is_default }));
@@ -77,8 +84,7 @@ export default async function mobileRoutes(app, { db }) {
   app.get('/suppliers/:id/card', need(), async (req, reply) => {
     const id = Number(req.params.id);
     const me = req.me;
-    const assigned = !!db.prepare('SELECT 1 FROM employee_suppliers WHERE employee_id = ? AND supplier_id = ?').get(me.id, id);
-    if (!(me.perms.has('suppliers.view') || (assigned && me.perms.has('suppliers.card_own')))) {
+    if (!(me.perms.has('suppliers.view') || (me.perms.has('suppliers.card_own') && !isHidden(me.id, id)))) {
       return reply.code(403).send({ error: 'Bu xonadon kartochkasiga ruxsat yo\'q' });
     }
     const s = db.prepare('SELECT id, name, phone, address, note, lat, lng, active FROM suppliers WHERE id = ?').get(id);
@@ -106,8 +112,7 @@ export default async function mobileRoutes(app, { db }) {
   app.post('/suppliers/:id/location', need('suppliers.location'), async (req, reply) => {
     const id = Number(req.params.id);
     const me = req.me;
-    const assigned = !!db.prepare('SELECT 1 FROM employee_suppliers WHERE employee_id = ? AND supplier_id = ?').get(me.id, id);
-    if (!(me.perms.has('suppliers.view') || assigned)) return reply.code(403).send({ error: 'Bu xonadonga ruxsat yo\'q' });
+    if (!(me.perms.has('suppliers.view') || !isHidden(me.id, id))) return reply.code(403).send({ error: 'Bu xonadonga ruxsat yo\'q' });
     const s = db.prepare('SELECT id, name FROM suppliers WHERE id = ?').get(id);
     if (!s) return reply.code(404).send({ error: 'Topilmadi' });
     const b = req.body ?? {};
@@ -135,10 +140,7 @@ export default async function mobileRoutes(app, { db }) {
       const sid = Number(db.prepare('INSERT INTO suppliers (name, phone, address, note, lat, lng, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
         .run(name, phone, str(req.body?.address), str(req.body?.note), coord(req.body?.lat), coord(req.body?.lng), req.actor).lastInsertRowid);
       productIds.forEach((pid, i) => db.prepare('INSERT INTO supplier_products (supplier_id, product_id, price, is_default) VALUES (?, ?, NULL, ?)').run(sid, pid, i === 0 ? 1 : 0));
-      if (req.me.perms.has('collect.shift')) {
-        const order = (db.prepare('SELECT MAX(sort_order) AS n FROM employee_suppliers WHERE employee_id = ?').get(req.me.id).n ?? -1) + 1;
-        db.prepare('INSERT INTO employee_suppliers (employee_id, supplier_id, sort_order) VALUES (?, ?, ?)').run(req.me.id, sid, order);
-      }
+      // New households are visible to everyone by default — no assignment needed.
       return sid;
     })();
     audit(db, req.actor, 'suppliers.create', { id, name, phone, fromApp: true });
@@ -169,7 +171,8 @@ export default async function mobileRoutes(app, { db }) {
     const actor = req.actor;
     const out = { accepted: [], rejected: [], shifts: { accepted: [], rejected: [] }, ops: { accepted: [], rejected: [] }, payments: { accepted: [], rejected: [] } };
     const shiftOf = db.prepare('SELECT * FROM shifts WHERE client_uuid = ?');
-    const assigned = db.prepare('SELECT 1 FROM employee_suppliers WHERE employee_id = ? AND supplier_id = ?');
+    // A household is usable unless it is hidden from this employee.
+    const visible = (sid) => can('suppliers.view') || !isHidden(me.id, sid);
     const linked = db.prepare('SELECT 1 FROM supplier_products WHERE supplier_id = ? AND product_id = ?');
 
     db.transaction(() => {
@@ -197,7 +200,7 @@ export default async function mobileRoutes(app, { db }) {
         if (!can('collect.shift')) { reject('Sut qabul qilishga ruxsat yo\'q'); continue; }
         if (!sh || sh.employee_id !== me.id) { reject('Smena topilmadi'); continue; }
         if (sh.status !== 'open') { reject(`${shiftLabel(sh)} smena yopilgan — o'zgartirib bo'lmaydi`); continue; }
-        if (!assigned.get(me.id, c.supplierId)) { reject('Xonadon sizga biriktirilmagan'); continue; }
+        if (!visible(c.supplierId)) { reject('Bu xonadon sizga ko\'rinmaydi'); continue; }
         if (!linked.get(c.supplierId, c.productId)) { reject('Bu mahsulot xonadonga biriktirilmagan'); continue; }
         db.prepare(`INSERT INTO collections (client_uuid, shift_uuid, employee_id, supplier_id, product_id, quantity, collected_at)
           VALUES (?, ?, ?, ?, ?, ?, ?)`).run(c.uuid, c.shiftUuid, me.id, c.supplierId, c.productId, c.quantity, c.collectedAt);
@@ -245,8 +248,7 @@ export default async function mobileRoutes(app, { db }) {
       for (const p of req.body.payments ?? []) {
         if (db.prepare('SELECT 1 FROM payments WHERE client_uuid = ?').get(p.uuid)) { out.payments.accepted.push(p.uuid); continue; }
         if (!can('payments.create')) { out.payments.rejected.push({ uuid: p.uuid, error: 'To\'lov qilishga ruxsat yo\'q' }); continue; }
-        const visible = can('suppliers.view') || assigned.get(me.id, p.supplierId);
-        if (!visible) { out.payments.rejected.push({ uuid: p.uuid, error: 'Xonadon sizga biriktirilmagan' }); continue; }
+        if (!visible(p.supplierId)) { out.payments.rejected.push({ uuid: p.uuid, error: 'Bu xonadon sizga ko\'rinmaydi' }); continue; }
         db.prepare(`INSERT INTO payments (client_uuid, supplier_id, amount, method, note, paid_at, created_by, employee_id)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(p.uuid, p.supplierId, Math.round(p.amount), p.method ?? 'cash',
           p.note ? String(p.note).slice(0, 300) : null, p.paidAt, actor, me.id);

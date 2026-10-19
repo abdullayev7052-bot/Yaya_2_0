@@ -65,31 +65,38 @@ test('wipe needs password, arithmetic answer and the exact phrase; can be undone
   assert.equal((await call(app, 'GET', '/api/admin/data/challenge', h)).status, 403);
 });
 
-test('Excel: import assigns collectors; export round-trips the same columns', async () => {
-  const { app, db, ids } = setup();
+test('Excel: one household with several products (first = default); export round-trips', async () => {
+  const { app, db } = setup();
   const b = await boss(app);
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('S');
-  ws.addRow(['F.I.Sh (majburiy)', 'Telefon', 'Manzil', 'Izoh', 'Mahsulot', 'Narx (so\'m)', 'Joriy qarz (so\'m)', 'Sut yig\'uvchilar (login)']);
-  ws.addRow(['Yangi Fermer', '977777777', 'Buvayda', '', 'Yog\'li sut', 5200, 50000, '+998 90 111 22 33, store']);
-  ws.addRow(['Xato', '', '', '', 'Yog\'li sut', 5000, '', 'nobody']);
+  ws.addRow(['F.I.Sh (majburiy)', 'Telefon', 'Manzil', 'Izoh', 'Mahsulot', 'Narx (so\'m)', 'Joriy qarz (so\'m)']);
+  // Two rows, same household, two products with different prices — the first is the default (★).
+  ws.addRow(['Yangi Fermer', '977777777', 'Buvayda', '', 'Yog\'li sut', 5200, 50000]);
+  ws.addRow(['Yangi Fermer', '977777777', '', '', 'Yog\'siz sut', 3500, '']);
+  // A product without a price is an error row.
+  ws.addRow(['Xato', '', '', '', 'Yog\'li sut', '', '']);
   const file = Buffer.from(await wb.xlsx.writeBuffer()).toString('base64');
   const pre = (await call(app, 'POST', '/api/admin/suppliers-import', b, { file, dryRun: true })).body;
   assert.equal(pre.summary.errorRows, 1);
-  assert.match(pre.rows[1].errors[0], /nobody/);
   await call(app, 'POST', '/api/admin/suppliers-import', b, { file, dryRun: false });
   const s = db.prepare("SELECT id FROM suppliers WHERE name = 'Yangi Fermer'").get();
-  const assigned = db.prepare('SELECT employee_id FROM employee_suppliers WHERE supplier_id = ? ORDER BY employee_id').all(s.id).map((r) => r.employee_id);
-  assert.deepEqual(assigned, [ids.store, ids.ali].sort((a, z) => a - z));
+  const prods = db.prepare(`SELECT p.name, sp.price, sp.is_default FROM supplier_products sp JOIN products p ON p.id = sp.product_id
+    WHERE sp.supplier_id = ? ORDER BY sp.is_default DESC, p.name`).all(s.id);
+  assert.equal(prods.length, 2, 'both products imported');
+  assert.equal(prods[0].name, 'Yog\'li sut');
+  assert.equal(prods[0].is_default, 1, 'first product is the default');
+  assert.equal(prods[0].price, 5200);
+  assert.equal(prods.find((p) => p.name === 'Yog\'siz sut').price, 3500);
 
   const out = await app.inject({ url: '/api/admin/suppliers-export.xlsx', headers: b });
   const back = new ExcelJS.Workbook();
   await back.xlsx.load(out.rawPayload);
   const rows = [];
   back.worksheets[0].eachRow((r) => rows.push(r.values.slice(1)));
-  const fermer = rows.find((r) => r[0] === 'Yangi Fermer');
-  assert.equal(fermer[6], 50000, 'current debt exported');
-  assert.match(String(fermer[7]), /901112233/);
+  const fermer = rows.filter((r) => r[0] === 'Yangi Fermer');
+  assert.equal(fermer.length, 2, 'two product rows exported for the household');
+  assert.equal(fermer[0][6], 50000, 'current debt exported on the first row');
 });
 
 test('activity log is plain Uzbek', async () => {

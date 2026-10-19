@@ -98,6 +98,15 @@ CREATE TABLE IF NOT EXISTS employee_suppliers (
   PRIMARY KEY (employee_id, supplier_id)
 );
 
+-- Every household is visible to every collector by default. This table lists the
+-- exceptions: households explicitly HIDDEN from a particular employee (set in the
+-- panel). A row here means "do not show this household to this employee".
+CREATE TABLE IF NOT EXISTS employee_hidden_suppliers (
+  employee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+  PRIMARY KEY (employee_id, supplier_id)
+);
+
 -- A shift is a draft while open: nothing in it counts anywhere. Closing it
 -- freezes its contents; accepting it makes it real (stock, debts, cost).
 -- open -> closed -> accepted | cancelled. A cancelled shift can be copied into

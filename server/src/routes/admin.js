@@ -57,9 +57,9 @@ export default async function adminRoutes(app, { db }) {
     }],
   });
   // True if the caller may act on this household: either they can see all
-  // households (office roles), or it is assigned to them (field collector).
+  // households (office roles), or it is not hidden from them (field collector).
   const assigned = (req, supplierId) => has(req, 'suppliers.view')
-    || !!db.prepare('SELECT 1 FROM employee_suppliers WHERE employee_id = ? AND supplier_id = ?').get(req.me.id, supplierId);
+    || !db.prepare('SELECT 1 FROM employee_hidden_suppliers WHERE employee_id = ? AND supplier_id = ?').get(req.me.id, supplierId);
 
   app.addHook('preSerialization', async (req, reply, payload) =>
     (req.me && !req.me.perms.has('prices.view') ? stripMoney(payload) : payload));
@@ -110,7 +110,7 @@ export default async function adminRoutes(app, { db }) {
 
   app.get('/staff', need('staff.manage'), async () => db.prepare(`
     SELECT u.id, u.login, u.name, u.phone, u.role_id, r.name AS role_name, u.is_test, u.active, u.created_at,
-      (SELECT COUNT(*) FROM employee_suppliers es WHERE es.employee_id = u.id) AS supplier_count,
+      (SELECT COUNT(*) FROM employee_hidden_suppliers eh WHERE eh.employee_id = u.id) AS hidden_count,
       (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id) AS device_slots,
       (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.device_id IS NOT NULL) AS devices_bound,
       (SELECT MAX(last_seen_at) FROM devices d WHERE d.user_id = u.id) AS last_seen_at
@@ -178,6 +178,7 @@ export default async function adminRoutes(app, { db }) {
     if (refs > 0) return bad(reply, 'Bu xodimda smena yoki to\'lov tarixi bor — butunlay o\'chirib bo\'lmaydi. Nofaol holatda qoladi.');
     db.transaction(() => {
       db.prepare('DELETE FROM employee_suppliers WHERE employee_id = ?').run(id);
+      db.prepare('DELETE FROM employee_hidden_suppliers WHERE employee_id = ?').run(id);
       db.prepare('DELETE FROM devices WHERE user_id = ?').run(id);
       db.prepare('DELETE FROM users WHERE id = ?').run(id);
     })();
@@ -185,18 +186,20 @@ export default async function adminRoutes(app, { db }) {
     return { ok: true };
   });
 
-  app.get('/staff/:id/suppliers', need('staff.manage'), async (req) =>
-    db.prepare('SELECT supplier_id FROM employee_suppliers WHERE employee_id = ? ORDER BY sort_order').all(req.params.id).map((x) => x.supplier_id));
+  // Every household is visible to every collector by default; this returns the
+  // households HIDDEN from one employee (the exceptions the admin set).
+  app.get('/staff/:id/hidden', need('staff.manage'), async (req) =>
+    db.prepare('SELECT supplier_id FROM employee_hidden_suppliers WHERE employee_id = ?').all(req.params.id).map((x) => x.supplier_id));
 
-  app.put('/staff/:id/suppliers', need('staff.manage'), async (req) => {
+  app.put('/staff/:id/hidden', need('staff.manage'), async (req) => {
     const ids = (req.body?.supplierIds ?? []).map(Number).filter(Number.isInteger);
     db.transaction(() => {
-      db.prepare('DELETE FROM employee_suppliers WHERE employee_id = ?').run(req.params.id);
-      const ins = db.prepare('INSERT OR IGNORE INTO employee_suppliers (employee_id, supplier_id, sort_order) VALUES (?, ?, ?)');
-      ids.forEach((sid, i) => ins.run(req.params.id, sid, i));
+      db.prepare('DELETE FROM employee_hidden_suppliers WHERE employee_id = ?').run(req.params.id);
+      const ins = db.prepare('INSERT OR IGNORE INTO employee_hidden_suppliers (employee_id, supplier_id) VALUES (?, ?)');
+      ids.forEach((sid) => ins.run(req.params.id, sid));
     })();
     const u = db.prepare('SELECT name, login FROM users WHERE id = ?').get(req.params.id);
-    log(req, 'user.assign', { id: Number(req.params.id), name: u?.name || u?.login, count: ids.length });
+    log(req, 'user.hidden', { id: Number(req.params.id), name: u?.name || u?.login, count: ids.length });
     return { ok: true };
   });
 

@@ -682,14 +682,14 @@ const views = {
     v.innerHTML = `
       <div class="card"><div class="row" style="justify-content:space-between"><h2>Xodimlar</h2><button id="add">+ Yangi xodim</button></div>
       <div class="table-wrap"><table>
-        <tr><th>Ism</th><th>Login</th><th>Rol</th><th class="num">Xonadon</th><th>Qurilmalar</th><th>Oxirgi faollik</th><th></th></tr>
+        <tr><th>Ism</th><th>Login</th><th>Rol</th><th class="num">Yashirilgan</th><th>Qurilmalar</th><th>Oxirgi faollik</th><th></th></tr>
         ${rows.map((u) => `<tr ${u.active ? '' : 'class="muted"'}>
           <td>${esc(u.name)} ${u.is_test ? '<span class="badge test">test</span>' : ''}${u.active ? '' : ' (o\'chirilgan)'}<div class="muted">${esc(u.phone)}</div></td>
           <td><code>${esc(u.login)}</code></td><td>${esc(u.role_name)}</td>
-          <td class="num">${collectRoles.has(u.role_id) ? u.supplier_count : '—'}</td>
+          <td class="num">${collectRoles.has(u.role_id) ? (u.hidden_count || 0) : '—'}</td>
           <td><a href="#devices?user=${u.id}">${u.devices_bound} / ${u.device_slots}</a></td>
           <td>${esc(fmtDate(u.last_seen_at))}</td>
-          <td class="row">${collectRoles.has(u.role_id) ? `<button class="small" data-assign="${u.id}">Biriktirish</button>` : ''}
+          <td class="row">${collectRoles.has(u.role_id) ? `<button class="small" data-assign="${u.id}">Xonadonlar</button>` : ''}
             <button class="small ghost" data-edit="${u.id}">Tahrirlash</button>
             <button class="small ghost" data-toggle="${u.id}">${u.active ? 'O\'chirish' : 'Yoqish'}</button>
             ${!u.active ? `<button class="small ghost" data-remove="${u.id}">Butunlay o'chirish</button>` : ''}</td></tr>`).join('')}
@@ -716,17 +716,15 @@ const views = {
     $$('[data-assign]', v).forEach((b) => { b.onclick = act(async () => {
       const id = b.dataset.assign;
       const u = rows.find((x) => String(x.id) === id);
-      const chosen = await api('GET', `/staff/${id}/suppliers`);
+      const hidden = await api('GET', `/staff/${id}/hidden`);
       const box = $('#assign', v);
       const active = sups.filter((s) => s.active);
-      const ordered = [...chosen.map((cid) => active.find((s) => s.id === cid)).filter(Boolean), ...active.filter((s) => !chosen.includes(s.id))];
       box.innerHTML = `<div class="card">
-        <h2>${esc(u.name || u.login)} — xonadonlar</h2>
-        <p class="muted">Belgilanganlar ilovada shu tartibda (yo'nalish bo'yicha) chiqadi. ↑ ↓ bilan tartibni o'zgartiring.</p>
+        <h2>${esc(u.name || u.login)} — xonadonlar ko'rinishi</h2>
+        <p class="muted">Barcha xonadonlar bu xodimga avtomatik ko'rinadi. Ko'rsatmaslik (yashirish) kerak bo'lganlarini belgilang.</p>
         <input id="flt" placeholder="Ism yoki telefon bo'yicha qidirish..." style="width:100%;margin-bottom:8px">
-        <div id="list">${ordered.map((s) => `<div class="row" data-id="${s.id}" data-name="${esc(s.name.toLowerCase())}" data-phone="${digits(s.phone)}" style="align-items:center;padding:4px 0">
-          <label style="display:flex;gap:8px;align-items:center;color:var(--text);flex:1"><input type="checkbox" ${chosen.includes(s.id) ? 'checked' : ''}> ${esc(s.name)} <span class="muted">${esc(s.phone)} ${esc(s.address)}</span></label>
-          <button type="button" class="small ghost" data-up>↑</button><button type="button" class="small ghost" data-down>↓</button></div>`).join('')
+        <div id="list">${active.map((s) => `<div class="row" data-id="${s.id}" data-name="${esc(s.name.toLowerCase())}" data-phone="${digits(s.phone)}" style="align-items:center;padding:4px 0">
+          <label style="display:flex;gap:8px;align-items:center;color:var(--text);flex:1"><input type="checkbox" ${hidden.includes(s.id) ? 'checked' : ''}> ${esc(s.name)} <span class="muted">${esc(s.phone)} ${esc(s.address)}</span></label></div>`).join('')
           || '<p class="muted">Avval xonadon qo\'shing.</p>'}</div>
         <p><button id="saveAssign">Saqlash</button></p></div>`;
       $('#flt', box).oninput = (e) => {
@@ -734,12 +732,10 @@ const views = {
         const d = digits(t);
         $$('#list > div', box).forEach((r) => { r.hidden = !!t && !r.dataset.name.includes(t) && !(d.length >= 2 && r.dataset.phone.includes(d)); });
       };
-      $$('[data-up]', box).forEach((x) => { x.onclick = () => { const r = x.parentElement; r.previousElementSibling?.before(r); }; });
-      $$('[data-down]', box).forEach((x) => { x.onclick = () => { const r = x.parentElement; r.nextElementSibling?.after(r); }; });
       $('#saveAssign', box).onclick = act(async () => {
         const ids = $$('#list > div', box).filter((r) => $('input', r).checked).map((r) => Number(r.dataset.id));
-        await api('PUT', `/staff/${id}/suppliers`, { supplierIds: ids });
-        flash(`${ids.length} ta xonadon biriktirildi`);
+        await api('PUT', `/staff/${id}/hidden`, { supplierIds: ids });
+        flash(ids.length ? `${ids.length} ta xonadon yashirildi` : 'Hamma xonadon ko\'rinadi');
         route();
       });
       box.scrollIntoView({ behavior: 'smooth' });
@@ -889,7 +885,7 @@ const views = {
         { name: 'password', label: 'Parol', value: '111111', required: true },
         { name: 'roleId', label: 'Rol', type: 'select', options: roles.map((r) => [r.id, r.name]), value: roles.find((r) => r.code === 'collector')?.id },
       ],
-      onSubmit: async (d) => { await api('POST', '/staff', { ...d, roleId: Number(d.roleId), isTest: true }); flash('Test xodim yaratildi. Sut yig\'uvchi bo\'lsa, "Xodimlar"da xonadon biriktiring.'); },
+      onSubmit: async (d) => { await api('POST', '/staff', { ...d, roleId: Number(d.roleId), isTest: true }); flash('Test xodim yaratildi.'); },
     }));
     $('#clr', v) && ($('#clr', v).onclick = act(async () => {
       if (!confirm('Test xodimlar kiritgan barcha smena va to\'lovlar o\'chiriladi. Davom etasizmi?')) return;

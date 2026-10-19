@@ -121,7 +121,7 @@ test('own drafts: edit and delete while open; delete removes the line for good',
 });
 
 test('field supplier without price: shift cannot be accepted until the price is set', async () => {
-  const { app, db, ids } = setup();
+  const { app, db } = setup();
   const b = await boss(app);
   // give collectors the right to add suppliers
   const role = db.prepare("SELECT id, permissions FROM roles WHERE code = 'collector'").get();
@@ -129,7 +129,9 @@ test('field supplier without price: shift cannot be accepted until the price is 
   const h = await ali(app);
   const created = (await call(app, 'POST', '/api/mobile/suppliers', h, { name: 'Yangi Fermer', phone: '+998 97 777 77 77', productIds: [1] })).body;
   assert.ok(created.supplier.products.length === 1);
-  assert.ok(db.prepare('SELECT 1 FROM employee_suppliers WHERE employee_id = ? AND supplier_id = ?').get(ids.ali, created.id), 'auto-assigned');
+  // New households are visible to every collector by default (no assignment step).
+  const boot = (await call(app, 'GET', '/api/mobile/bootstrap', h)).body;
+  assert.ok(boot.suppliers.some((s) => s.id === created.id), 'new household is visible to everyone by default');
   await runShift(app, h, 's1', [{ supplierId: created.id, quantity: 12 }], { close: true });
   const sh = (await call(app, 'GET', '/api/admin/shifts?status=closed', b)).body[0];
   const fail = await call(app, 'POST', `/api/admin/shifts/${sh.id}/accept`, b);
@@ -367,4 +369,23 @@ test('authorization: field collectors cannot reach admin-only money/role endpoin
   assert.equal((await call(app, 'POST', '/api/admin/balances/edit', b, { password: 'secret123', items: [{ supplierId: 1, target: 0 }] })).status, 200);
   assert.equal((await call(app, 'GET', '/api/admin/roles', b)).status, 200);
   assert.equal((await call(app, 'GET', '/api/admin/staff/names', b)).status, 200);
+});
+
+test('households: all visible by default; admin can hide some from one collector', async () => {
+  const { app, db, ids } = setup();
+  const b = await boss(app);
+  const h = await ali(app);
+  // by default the collector sees every active household (1 and 2)
+  let boot = (await call(app, 'GET', '/api/mobile/bootstrap', h)).body;
+  assert.deepEqual(boot.suppliers.map((s) => s.id).sort(), [1, 2]);
+  // admin hides household 2 from this collector
+  assert.equal((await call(app, 'PUT', `/api/admin/staff/${ids.ali}/hidden`, b, { supplierIds: [2] })).status, 200);
+  assert.deepEqual((await call(app, 'GET', `/api/admin/staff/${ids.ali}/hidden`, b)).body, [2]);
+  boot = (await call(app, 'GET', '/api/mobile/bootstrap', h)).body;
+  assert.deepEqual(boot.suppliers.map((s) => s.id), [1], 'hidden household is gone from the list');
+  // and the collector can no longer record a pickup for the hidden household
+  await call(app, 'POST', '/api/mobile/sync', h, { shifts: [{ uuid: 's9', openedAt: now() }] });
+  const r = await call(app, 'POST', '/api/mobile/sync', h, { collections: [{ uuid: 'c9', shiftUuid: 's9', supplierId: 2, productId: 1, quantity: 5, collectedAt: now() }] });
+  assert.equal(r.body.rejected.length, 1, 'pickup for a hidden household is rejected');
+  assert.match(r.body.rejected[0].error, /ko'rinmaydi/);
 });
