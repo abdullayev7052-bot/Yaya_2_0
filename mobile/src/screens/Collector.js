@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, PanResponder, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Animated, FlatList, PanResponder, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import * as api from '../api';
 import * as store from '../db';
 import SyncBar from '../SyncBar';
@@ -119,15 +119,34 @@ export default function Collector({ tick, refresh, setFull, histReq = 0 }) {
 const shiftName = (uuid) => api.shiftInfo(uuid)?.label ?? 'Yangi smena';
 
 // Wraps a row so a left→right swipe fires onSwipe, while taps still reach the
-// Pressable inside. Reads current props via a ref (PanResponder is made once).
+// Pressable inside. The row slides with the finger and springs back, and a map
+// pin is revealed behind it as a hint. Reads current props via a ref (the
+// PanResponder is created once).
 function SwipeRow({ enabled, onSwipe, children }) {
+  const tx = useRef(new Animated.Value(0)).current;
   const cb = useRef({ enabled, onSwipe });
   cb.current = { enabled, onSwipe };
+  const springBack = () => Animated.spring(tx, { toValue: 0, useNativeDriver: false, speed: 18, bounciness: 10 }).start();
   const pan = useRef(PanResponder.create({
     onMoveShouldSetPanResponder: (_, g) => cb.current.enabled && g.dx > 16 && Math.abs(g.dy) < 12,
-    onPanResponderRelease: (_, g) => { if (cb.current.enabled && g.dx > 60 && Math.abs(g.dy) < 40) cb.current.onSwipe(); },
+    onPanResponderMove: (_, g) => { if (cb.current.enabled) tx.setValue(Math.max(0, Math.min(g.dx, 110))); },
+    onPanResponderRelease: (_, g) => {
+      const fire = cb.current.enabled && g.dx > 60 && Math.abs(g.dy) < 40;
+      springBack();
+      if (fire) cb.current.onSwipe();
+    },
+    onPanResponderTerminate: springBack,
   })).current;
-  return <View {...pan.panHandlers}>{children}</View>;
+  if (!enabled) return <View>{children}</View>;
+  return (
+    <View>
+      <Animated.View pointerEvents="none" style={{ position: 'absolute', left: 18, top: 0, bottom: 0, justifyContent: 'center',
+        opacity: tx.interpolate({ inputRange: [0, 60], outputRange: [0, 1], extrapolate: 'clamp' }) }}>
+        <Text style={{ fontSize: 24 }}>🗺️</Text>
+      </Animated.View>
+      <Animated.View style={{ transform: [{ translateX: tx }] }} {...pan.panHandlers}>{children}</Animated.View>
+    </View>
+  );
 }
 
 // ---------------------------------------------------------------- Start shift
@@ -174,6 +193,7 @@ function ShiftView({ shift, tick, onPick, onNav }) {
   const [q, setQ] = useState('');
   const suppliers = api.getSuppliers();
   const locationOn = api.locationEnabled();
+  const lf = api.listFields();
   const here = useMyLocation();
   const rows = useMemo(() => store.shiftCollections(shift.uuid), [shift.uuid, tick]);
 
@@ -240,8 +260,10 @@ function ShiftView({ shift, tick, onPick, onNav }) {
                 got && { borderColor: C.ok }, pressed && { opacity: 0.6 }]}
             >
               <View style={{ flex: 1 }}>
-                <Text style={[s.text, { fontSize: 19, fontWeight: '600' }]}>{item.name}</Text>
-                {!!(item.address || item.phone) && <Text style={s.muted} numberOfLines={1}>{[item.address, item.phone].filter(Boolean).join(' · ')}</Text>}
+                {lf.name && <Text style={[s.text, { fontSize: 19, fontWeight: '600' }]}>{item.name}</Text>}
+                {(() => { const sub = [lf.address ? item.address : null, lf.phone ? item.phone : null].filter(Boolean).join(' · ');
+                  return sub ? <Text style={s.muted} numberOfLines={1}>{sub}</Text> : null; })()}
+                {!lf.name && !lf.address && !lf.phone && <Text style={[s.text, { fontSize: 19, fontWeight: '600' }]}>{item.name}</Text>}
               </View>
               {got && (
                 <Text style={{ color: C.ok, fontSize: 18, fontWeight: '700' }}>

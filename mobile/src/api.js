@@ -66,7 +66,10 @@ async function call(method, path, body, { timeoutMs = 15000 } = {}) {
 
 // ---------------------------------------------------------------- branding
 // The logo is cached as a data URI so it shows even with no network.
-export const getBrand = () => store.getKv('brand', { companyName: '', version: '', greeting: '', logo: null, intro: null, locationEnabled: true, locationPin: true });
+const DEFAULT_LIST_FIELDS = { name: true, address: true, phone: true };
+export const getBrand = () => store.getKv('brand', { companyName: '', version: '', greeting: '', logo: null, intro: null, locationEnabled: true, locationPin: true, listFields: DEFAULT_LIST_FIELDS });
+// Which fields the admin lets the shift household list show.
+export const listFields = () => ({ ...DEFAULT_LIST_FIELDS, ...(getBrand().listFields || {}) });
 // Admin switches: whether the app uses location at all, and whether the little
 // route pin shows in the shift list. Default on when the server hasn't said.
 export const locationEnabled = () => getBrand().locationEnabled !== false;
@@ -96,6 +99,7 @@ export async function refreshBrand(knownVersion) {
       intro: b.introUrl ? getServerUrl() + b.introUrl : null,
       locationEnabled: b.locationEnabled !== false,
       cancelEnabled: b.cancelEnabled !== false,
+      listFields: { ...DEFAULT_LIST_FIELDS, ...(b.listFields || {}) },
     };
     store.setKv('brand', next);
     return next;

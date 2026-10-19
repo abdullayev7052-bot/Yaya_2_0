@@ -22,7 +22,7 @@ function MapPicker({ supplier, onPick, onClose }) {
   const handle = (raw) => {
     let d = {};
     try { d = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { /* ignore */ }
-    if (d && d.ok) onPick({ lat: d.lat, lng: d.lng, address: d.address });
+    if (d && d.ok) onPick({ lat: d.lat, lng: d.lng }); // address is a manual field; the map sets only coordinates
     else onClose();
   };
   // Browser tester: an iframe plus a window message listener.
