@@ -50,14 +50,24 @@ export default async function adminRoutes(app, { db }) {
     const row = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.me.id);
     return bcrypt.compareSync(String(password ?? ''), row.password_hash);
   };
+  // Like need(), but the caller only needs ANY ONE of the listed permissions.
+  const needAny = (...perms) => ({
+    preHandler: [need().preHandler, async (req, reply) => {
+      if (!perms.some((p) => req.me.perms.has(p))) return reply.code(403).send({ error: 'Bu amal uchun ruxsatingiz yo\'q' });
+    }],
+  });
+  // True if the caller may act on this household: either they can see all
+  // households (office roles), or it is assigned to them (field collector).
+  const assigned = (req, supplierId) => has(req, 'suppliers.view')
+    || !!db.prepare('SELECT 1 FROM employee_suppliers WHERE employee_id = ? AND supplier_id = ?').get(req.me.id, supplierId);
 
   app.addHook('preSerialization', async (req, reply, payload) =>
     (req.me && !req.me.perms.has('prices.view') ? stripMoney(payload) : payload));
 
   // ---------------------------------------------------------------- roles
-  app.get('/permissions', need(), async () => PERMISSIONS);
+  app.get('/permissions', need('staff.manage'), async () => PERMISSIONS);
 
-  app.get('/roles', need(), async () => db.prepare(`SELECT r.*, (SELECT COUNT(*) FROM users u WHERE u.role_id = r.id) AS users
+  app.get('/roles', need('staff.manage'), async () => db.prepare(`SELECT r.*, (SELECT COUNT(*) FROM users u WHERE u.role_id = r.id) AS users
     FROM roles r ORDER BY r.locked DESC, r.id`).all()
     .map((r) => ({ ...r, permissions: r.code === 'admin' ? PERMISSIONS.map((p) => p.key) : JSON.parse(r.permissions) })));
 
@@ -106,8 +116,10 @@ export default async function adminRoutes(app, { db }) {
       (SELECT MAX(last_seen_at) FROM devices d WHERE d.user_id = u.id) AS last_seen_at
     FROM users u LEFT JOIN roles r ON r.id = u.role_id ORDER BY u.is_test, u.active DESC, u.name, u.login`).all());
 
-  // Light list for filters and pickers.
-  app.get('/staff/names', need(), async () => db.prepare(`SELECT u.id, u.name, u.login, u.is_test FROM users u WHERE u.active = 1
+  // Light list for filters and pickers. Only roles that actually use the filters
+  // (reports, shifts) or manage staff can read it, so logins are not exposed to
+  // every signed-in field user.
+  app.get('/staff/names', needAny('staff.manage', 'shifts.view_all', 'reports.view'), async () => db.prepare(`SELECT u.id, u.name, u.login, u.is_test FROM users u WHERE u.active = 1
     ORDER BY u.is_test, u.name`).all());
 
   app.post('/staff', need('staff.manage'), async (req, reply) => {
@@ -253,6 +265,11 @@ export default async function adminRoutes(app, { db }) {
     if (touchesIdentity && !has(req, 'suppliers.edit')) return reply.code(403).send({ error: 'Ma\'lumotlarni o\'zgartirishga ruxsatingiz yo\'q' });
     if (touchesLocation && !has(req, 'suppliers.location') && !has(req, 'suppliers.edit')) {
       return reply.code(403).send({ error: 'Manzil/joylashuvni o\'zgartirishga ruxsatingiz yo\'q' });
+    }
+    // A field user with only suppliers.location may edit the location of their own
+    // assigned households, not everyone's (office roles with suppliers.edit can).
+    if (touchesLocation && !has(req, 'suppliers.edit') && !assigned(req, s.id)) {
+      return reply.code(403).send({ error: 'Bu xonadon sizga biriktirilmagan' });
     }
     if (b.name !== undefined && !str(b.name)) return bad(reply, 'Ism bo\'sh bo\'lmasin');
     db.prepare(`UPDATE suppliers SET name = COALESCE(?, name), phone = CASE WHEN ? THEN ? ELSE phone END,
@@ -411,12 +428,12 @@ export default async function adminRoutes(app, { db }) {
   app.get('/balances', need('debts.view'), async (req) => balances(db, { q: req.query.q, asOf: asOfParam(req.query) }));
 
   // Edit balances: set one or more households to an exact balance. Each becomes a
-  // signed adjustment (target − current) so the whole history stays intact. Guarded
-  // by the admin's own password because it rewrites money directly.
-  app.post('/balances/edit', need('payments.create'), async (req, reply) => {
+  // signed adjustment (target − current) so the whole history stays intact. Admin
+  // only (staff.manage) and re-confirmed with the admin's own password, because it
+  // rewrites money directly.
+  app.post('/balances/edit', need('staff.manage'), async (req, reply) => {
     const b = req.body ?? {};
-    const self = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.me.id);
-    if (!self || !bcrypt.compareSync(String(b.password ?? ''), self.password_hash)) return bad(reply, 'Parol noto\'g\'ri');
+    if (!checkPassword(req, b.password)) return bad(reply, 'Parol noto\'g\'ri');
     const items = Array.isArray(b.items) ? b.items : [];
     const note = str(b.note, 300);
     const clean = items.map((x) => ({ supplierId: num(x.supplierId), target: Math.round(Number(x.target)) }))
@@ -484,13 +501,15 @@ export default async function adminRoutes(app, { db }) {
     const method = METHODS.includes(req.body?.method) ? req.body.method : 'cash';
     const s = supplierId && db.prepare('SELECT name FROM suppliers WHERE id = ?').get(supplierId);
     if (!s) return bad(reply, 'Xonadonni tanlang');
+    if (!assigned(req, supplierId)) return reply.code(403).send({ error: 'Bu xonadon sizga biriktirilmagan' });
     if (!(amount > 0) || amount > 1e11) return bad(reply, 'Summa noto\'g\'ri');
     const paidAt = req.body?.paidAt && !Number.isNaN(Date.parse(req.body.paidAt)) ? new Date(req.body.paidAt).toISOString() : new Date().toISOString();
     const id = db.prepare(`INSERT INTO payments (client_uuid, supplier_id, amount, method, note, paid_at, created_by, employee_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(req.body?.uuid ? String(req.body.uuid) : randomUUID(), supplierId, amount, method,
       str(req.body?.note, 300), paidAt, req.actor, req.me.is_test ? req.me.id : null).lastInsertRowid;
     log(req, 'payment.create', { id, supplierId, supplier: s.name, amount, method });
-    return { id, balance: supplierBalance(db, supplierId) };
+    // The new balance is money: only return it to callers allowed to see debts.
+    return { id, ...(has(req, 'debts.view') ? { balance: supplierBalance(db, supplierId) } : {}) };
   });
 
   app.post('/payments/:id/void', need('payments.void'), async (req, reply) => {

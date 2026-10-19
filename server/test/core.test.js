@@ -348,3 +348,23 @@ test('list field visibility is saved and exposed to the app via brand', async ()
   assert.equal(brand.listFields.phone, false);
   assert.equal(brand.listFields.name, true);
 });
+
+test('authorization: field collectors cannot reach admin-only money/role endpoints', async () => {
+  const { app } = setup();
+  const h = await ali(app); // collector: payments.create + suppliers.location, NOT staff.manage/debts.view/suppliers.view
+  // rewriting balances is admin-only now (was reachable with payments.create)
+  assert.equal((await call(app, 'POST', '/api/admin/balances/edit', h, { password: '1234', items: [{ supplierId: 1, target: 0 }] })).status, 403);
+  // the role matrix and staff logins are not exposed to field users
+  assert.equal((await call(app, 'GET', '/api/admin/roles', h)).status, 403);
+  assert.equal((await call(app, 'GET', '/api/admin/permissions', h)).status, 403);
+  assert.equal((await call(app, 'GET', '/api/admin/staff/names', h)).status, 403);
+  // can pay an ASSIGNED household, but the response does not leak the balance (no debts.view)
+  const pay = await call(app, 'POST', '/api/admin/payments', h, { supplierId: 1, amount: 1000 });
+  assert.equal(pay.status, 200);
+  assert.equal(pay.body.balance, undefined, 'balance not leaked to a user without debts.view');
+  // admin keeps full access
+  const b = await boss(app);
+  assert.equal((await call(app, 'POST', '/api/admin/balances/edit', b, { password: 'secret123', items: [{ supplierId: 1, target: 0 }] })).status, 200);
+  assert.equal((await call(app, 'GET', '/api/admin/roles', b)).status, 200);
+  assert.equal((await call(app, 'GET', '/api/admin/staff/names', b)).status, 200);
+});

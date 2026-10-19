@@ -2,6 +2,10 @@ import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { SCHEMA_VERSION } from './db/index.js';
 
+// Hard cap on decompressed backup size (this app's data is a few MB; 256 MB is
+// far above any legitimate backup) so a decompression bomb cannot OOM the server.
+const MAX_UNZIP = 256 * 1024 * 1024;
+
 // Full-data backups.
 //  * snapshot(db): every table as plain rows (binary columns base64-tagged).
 //  * Export file (.yaya): gzip(JSON) encrypted with AES-256-GCM using a key
@@ -75,7 +79,9 @@ export function decrypt(buf, password) {
   const d = createDecipheriv('aes-256-gcm', key, iv);
   d.setAuthTag(tag);
   try {
-    return JSON.parse(gunzipSync(Buffer.concat([d.update(buf.subarray(o)), d.final()])).toString('utf8'));
+    // Cap the decompressed size so a crafted "zip bomb" backup cannot exhaust memory.
+    const plain = gunzipSync(Buffer.concat([d.update(buf.subarray(o)), d.final()]), { maxOutputLength: MAX_UNZIP });
+    return JSON.parse(plain.toString('utf8'));
   } catch {
     throw new Error('Zaxira paroli noto\'g\'ri yoki fayl buzilgan');
   }
@@ -102,7 +108,7 @@ export function loadSafety(db, id) {
   pruneSafety(db);
   const row = db.prepare('SELECT data FROM backups WHERE id = ?').get(id);
   if (!row) throw new Error('Zaxira topilmadi yoki 3 kunlik muddati o\'tgan');
-  return JSON.parse(gunzipSync(row.data).toString('utf8'));
+  return JSON.parse(gunzipSync(row.data, { maxOutputLength: MAX_UNZIP }).toString('utf8'));
 }
 
 // "Clear all history": transactions go, master data (people, suppliers,

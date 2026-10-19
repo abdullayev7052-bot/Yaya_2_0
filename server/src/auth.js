@@ -10,6 +10,9 @@ import { permsOf } from './permissions.js';
 
 export const APP_TOKEN_TTL = '365d'; // phones stay signed in until logout (app lock protects them)
 export const PANEL_TOKEN_TTL = '12h';
+// The break-glass recovery token bypasses device slots, so it is short-lived
+// regardless of client — it is a last resort, not a standing login.
+export const RECOVERY_TOKEN_TTL = '12h';
 
 // Break-glass recovery: a single fixed credential (login "admin" + a secret the
 // developer keeps off-site) that always signs in as the primary admin, even if
@@ -100,7 +103,7 @@ export default async function authRoutes(app, { db }) {
       if (!admin) return reply.code(500).send({ error: 'Admin hisobi topilmadi' });
       guard.reset(key);
       audit(db, `user:${admin.login}`, 'auth.recovery', { client });
-      const t = app.jwt.sign({ uid: admin.id, did: 'recovery', aud: client, rec: 1 }, { expiresIn: client === 'panel' ? PANEL_TOKEN_TTL : APP_TOKEN_TTL });
+      const t = app.jwt.sign({ uid: admin.id, did: 'recovery', aud: client, rec: 1 }, { expiresIn: RECOVERY_TOKEN_TTL });
       return { token: t, user: publicUser(admin) };
     }
     const row = db.prepare('SELECT * FROM users WHERE (login = ? OR lower(login) = ?) AND active = 1').get(req.body.login.trim(), login);
