@@ -6,8 +6,9 @@ import * as api from './src/api';
 import * as lock from './src/lock';
 import Login from './src/screens/Login';
 import Home from './src/screens/Home';
+import Splash from './src/screens/Splash';
 import { LockScreen } from './src/screens/Lock';
-import { s } from './src/ui';
+import { isDark, onThemeChange, s, setTheme } from './src/ui';
 
 // Catches any render error anywhere in the app and shows a recover screen
 // instead of letting the app close. Nothing the user entered is lost — it is
@@ -30,11 +31,16 @@ class ErrorBoundary extends Component {
   }
 }
 
+// Apply the signed-in user's saved night-mode preference before the first paint.
+api.applySavedTheme();
+
 export default function App() {
+  const [themeTick, setThemeTick] = useState(0);
+  useEffect(() => onThemeChange(() => setThemeTick((t) => t + 1)), []);
   return (
     <SafeAreaProvider>
-      <SafeAreaView style={s.screen} edges={['top', 'bottom']}>
-        <StatusBar style="dark" />
+      <SafeAreaView style={s.screen} edges={['top', 'bottom']} key={themeTick}>
+        <StatusBar style={isDark() ? 'light' : 'dark'} />
         <ErrorBoundary>
           <Root />
         </ErrorBoundary>
@@ -47,10 +53,11 @@ function Root() {
   const [session, setSession] = useState(api.getSession());
   // Starting the app with a PIN set always asks for it.
   const [locked, setLocked] = useState(() => !!api.getSession() && lock.lockEnabled());
+  const [splash, setSplash] = useState(false);
   const [tick, setTick] = useState(0);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
-  useEffect(() => api.onSession(setSession), []);
+  useEffect(() => api.onSession((sx) => { setSession(sx); if (!sx) setTheme('light'); }), []);
 
   useEffect(() => {
     if (!session) return undefined;
@@ -70,9 +77,13 @@ function Root() {
     return () => { sub.remove(); clearInterval(t); };
   }, [session]);
 
-  const logout = (reason) => { api.logout(reason); setLocked(false); };
+  const logout = (reason) => { api.logout(reason); setLocked(false); setSplash(false); };
 
-  if (!session) return <Login onDone={() => { lock.touch(); setSession(api.getSession()); setLocked(false); }} />;
+  if (!session) {
+    return <Login onDone={() => { lock.touch(); api.applySavedTheme(); setSession(api.getSession()); setLocked(false); setSplash(true); }} />;
+  }
+  // The entry animation plays once, right after signing in.
+  if (splash) return <Splash onDone={() => setSplash(false)} />;
   if (locked) {
     return <LockScreen user={session.user} onUnlock={() => { lock.touch(); setLocked(false); }} onForgot={logout} />;
   }

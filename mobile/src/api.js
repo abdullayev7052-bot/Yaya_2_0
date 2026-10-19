@@ -3,6 +3,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { randomUUID } from 'expo-crypto';
 import { AppState, Platform } from 'react-native';
 import * as store from './db';
+import { setTheme } from './ui';
 
 // In the browser tester the app is served by the same server it talks to.
 const DEFAULT_URL = Platform.OS === 'web' ? globalThis.location?.origin ?? '' : Constants.expoConfig?.extra?.apiUrl ?? '';
@@ -52,12 +53,12 @@ async function call(method, path, body, { timeoutMs = 15000 } = {}) {
     }
     return data;
   } catch (e) {
-    if (e.name === 'AbortError' || e.message === 'Network request failed' || e.message === 'Failed to fetch') {
-      const err = new Error('Internet yo\'q yoki server javob bermadi');
-      err.offline = true;
-      throw err;
-    }
-    throw e;
+    // A real HTTP response error carries a status; anything else is a network /
+    // timeout / DNS failure (e.g. java.net.* on Android) → one plain message.
+    if (e.status) throw e;
+    const err = new Error('Internet yo\'q yoki server javob bermadi');
+    err.offline = true;
+    throw err;
   } finally {
     clearTimeout(t);
   }
@@ -69,7 +70,8 @@ export const getBrand = () => store.getKv('brand', { companyName: '', version: '
 // Admin switches: whether the app uses location at all, and whether the little
 // route pin shows in the shift list. Default on when the server hasn't said.
 export const locationEnabled = () => getBrand().locationEnabled !== false;
-export const locationPin = () => getBrand().locationPin !== false;
+// Whether the "Bekor qilish" feature is on (admin can switch it off).
+export const cancelEnabled = () => getBrand().cancelEnabled !== false;
 const toDataUri = async (url) => {
   const blob = await (await fetch(url)).blob();
   return new Promise((resolve, reject) => {
@@ -93,7 +95,7 @@ export async function refreshBrand(knownVersion) {
       logo,
       intro: b.introUrl ? getServerUrl() + b.introUrl : null,
       locationEnabled: b.locationEnabled !== false,
-      locationPin: b.locationPin !== false,
+      cancelEnabled: b.cancelEnabled !== false,
     };
     store.setKv('brand', next);
     return next;
@@ -160,6 +162,15 @@ export const me = () => store.getKv('bootstrap')?.user ?? getSession()?.user ?? 
 export const can = (perm) => !!me()?.permissions?.includes(perm);
 export const canAny = (...perms) => perms.some(can);
 
+// Night mode is per-user and stored on this phone. Default: light.
+const themeKey = () => `theme:${getSession()?.user?.id ?? 'none'}`;
+export const getThemePref = () => store.getKv(themeKey(), 'light');
+export function setThemePref(mode) {
+  store.setKv(themeKey(), mode);
+  setTheme(mode);
+}
+export const applySavedTheme = () => setTheme(getThemePref());
+
 export const admin = (method, path, body) => call(method, '/api/admin' + path, body);
 export const mobile = (method, path, body) => call(method, '/api/mobile' + path, body);
 export const changePassword = (current, next) => call('PUT', '/api/auth/password', { current, next });
@@ -179,17 +190,22 @@ export const getProducts = () => boot().products ?? [];
 export const serverShifts = () => boot().shifts ?? [];
 export const shiftInfo = (uuid) => serverShifts().find((s) => s.uuid === uuid) ?? (boot().openShift?.uuid === uuid ? boot().openShift : null);
 
-// Why a new shift cannot be opened right now, or null if it can.
+// Why a new shift cannot be opened yet, or null if it can. A shift number blocks
+// until it is accepted: while it is open/closed (waiting), or cancelled and not
+// yet replaced by an accepted copy. kind: 'waiting' | 'cancelled'.
 export function shiftBlock() {
-  const after = ' Omborchi yoki rahbar qabul qilgandan (yoki bekor qilgandan) keyin yangi smena ochiladi.';
-  for (const s of store.allShifts()) {
-    if (s.error) continue;
-    if (!s.closed_at) return { shift: s, text: 'Ochiq smena bor' };
-    // Closed here but not uploaded yet: it certainly still waits for acceptance.
-    if (s.dirty) return { shift: s, text: `Yopilgan smena hali serverga yuborilmagan.${after}` };
+  // A shift closed on this phone but not uploaded is certainly still waiting.
+  const localPending = store.allShifts().find((x) => x.closed_at && x.dirty && !x.error);
+  if (localPending) return { kind: 'waiting', label: shiftInfo(localPending.uuid)?.label };
+  const byNumber = {};
+  for (const sh of serverShifts()) (byNumber[sh.number] ||= []).push(sh);
+  for (const grp of Object.values(byNumber)) {
+    if (grp.some((x) => x.status === 'accepted')) continue;
+    const active = grp.find((x) => x.status === 'open' || x.status === 'closed');
+    if (active) return { kind: 'waiting', label: active.label };
+    const canc = grp.find((x) => x.status === 'cancelled');
+    if (canc) return { kind: 'cancelled', label: canc.label, reason: canc.cancel_reason };
   }
-  const waiting = serverShifts().find((s) => s.status === 'closed' || s.status === 'open');
-  if (waiting) return { text: `${waiting.label} smena hali ${waiting.status === 'open' ? 'ochiq' : 'qabul qilinmagan'}.${after}` };
   return null;
 }
 

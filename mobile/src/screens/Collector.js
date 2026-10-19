@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FlatList, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FlatList, PanResponder, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import * as api from '../api';
 import * as store from '../db';
 import SyncBar from '../SyncBar';
@@ -114,48 +114,49 @@ export default function Collector({ tick, refresh, setFull }) {
 
 const shiftName = (uuid) => api.shiftInfo(uuid)?.label ?? 'Yangi smena';
 
+// Wraps a row so a left→right swipe fires onSwipe, while taps still reach the
+// Pressable inside. Reads current props via a ref (PanResponder is made once).
+function SwipeRow({ enabled, onSwipe, children }) {
+  const cb = useRef({ enabled, onSwipe });
+  cb.current = { enabled, onSwipe };
+  const pan = useRef(PanResponder.create({
+    onMoveShouldSetPanResponder: (_, g) => cb.current.enabled && g.dx > 16 && Math.abs(g.dy) < 12,
+    onPanResponderRelease: (_, g) => { if (cb.current.enabled && g.dx > 60 && Math.abs(g.dy) < 40) cb.current.onSwipe(); },
+  })).current;
+  return <View {...pan.panHandlers}>{children}</View>;
+}
+
 // ---------------------------------------------------------------- Start shift
 function StartShift({ tick, refresh, onOpen, onNav }) {
   const me = api.me();
   const suppliers = api.getSuppliers();
   const block = api.shiftBlock();
-  const refused = store.allShifts().filter((x) => x.error);
-  const cancelled = api.serverShifts().filter((x) => x.status === 'cancelled').slice(0, 3);
+  void refresh;
   void tick;
+  const tryOpen = () => {
+    if (!block) { onOpen(); return; }
+    notify('Smena ochib bo\'lmaydi', block.kind === 'cancelled'
+      ? 'Sizda Bekor qilingan smena bor. Avval uni to\'g\'rilab, keyin urinib ko\'ring.'
+      : 'Sizda Qabul qilinmagan smena bor. Avval omborchi uni qabul qilishi kerak.');
+  };
   return (
     <View style={{ flex: 1 }}>
       <SyncBar tick={tick} />
       <ScrollView contentContainerStyle={[s.pad, { flexGrow: 1, justifyContent: 'center', gap: 16 }]}>
         <View style={{ alignItems: 'center' }}><Logo size={72} /></View>
         <Text style={s.h1}>{greetingFor(me?.name || me?.login)}</Text>
-        <Text style={s.muted}>Sizga biriktirilgan yetkazib beruvchilar: {suppliers.length} ta</Text>
-        {refused.map((r) => (
-          <View key={r.uuid} style={[s.card, { borderColor: C.err, gap: 8 }]}>
-            <Text style={{ color: C.err, fontWeight: '700' }}>Server smenani qabul qilmadi</Text>
-            <Text style={s.text}>{r.error}</Text>
-            <Btn title="Bu smenani telefondan o'chirish" kind="warn" onPress={() => ask('O\'chirish',
-              'Bu smena va undagi yozuvlar telefondan o\'chiriladi. Davom etasizmi?', 'Ha', () => { store.discardShift(r.uuid); refresh(); })} />
-          </View>
-        ))}
-        {cancelled.map((r) => (
-          <View key={r.uuid} style={[s.card, { borderColor: C.err, gap: 4 }]}>
-            <Text style={{ color: C.err, fontWeight: '700' }}>{r.label} smena bekor qilindi</Text>
-            {!!r.cancel_reason && <Text style={s.text}>Sabab: {r.cancel_reason}</Text>}
-          </View>
-        ))}
-        {block ? (
-          <View style={[s.card, { borderColor: C.warn }]}>
-            <Text style={[s.text, { color: C.warn }]}>{block.text}</Text>
-          </View>
-        ) : (
-          <Pressable style={[s.btn, { paddingVertical: 32 }]} onPress={onOpen}>
-            <Text style={[s.btnText, { fontSize: 26 }]}>Smenani ochish</Text>
-          </Pressable>
-        )}
+        <Text style={s.muted}>Sizga biriktirilgan xonadonlar: {suppliers.length} ta</Text>
+        <Pressable style={[s.btn, { paddingVertical: 32 }]} onPress={tryOpen}>
+          <Text style={[s.btnText, { fontSize: 26 }]}>Smenani ochish</Text>
+        </Pressable>
       </ScrollView>
       <View style={[s.pad, { gap: 10 }]}>
         {api.can('payments.create') && <Btn title="To'lov kiritish" kind="ghost" onPress={() => onNav('pay')} />}
-        <Btn title="Smenalarim tarixi" kind="ghost" onPress={() => onNav('history')} />
+        {/* A red dot marks a cancelled or not-yet-accepted shift that needs fixing. */}
+        <View>
+          <Btn title="Smenalarim tarixi" kind="ghost" onPress={() => onNav('history')} />
+          {!!block && <View style={{ position: 'absolute', top: 8, right: 14, width: 12, height: 12, borderRadius: 6, backgroundColor: C.err }} />}
+        </View>
         <Btn title="Ro'yxatni yangilash" kind="ghost" onPress={() => api.syncNow()} />
       </View>
     </View>
@@ -167,7 +168,6 @@ function ShiftView({ shift, tick, onPick, onNav }) {
   const [q, setQ] = useState('');
   const suppliers = api.getSuppliers();
   const locationOn = api.locationEnabled();
-  const showPin = locationOn && api.locationPin();
   const here = useMyLocation();
   const rows = useMemo(() => store.shiftCollections(shift.uuid), [shift.uuid, tick]);
 
@@ -200,14 +200,14 @@ function ShiftView({ shift, tick, onPick, onNav }) {
       <SyncBar tick={tick} />
       <View style={{ padding: 12, gap: 8 }}>
         <Text style={s.muted}>
-          <Text style={{ fontWeight: '700', color: C.text }}>{shiftName(shift.uuid)}</Text> · ochiq (qoralama) · {fmtTime(shift.opened_at)} · {rows.length} ta ·{' '}
+          <Text style={{ fontWeight: '700', color: C.text }}>{shiftName(shift.uuid)}</Text> · ochiq · {fmtTime(shift.opened_at)} · {rows.length} ta ·{' '}
           {Object.entries(totalByProduct).map(([k, v]) => `${k} ${fmtQty(v)}`).join(', ') || '0'}
         </Text>
         <View style={{ flexDirection: 'row', gap: 8 }}>
           <TextInput style={[s.input, { flex: 1 }]} value={q} onChangeText={setQ} placeholder="🔍  Ism yoki telefon raqam"
             autoCorrect={false} clearButtonMode="while-editing" />
           {api.can('suppliers.create') && (
-            <Pressable onPress={() => onNav('new')} style={[s.btn, { paddingHorizontal: 18, paddingVertical: 0 }]} accessibilityLabel="Yangi yetkazib beruvchi">
+            <Pressable onPress={() => onNav('new')} style={[s.btn, { paddingHorizontal: 18, paddingVertical: 0 }]} accessibilityLabel="Yangi xonadon">
               <Text style={s.btnText}>＋</Text>
             </Pressable>
           )}
@@ -218,26 +218,22 @@ function ShiftView({ shift, tick, onPick, onNav }) {
         keyExtractor={(x) => String(x.id)}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 12, gap: 8 }}
-        ListEmptyComponent={<Text style={[s.muted, { padding: 16 }]}>{suppliers.length ? 'Topilmadi' : 'Sizga yetkazib beruvchi biriktirilmagan. Adminga murojaat qiling.'}</Text>}
+        ListEmptyComponent={<Text style={[s.muted, { padding: 16 }]}>{suppliers.length ? 'Topilmadi' : 'Sizga xonadon biriktirilmagan. Adminga murojaat qiling.'}</Text>}
         renderItem={({ item }) => {
           const got = done[item.id];
           const noProduct = !item.products?.length;
+          // Swipe a row left→right to open its location in Google Maps (when it has one).
+          const canRoute = locationOn && item.lat != null;
           return (
+            <SwipeRow enabled={canRoute} onSwipe={() => openRoute(item)}>
             <Pressable
               onPress={() => (noProduct
-                ? notify('Mahsulot yo\'q', 'Bu yetkazib beruvchiga admin mahsulot biriktirmagan.')
+                ? notify('Mahsulot yo\'q', 'Bu xonadonga admin mahsulot biriktirmagan.')
                 : onPick(item))}
-              style={({ pressed }) => [s.card, { flexDirection: 'row', alignItems: 'center', minHeight: 68, paddingLeft: 10 },
+              style={({ pressed }) => [s.card, { flexDirection: 'row', alignItems: 'center', minHeight: 68 },
                 got && { borderColor: C.ok }, pressed && { opacity: 0.6 }]}
             >
-              {/* Small location pin at the top-left; tap it to open the route in Google Maps. */}
-              {showPin && item.lat != null && (
-                <Pressable onPress={() => openRoute(item)} hitSlop={12}
-                  style={{ position: 'absolute', top: 6, left: 6, padding: 2 }} accessibilityLabel="Yo'l ko'rsatish">
-                  <Text style={{ fontSize: 15 }}>📍</Text>
-                </Pressable>
-              )}
-              <View style={{ flex: 1, paddingLeft: showPin && item.lat != null ? 14 : 0 }}>
+              <View style={{ flex: 1 }}>
                 <Text style={[s.text, { fontSize: 19, fontWeight: '600' }]}>{item.name}</Text>
                 {!!(item.address || item.phone) && <Text style={s.muted} numberOfLines={1}>{[item.address, item.phone].filter(Boolean).join(' · ')}</Text>}
               </View>
@@ -247,6 +243,7 @@ function ShiftView({ shift, tick, onPick, onNav }) {
                 </Text>
               )}
             </Pressable>
+            </SwipeRow>
           );
         }}
       />
@@ -279,7 +276,7 @@ function Entry({ draft, onChange, onCancel, onSave, onCard }) {
       onQty={(qty) => onChange({ ...draft, productId: product.id, qty })}
       onCancel={onCancel}
       onSave={(value) => onSave(supplier, product, value)}
-      saveLabel="OK — saqlash"
+      saveLabel="Saqlash"
     />
   );
 }
@@ -447,7 +444,7 @@ function History({ onBack, onCopied }) {
               <Text style={[s.text, { fontWeight: '700' }]}>{r.label}  <Text style={{ fontWeight: '400' }}>{fmtDT(r.opened_at)}–{r.closed_at ? fmtTime(r.closed_at) : '...'}</Text></Text>
               <ShiftBadge status={r.status} />
             </View>
-            <Text style={s.text}>{r.pickups} ta yetkazib berish · {fmtQty(r.quantity)} kg</Text>
+            <Text style={s.text}>{r.pickups} ta qabul · {fmtQty(r.quantity)} kg</Text>
             {!!r.cancel_reason && <Text style={{ color: C.err }}>Sabab: {r.cancel_reason}</Text>}
             {r.status === 'cancelled' && canCopy && <Btn title="Nusxa olib tuzatish" kind="ghost" onPress={() => copy(r)} />}
           </View>
@@ -465,7 +462,7 @@ function CloseShift({ shift, onBack, onClosed }) {
     <View style={{ flex: 1 }}>
       <ScrollView contentContainerStyle={[s.pad, { gap: 12 }]}>
         <Text style={s.h1}>{shiftName(shift.uuid)} smenani yopish</Text>
-        <Text style={s.muted}>Ochilgan: {fmtTime(shift.opened_at)} · {rows.length} ta yetkazib berish</Text>
+        <Text style={s.muted}>Ochilgan: {fmtTime(shift.opened_at)} · {rows.length} ta qabul</Text>
         <View style={[s.card, { gap: 6 }]}>
           {Object.entries(byProduct).map(([k, v]) => {
             const [name, unit] = k.split('|');
@@ -473,9 +470,6 @@ function CloseShift({ shift, onBack, onClosed }) {
           })}
           {!rows.length && <Text style={s.muted}>Bu smenada yozuv yo'q</Text>}
         </View>
-        <Text style={[s.text, { color: C.warn }]}>
-          Yopilgan smenani hech kim o'zgartira olmaydi. U omborchi / rahbar qabuliga yuboriladi va qabul qilingach hisobga kiradi.
-        </Text>
         {rows.map((r) => (
           <View key={r.uuid} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6,
             borderBottomWidth: 1, borderColor: C.line }}>

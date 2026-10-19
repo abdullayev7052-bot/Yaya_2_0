@@ -77,7 +77,7 @@ export function SupplierCard({ id, onBack, onPay }) {
       const here = await getOnce();
       if (!here) { notify('Joylashuv yo\'q', 'Telefonda joylashuvni (GPS) yoqing va ruxsat bering.'); return; }
       await saveLocation({ lat: here.lat, lng: here.lng });
-      notify('Saqlandi', 'Yetkazib beruvchining joylashuvi hozirgi joyingizga belgilandi.');
+      notify('Saqlandi', 'Xonadonning joylashuvi hozirgi joyingizga belgilandi.');
     } finally { setLocBusy(false); }
   };
 
@@ -120,7 +120,7 @@ export function SupplierCard({ id, onBack, onPay }) {
               </View>
             )}
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-              <Tile label={bal > 0 ? 'Biz qarzmiz' : bal < 0 ? 'Bizga qarz (avans)' : 'Qarz yo\'q'} value={fmtMoney(Math.abs(bal ?? 0))} sub="so'm" />
+              <Tile label={bal > 0 ? 'Qarzdorlik' : bal < 0 ? 'Haqdorlik (avans)' : 'Qarz yo\'q'} value={fmtMoney(Math.abs(bal ?? 0))} sub="so'm" />
               <Tile label="Oxirgi marta" value={c.lastPickup ? `${fmtQty(c.lastPickup.quantity)} ${c.lastPickup.unit}` : '—'}
                 sub={c.lastPickup ? `${fmtDT(c.lastPickup.collected_at)} · ${c.lastPickup.product_name}` : ''} />
             </View>
@@ -173,7 +173,7 @@ export function PaymentForm({ supplier, onBack, onDone }) {
     <View style={{ flex: 1, padding: 12, gap: 10 }}>
       <Header title={`To'lov: ${supplier.name}`} onBack={onBack} />
       {supplier.balance != null && (
-        <Text style={s.muted}>{supplier.balance >= 0 ? `Joriy qarzimiz: ${fmtMoney(supplier.balance)} so'm` : `Bizga qarz (avans): ${fmtMoney(-supplier.balance)} so'm`}</Text>
+        <Text style={s.muted}>{supplier.balance >= 0 ? `Qarzdorlik: ${fmtMoney(supplier.balance)} so'm` : `Haqdorlik (avans): ${fmtMoney(-supplier.balance)} so'm`}</Text>
       )}
       <View style={{ flexDirection: 'row', gap: 8 }}>
         {Object.entries(METHOD).map(([k, t]) => <Chip key={k} label={t} on={method === k} onPress={() => setMethod(k)} />)}
@@ -209,11 +209,11 @@ export function NewSupplier({ onBack, onCreated }) {
       const r = await api.mobile('POST', '/suppliers', { name, phone, address, productIds: picked });
       await api.refreshBootstrap();
       onCreated(api.getSuppliers().find((x) => x.id === r.id) ?? null);
-    } catch (e) { setErr(e.offline ? 'Yangi yetkazib beruvchi qo\'shish uchun internet kerak' : e.message); } finally { setBusy(false); }
+    } catch (e) { setErr(e.offline ? 'Yangi xonadon qo\'shish uchun internet kerak' : e.message); } finally { setBusy(false); }
   };
   return (
     <View style={{ flex: 1 }}>
-      <Header title="Yangi yetkazib beruvchi" onBack={onBack} />
+      <Header title="Yangi xonadon" onBack={onBack} />
       <ScrollView contentContainerStyle={{ padding: 12, gap: 12 }} keyboardShouldPersistTaps="handled">
         <TextInput style={s.input} value={name} onChangeText={setName} placeholder="Ism familiya" />
         <TextInput style={s.input} value={phone} onChangeText={setPhone} placeholder="Telefon (ixtiyoriy)" keyboardType="phone-pad" />

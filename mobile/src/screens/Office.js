@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
 import * as api from '../api';
 import { ask, notify } from '../dialog';
-import { Btn, Chip, DayPicker, Err, Header, ShiftBadge, Tile, addDays, fmtDT, fmtMoney, todayLocal, useLoad } from '../components';
+import { Btn, Chip, Err, Header, ShiftBadge, Tile, addDays, fmtDT, fmtMoney, todayLocal, useLoad } from '../components';
 import { C, fmtQty, fmtTime, s } from '../ui';
 
 // Office sections of the app (storekeeper, accountant, manager, admin).
@@ -24,42 +24,54 @@ function ShiftRow({ x, onOpen }) {
   );
 }
 
-// ---------------------------------------------------------------- dashboard for a chosen day
+// ---------------------------------------------------------------- dashboard for a chosen range
+const RANGES = [['today', 'Bugun'], ['7', '7 kun'], ['30', '30 kun']];
+const rangeDates = (key, day) => (key === 'today' ? { from: day, to: day } : { from: addDays(day, -(Number(key) - 1)), to: day });
+
 export function Today({ onShift }) {
-  const [day, setDay] = useState(todayLocal());
-  const { data: d, err, busy, load } = useLoad(() => api.admin('GET', `/dashboard?day=${day}`), [day]);
+  const today = todayLocal();
+  const [range, setRange] = useState('today');
+  const [product, setProduct] = useState(0); // 0 = all products
+  const { from, to } = rangeDates(range, today);
+  const qs = `from=${from}&to=${to}${product ? `&product=${product}` : ''}`;
+  const { data: d, err, busy, load } = useLoad(() => api.admin('GET', `/dashboard?${qs}`), [range, product]);
   // Open shifts change minute by minute: keep the numbers live.
   useEffect(() => { const t = setInterval(load, 20000); return () => clearInterval(t); }, [load]);
   const m = money();
-  const tot = d?.day_summary?.totals;
+  const tot = d?.summary?.totals;
+  const products = api.getProducts();
   return (
     <ScrollView contentContainerStyle={{ padding: 12, gap: 12 }} refreshControl={<RefreshControl refreshing={busy} onRefresh={load} />}>
-      <DayPicker day={day} onChange={setDay} />
+      <View style={{ flexDirection: 'row', gap: 6 }}>
+        {RANGES.map(([k, t]) => <Chip key={k} label={t} on={range === k} onPress={() => setRange(k)} />)}
+      </View>
+      {products.length > 1 && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+          <Chip label="Hammasi" on={!product} onPress={() => setProduct(0)} />
+          {products.map((p) => <Chip key={p.id} label={p.name} on={product === p.id} onPress={() => setProduct(p.id)} />)}
+        </ScrollView>
+      )}
       <Err err={err} />
-      {d && (
+      {d && tot && (
         <>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
             <Tile label="Qabul qilingan sut" value={fmtQty(tot.quantity)} sub={`kg · ${tot.shifts} ta smena`} />
             {m && <Tile label="Summa" value={fmtMoney(tot.amount)} sub="so'm" />}
-            {d.debt && <Tile label="Biz qarzmiz (jami)" value={fmtMoney(d.debt.weOwe)} sub="so'm" wide={!m} />}
+            {d.debt && <Tile label="Qarzdorlik" value={fmtMoney(d.debt.weOwe)} sub="so'm" wide={!m} />}
           </View>
           <View style={[s.card, { gap: 6 }]}>
             <Text style={[s.text, { fontWeight: '700' }]}>Mahsulotlar{m ? ' va o\'rtacha tannarx' : ''}</Text>
-            {d.cost.products.map((p) => (
+            {d.summary.byProduct.map((p) => (
               <View key={p.id} style={{ borderTopWidth: 1, borderColor: C.line, paddingTop: 6 }}>
                 <Text style={[s.text, { fontWeight: '600' }]}>{p.name}: {fmtQty(p.quantity)} {p.unit}</Text>
-                {m && <Text style={s.muted}>O'rtacha tannarx {fmtMoney(p.avg_cost)} so'm/{p.unit} · {fmtMoney(p.amount)} so'm · narx {fmtMoney(p.min_price)}–{fmtMoney(p.max_price)}</Text>}
+                {m && <Text style={s.muted}>O'rtacha tannarx {fmtMoney(p.avg_cost)} so'm/{p.unit}</Text>}
               </View>
             ))}
-            {!d.cost.products.length && <Text style={s.muted}>Bu kunda qabul qilingan smena yo'q</Text>}
-            {(d.cost.shifts.open > 0 || d.cost.shifts.closed > 0) && (
-              <Text style={{ color: C.warn }}>Hozircha — ochiq: {d.cost.shifts.open}, qabul kutmoqda: {d.cost.shifts.closed}. Ular hisobga kirmagan.</Text>
-            )}
-            {m && !!d.cost.products.length && <Text style={s.muted}>Faqat qabul qilingan smenalar. Tannarx = jami summa ÷ jami miqdor.</Text>}
+            {!d.summary.byProduct.length && <Text style={s.muted}>Qabul qilingan smena yo'q</Text>}
           </View>
           {!!d.live?.length && (
             <View style={{ gap: 8 }}>
-              <Text style={[s.text, { fontWeight: '700' }]}>🟢 Jonli — ochiq smenalar (hisobga kirmaydi)</Text>
+              <Text style={[s.text, { fontWeight: '700' }]}>Ochiq smenalar</Text>
               {d.live.map((x) => <ShiftRow key={x.id} x={x} onOpen={onShift} />)}
             </View>
           )}
@@ -139,14 +151,14 @@ export function ShiftDetail({ id, onBack, onChanged }) {
               <Text style={s.muted}>Ochilgan {fmtDT(sh.opened_at)}{sh.closed_at ? ` · yopilgan ${fmtDT(sh.closed_at)}` : ''}</Text>
               {sh.accepted_at && <Text style={s.muted}>Qabul qildi: {String(sh.accepted_by ?? '').replace(/^user:/, '')} · {fmtDT(sh.accepted_at)}</Text>}
               {sh.cancelled_at && <Text style={{ color: C.err }}>Bekor qildi: {String(sh.cancelled_by ?? '').replace(/^user:/, '')} · {fmtDT(sh.cancelled_at)}. Sabab: {sh.cancel_reason}</Text>}
-              {sh.status === 'open' && <Text style={{ color: C.warn }}>Ochiq smena — qoralama. Hisobga kirmaydi.</Text>}
+              {sh.status === 'open' && <Text style={{ color: C.warn }}>Ochiq smena. Hisobga kirmaydi.</Text>}
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                 {d.byProduct.map((p) => <Tile key={p.name} label={p.name} value={fmtQty(p.quantity)} sub={`${p.unit} · ${p.pickups} ta`} />)}
               </View>
               {sh.status === 'closed' && api.can('shifts.accept') && (
                 <Btn title="Qabul qilish" onPress={() => ask('Qabul qilish', `${sh.label} smena qabul qilinsinmi? Shundan keyin u qarz va hisobotlarga kiradi.`, 'Ha', () => act('accept', null, 'Smena qabul qilindi'))} />
               )}
-              {(sh.status === 'closed' || sh.status === 'accepted') && api.can('shifts.cancel') && (cancelling ? (
+              {sh.status === 'closed' && api.can('shifts.cancel') && api.cancelEnabled() && (cancelling ? (
                 <View style={{ gap: 8 }}>
                   <TextInput style={s.input} value={reason} onChangeText={setReason} placeholder="Bekor qilish sababi" autoFocus />
                   <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -154,7 +166,7 @@ export function ShiftDetail({ id, onBack, onChanged }) {
                     <Btn title="Bekor qilish" kind="danger" style={{ flex: 1 }} disabled={!reason.trim()} onPress={() => act('cancel', { reason: reason.trim() }, 'Smena bekor qilindi. U hisobga kirmaydi va qarz yaratmaydi.')} />
                   </View>
                 </View>
-              ) : <Btn title={sh.status === 'closed' ? 'Rad etish (bekor qilish)' : 'Bekor qilish'} kind="warn" onPress={() => setCancelling(true)} />)}
+              ) : <Btn title="Rad etish (bekor qilish)" kind="warn" onPress={() => setCancelling(true)} />)}
               {sh.status === 'cancelled' && api.can('shifts.copy') && (
                 <Btn title="Nusxa olish (yangi ochiq smena)" kind="ghost" onPress={() => act('copy', null, 'Nusxa ochildi: xodim qatorlarni tuzatib qayta yopadi.')} />
               )}
@@ -190,8 +202,8 @@ export function Debts({ onOpen, onPay, tick }) {
       <View style={{ padding: 12, gap: 8 }}>
         {data && (
           <View style={{ flexDirection: 'row', gap: 8 }}>
-            <Tile label="Biz qarzmiz" value={fmtMoney(data.totals.weOwe)} sub="so'm" />
-            <Tile label="Bizga qarz" value={fmtMoney(data.totals.theyOwe)} sub="so'm (avans)" />
+            <Tile label="Qarzdorlik" value={fmtMoney(data.totals.weOwe)} sub="so'm" />
+            <Tile label="Haqdorlik" value={fmtMoney(data.totals.theyOwe)} sub="so'm (avans)" />
           </View>
         )}
         <TextInput style={s.input} value={q} onChangeText={setQ} placeholder="🔍  Ism yoki telefon raqam" autoCorrect={false} />

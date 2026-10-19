@@ -7,7 +7,7 @@ import SyncBar from '../SyncBar';
 import { ask, notify } from '../dialog';
 import { Btn, Chip } from '../components';
 import { PinSetup } from './Lock';
-import { C, s } from '../ui';
+import { s } from '../ui';
 
 // "Men": who is logged in, app lock (PIN / fingerprint / auto-lock), password, logout.
 export default function Profile({ tick, onLogout, setFull }) {
@@ -18,9 +18,7 @@ export default function Profile({ tick, onLogout, setFull }) {
   const [pw, setPw] = useState({ current: '', next: '' });
   const [pwOpen, setPwOpen] = useState(false);
   const [pwBusy, setPwBusy] = useState(false);
-  const [acc, setAcc] = useState({ name: me?.name || '', login: me?.login || '' });
-  const [accBusy, setAccBusy] = useState(false);
-  const canEditAccount = api.can('staff.manage'); // admins may rename themselves
+  const [night, setNight] = useState(api.getThemePref() === 'dark');
   useEffect(() => { lock.bioAvailable().then(setBioOk); }, []);
   useEffect(() => { setFull(settingPin); }, [settingPin, setFull]);
   const reload = () => setCfg(lock.getLock());
@@ -35,13 +33,6 @@ export default function Profile({ tick, onLogout, setFull }) {
       setPwOpen(false);
       notify('Tayyor', 'Parol o\'zgartirildi');
     } catch (e) { notify('Bo\'lmadi', e.message); } finally { setPwBusy(false); }
-  };
-  const saveAccount = async () => {
-    setAccBusy(true);
-    try {
-      await api.changeProfile({ name: acc.name, login: acc.login });
-      notify('Tayyor', 'Ism va login saqlandi');
-    } catch (e) { notify('Bo\'lmadi', e.message); } finally { setAccBusy(false); }
   };
   const logout = () => {
     const pending = store.unsyncedCount();
@@ -62,10 +53,16 @@ export default function Profile({ tick, onLogout, setFull }) {
         </View>
 
         <View style={[s.card, { gap: 10 }]}>
-          <Text style={[s.text, { fontWeight: '700' }]}>🔒 Ilova qulfi</Text>
-          <Text style={s.muted}>Siz chiqmaguningizcha hisobda qolasiz. Qulf telefonni boshqa odam olsa, ilovani ochib qo'ymaydi.</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Text style={[s.text, { flex: 1 }]}>4 xonali PIN</Text>
+            <Text style={[s.text, { flex: 1, fontWeight: '700' }]}>🌙 Tungi rejim</Text>
+            <Switch value={night} onValueChange={(v) => { setNight(v); api.setThemePref(v ? 'dark' : 'light'); }} />
+          </View>
+        </View>
+
+        <View style={[s.card, { gap: 10 }]}>
+          <Text style={[s.text, { fontWeight: '700' }]}>🔒 Ilova qulfi</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Text style={[s.text, { flex: 1 }]}>PIN o'rnatish</Text>
             <Switch value={!!cfg.pin} onValueChange={(v) => {
               if (v) setSettingPin(true);
               else ask('PIN\'ni o\'chirish', 'Ilova qulfsiz ochiladi. Davom etasizmi?', 'Ha', () => { lock.clearPin(); reload(); });
@@ -95,15 +92,6 @@ export default function Profile({ tick, onLogout, setFull }) {
           )}
         </View>
 
-        {canEditAccount && (
-          <View style={[s.card, { gap: 10 }]}>
-            <Text style={[s.text, { fontWeight: '700' }]}>Ism va login</Text>
-            <TextInput style={s.input} value={acc.name} onChangeText={(v) => setAcc({ ...acc, name: v })} placeholder="Ism" />
-            <TextInput style={s.input} value={acc.login} onChangeText={(v) => setAcc({ ...acc, login: v })} placeholder="Login" autoCapitalize="none" autoCorrect={false} />
-            <Btn title={accBusy ? '...' : 'Saqlash'} disabled={accBusy || acc.login.trim().length < 3} onPress={saveAccount} />
-          </View>
-        )}
-
         <View style={[s.card, { gap: 10 }]}>
           {!pwOpen ? (
             <Btn title="Parolni o'zgartirish" kind="ghost" onPress={() => setPwOpen(true)} />
@@ -121,7 +109,6 @@ export default function Profile({ tick, onLogout, setFull }) {
         </View>
 
         <Btn title="Hisobdan chiqish" kind="warn" onPress={logout} />
-        <Text style={[s.muted, { textAlign: 'center', color: C.muted }]}>Yaya · {api.getBrand().companyName}</Text>
       </ScrollView>
     </View>
   );
