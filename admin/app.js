@@ -576,7 +576,8 @@ const views = {
     $('#mapBtn', v) && ($('#mapBtn', v).onclick = act(async () => {
       const r = await openMap({ lat: s.lat, lng: s.lng, name: s.name, address: s.address });
       if (!r) return;
-      await api('PATCH', `/suppliers/${s.id}`, { lat: r.lat, lng: r.lng, address: r.address });
+      // Only the coordinates are saved from the map; the manual address is kept.
+      await api('PATCH', `/suppliers/${s.id}`, { lat: r.lat, lng: r.lng });
       flash('Joylashuv saqlandi');
       route();
     }));
@@ -910,6 +911,11 @@ const views = {
           <p class="muted"><code>{ism}</code> — foydalanuvchining ismiga almashtiriladi.</p>
           <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="locationEnabled" ${st.locationEnabled ? 'checked' : ''}> Xarita rejimi</label>
           <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="cancelEnabled" ${st.cancelEnabled ? 'checked' : ''}> "Bekor qilish" rejimi</label>
+          <div style="margin-top:10px"><b>Ro'yxat sozlamalari</b><p class="muted" style="margin:2px 0 6px">Smena ochilganda xonadonlar ro'yxatida nimalar ko'rinsin:</p>
+            <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="lf_name" ${st.listFields.name ? 'checked' : ''}> Xonadon ismi</label>
+            <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="lf_address" ${st.listFields.address ? 'checked' : ''}> Manzili</label>
+            <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="lf_phone" ${st.listFields.phone ? 'checked' : ''}> Telefon raqami</label>
+          </div>
           <button>Saqlash</button>
         </form>
         <div class="row" style="align-items:center;margin-top:12px">
@@ -987,6 +993,7 @@ const views = {
         await api('PUT', '/settings', {
           companyName: f.companyName.value, greeting: f.greeting.value,
           locationEnabled: f.locationEnabled.checked, cancelEnabled: f.cancelEnabled.checked,
+          listFields: { name: f.lf_name.checked, address: f.lf_address.checked, phone: f.lf_phone.checked },
         });
         await loadBrand();
         flash('Saqlandi');
