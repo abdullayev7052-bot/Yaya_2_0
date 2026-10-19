@@ -20,7 +20,7 @@ function greetingFor(name) {
 // Collecting milk: offline-first. Every action is written to the phone first
 // and uploaded by the background sync. An open shift is a draft: nothing in it
 // counts until the shift is closed and accepted by a storekeeper / manager.
-export default function Collector({ tick, refresh, setFull }) {
+export default function Collector({ tick, refresh, setFull, histReq = 0 }) {
   const shift = store.getOpenShift();
   // Unfinished input survives the app being killed: reopen straight into it.
   const [draft, setDraftState] = useState(() => (store.getOpenShift() ? store.getKv('draft') : null));
@@ -45,6 +45,10 @@ export default function Collector({ tick, refresh, setFull }) {
     if (shift?.uuid && locationOn) { startLocation(); return () => stopLocation(); }
     return undefined;
   }, [shift?.uuid, locationOn]);
+
+  // A 2-second long-press on the "Smena" tab opens own shift history, even while
+  // a shift is open. histReq is bumped by Home on each long-press.
+  useEffect(() => { if (histReq > 0) setScreen('history'); }, [histReq]);
 
   return (
     <View style={{ flex: 1 }}>
@@ -153,10 +157,12 @@ function StartShift({ tick, refresh, onOpen, onNav }) {
       <View style={[s.pad, { gap: 10 }]}>
         {api.can('payments.create') && <Btn title="To'lov kiritish" kind="ghost" onPress={() => onNav('pay')} />}
         {/* A red dot marks a cancelled or not-yet-accepted shift that needs fixing. */}
-        <View>
-          <Btn title="Smenalarim tarixi" kind="ghost" onPress={() => onNav('history')} />
-          {!!block && <View style={{ position: 'absolute', top: 8, right: 14, width: 12, height: 12, borderRadius: 6, backgroundColor: C.err }} />}
-        </View>
+        {api.can('collect.view_own_shifts') && (
+          <View>
+            <Btn title="Smenalarim tarixi" kind="ghost" onPress={() => onNav('history')} />
+            {!!block && <View style={{ position: 'absolute', top: 8, right: 14, width: 12, height: 12, borderRadius: 6, backgroundColor: C.err }} />}
+          </View>
+        )}
         <Btn title="Ro'yxatni yangilash" kind="ghost" onPress={() => api.syncNow()} />
       </View>
     </View>

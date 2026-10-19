@@ -16,7 +16,7 @@ const TABS = [
   ['today', 'Kun', () => api.can('reports.view')],
   ['shifts', 'Smenalar', () => api.can('shifts.view_all')],
   ['debts', 'Qarzlar', () => api.can('debts.view')],
-  ['me', 'Men', () => true],
+  ['me', 'Profil', () => true],
 ];
 
 export default function Home({ tick, refresh, onLogout }) {
@@ -28,6 +28,9 @@ export default function Home({ tick, refresh, onLogout }) {
   const [cardId, setCardId] = useState(null);
   const [payFor, setPayFor] = useState(null);
   const [toast, setToast] = useState('');
+  // Long-pressing the "Smena" tab (2s) opens the collector's own shift history,
+  // even while a shift is open. Bumping this counter signals the request.
+  const [histReq, setHistReq] = useState(0);
   const current = tabs.some((t) => t[0] === tab) ? tab : tabs[0][0];
   const me = api.me();
 
@@ -39,7 +42,7 @@ export default function Home({ tick, refresh, onLogout }) {
     body = <SupplierCard id={cardId} onBack={() => setCardId(null)} onPay={setPayFor} />;
   } else if (shiftId) {
     body = <ShiftDetail id={shiftId} onBack={() => setShiftId(null)} onChanged={refresh} />;
-  } else if (current === 'collect') body = <Collector tick={tick} refresh={refresh} setFull={setFull} />;
+  } else if (current === 'collect') body = <Collector tick={tick} refresh={refresh} setFull={setFull} histReq={histReq} />;
   else if (current === 'today') body = <Today onShift={setShiftId} />;
   else if (current === 'shifts') body = <Shifts onShift={setShiftId} tick={tick} />;
   else if (current === 'debts') body = <Debts onOpen={setCardId} onPay={setPayFor} tick={tick} />;
@@ -61,7 +64,10 @@ export default function Home({ tick, refresh, onLogout }) {
       {chrome && tabs.length > 1 && (
         <View style={{ flexDirection: 'row', borderTopWidth: 1, borderColor: C.line, backgroundColor: C.card }}>
           {tabs.map(([k, t]) => (
-            <Pressable key={k} onPress={() => setTab(k)} style={{ flex: 1, paddingVertical: 14, alignItems: 'center' }}>
+            <Pressable key={k} onPress={() => setTab(k)}
+              onLongPress={k === 'collect' && api.can('collect.view_own_shifts') ? () => { setTab('collect'); setHistReq((n) => n + 1); } : undefined}
+              delayLongPress={2000}
+              style={{ flex: 1, paddingVertical: 14, alignItems: 'center' }}>
               <Text style={{ fontSize: 15, fontWeight: current === k ? '700' : '500', color: current === k ? C.accent : C.muted }}>{t}</Text>
             </Pressable>
           ))}

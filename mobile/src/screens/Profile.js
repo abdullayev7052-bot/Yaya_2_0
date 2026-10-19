@@ -9,7 +9,7 @@ import { Btn, Chip } from '../components';
 import { PinSetup } from './Lock';
 import { s } from '../ui';
 
-// "Men": who is logged in, app lock (PIN / fingerprint / auto-lock), password, logout.
+// "Profil": who is logged in, app lock (PIN / fingerprint / auto-lock), password, logout.
 export default function Profile({ tick, onLogout, setFull }) {
   const me = api.me();
   const [cfg, setCfg] = useState(lock.getLock());

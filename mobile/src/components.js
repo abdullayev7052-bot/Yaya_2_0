@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Image, Platform, Pressable, Text, View } from 'react-native';
+import { Image, Modal, Platform, Pressable, Text, View } from 'react-native';
 import { getBrand } from './api';
 import { useBack } from './back';
 import { C, fmtTime, s } from './ui';
@@ -159,6 +159,84 @@ export function DayPicker({ day, onChange }) {
       <Pressable style={[s.btnGhost, { paddingHorizontal: 18 }, day >= today && { opacity: 0.3 }]} disabled={day >= today}
         onPress={() => onChange(addDays(day, 1))}><Text style={s.btnGhostText}>›</Text></Pressable>
     </View>
+  );
+}
+
+// ---- calendar (pick one day or a range) ----
+const MONTHS = ['Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun', 'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr'];
+const WEEKDAYS = ['Du', 'Se', 'Ch', 'Pa', 'Ju', 'Sh', 'Ya'];
+const ym = (day) => day.slice(0, 7);
+const shiftMonth = (m, n) => {
+  const [y, mo] = m.split('-').map(Number);
+  const d = new Date(Date.UTC(y, mo - 1 + n, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+};
+
+// A plain month grid. Tap one day for a single day, a second day to make a range;
+// a further tap starts over. Future days are disabled. Apply confirms {from,to}.
+export function CalendarModal({ visible, from, to, onClose, onApply }) {
+  const today = todayLocal();
+  const [month, setMonth] = useState(() => ym(from || today));
+  const [a, setA] = useState(from || today);
+  const [b, setB] = useState(to || from || today);
+  useEffect(() => {
+    if (!visible) return;
+    setA(from || today); setB(to || from || today); setMonth(ym(from || today));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
+
+  const [Y, M] = month.split('-').map(Number);
+  const startWd = (new Date(Date.UTC(Y, M - 1, 1)).getUTCDay() + 6) % 7; // Mon = 0
+  const daysIn = new Date(Date.UTC(Y, M, 0)).getUTCDate();
+  const cells = [...Array(startWd).fill(null), ...Array.from({ length: daysIn }, (_, i) => `${month}-${String(i + 1).padStart(2, '0')}`)];
+  const lo = a <= b ? a : b;
+  const hi = a <= b ? b : a;
+
+  const tap = (day) => {
+    if (day > today) return;
+    if (a === b) { // a single day is selected → the next tap makes a range
+      if (day === a) return;
+      setA(a); setB(day);
+    } else { setA(day); setB(day); } // a range exists → start over with one day
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable onPress={onClose} style={{ flex: 1, backgroundColor: '#0008', justifyContent: 'center', padding: 16 }}>
+        <Pressable onPress={() => {}} style={[s.card, { gap: 10, padding: 14 }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Pressable onPress={() => setMonth(shiftMonth(month, -1))} hitSlop={12} style={{ padding: 6 }}><Text style={{ fontSize: 24, color: C.accent }}>‹</Text></Pressable>
+            <Text style={[s.h2, { flex: 1, textAlign: 'center' }]}>{MONTHS[M - 1]} {Y}</Text>
+            <Pressable onPress={() => { if (shiftMonth(month, 1) <= ym(today)) setMonth(shiftMonth(month, 1)); }} hitSlop={12}
+              style={{ padding: 6, opacity: shiftMonth(month, 1) <= ym(today) ? 1 : 0.3 }}><Text style={{ fontSize: 24, color: C.accent }}>›</Text></Pressable>
+          </View>
+          <View style={{ flexDirection: 'row' }}>
+            {WEEKDAYS.map((w) => <Text key={w} style={{ flex: 1, textAlign: 'center', color: C.muted, fontSize: 12, fontWeight: '600' }}>{w}</Text>)}
+          </View>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+            {cells.map((day, i) => {
+              if (!day) return <View key={`e${i}`} style={{ width: `${100 / 7}%`, height: 40 }} />;
+              const inRange = day >= lo && day <= hi;
+              const edge = day === lo || day === hi;
+              const future = day > today;
+              return (
+                <Pressable key={day} onPress={() => tap(day)} disabled={future}
+                  style={{ width: `${100 / 7}%`, height: 40, alignItems: 'center', justifyContent: 'center' }}>
+                  <View style={{ width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center',
+                    backgroundColor: edge ? C.accent : inRange ? C.line : 'transparent' }}>
+                    <Text style={{ color: future ? C.muted : edge ? C.accentText : C.text, fontSize: 15, opacity: future ? 0.4 : 1 }}>{Number(day.slice(8))}</Text>
+                  </View>
+                </Pressable>
+              );
+            })}
+          </View>
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+            <Btn title="Bugun" kind="ghost" style={{ flex: 1 }} onPress={() => { setMonth(ym(today)); setA(today); setB(today); }} />
+            <Btn title="Tanlash" style={{ flex: 1 }} onPress={() => { onApply({ from: lo, to: hi }); onClose(); }} />
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
 import * as api from '../api';
 import { ask, notify } from '../dialog';
-import { Btn, Chip, Err, Header, ShiftBadge, Tile, addDays, fmtDT, fmtMoney, todayLocal, useLoad } from '../components';
+import { Btn, CalendarModal, Chip, Err, Header, ShiftBadge, Tile, addDays, fmtDay, fmtDT, fmtMoney, todayLocal, useLoad } from '../components';
 import { C, fmtQty, fmtTime, s } from '../ui';
 
 // Office sections of the app (storekeeper, accountant, manager, admin).
@@ -24,27 +24,31 @@ function ShiftRow({ x, onOpen }) {
   );
 }
 
-// ---------------------------------------------------------------- dashboard for a chosen range
-const RANGES = [['today', 'Bugun'], ['7', '7 kun'], ['30', '30 kun']];
-const rangeDates = (key, day) => (key === 'today' ? { from: day, to: day } : { from: addDays(day, -(Number(key) - 1)), to: day });
-
+// ---------------------------------------------------------------- dashboard for a chosen day/range
 export function Today({ onShift }) {
   const today = todayLocal();
-  const [range, setRange] = useState('today');
+  const [from, setFrom] = useState(today);
+  const [to, setTo] = useState(today);
+  const [cal, setCal] = useState(false);
   const [product, setProduct] = useState(0); // 0 = all products
-  const { from, to } = rangeDates(range, today);
+  const single = from === to;
   const qs = `from=${from}&to=${to}${product ? `&product=${product}` : ''}`;
-  const { data: d, err, busy, load } = useLoad(() => api.admin('GET', `/dashboard?${qs}`), [range, product]);
+  const { data: d, err, busy, load } = useLoad(() => api.admin('GET', `/dashboard?${qs}`), [from, to, product]);
   // Open shifts change minute by minute: keep the numbers live.
   useEffect(() => { const t = setInterval(load, 20000); return () => clearInterval(t); }, [load]);
   const m = money();
   const tot = d?.summary?.totals;
   const products = api.getProducts();
+  const goDay = (n) => { const x = addDays(to, n); setFrom(x); setTo(x); };
+  const header = single ? (from === today ? `Bugun, ${fmtDay(from)}` : fmtDay(from)) : `${fmtDay(from)} — ${fmtDay(to)}`;
   return (
     <ScrollView contentContainerStyle={{ padding: 12, gap: 12 }} refreshControl={<RefreshControl refreshing={busy} onRefresh={load} />}>
-      <View style={{ flexDirection: 'row', gap: 6 }}>
-        {RANGES.map(([k, t]) => <Chip key={k} label={t} on={range === k} onPress={() => setRange(k)} />)}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Pressable style={[s.btnGhost, { paddingHorizontal: 16, opacity: single ? 1 : 0.3 }]} disabled={!single} onPress={() => goDay(-1)}><Text style={s.btnGhostText}>‹</Text></Pressable>
+        <Pressable style={{ flex: 1 }} onPress={() => setCal(true)}><Text style={[s.h2, { textAlign: 'center' }]}>{header}</Text></Pressable>
+        <Pressable style={[s.btnGhost, { paddingHorizontal: 16 }, (!single || to >= today) && { opacity: 0.3 }]} disabled={!single || to >= today} onPress={() => goDay(1)}><Text style={s.btnGhostText}>›</Text></Pressable>
       </View>
+      <CalendarModal visible={cal} from={from} to={to} onClose={() => setCal(false)} onApply={({ from: f, to: t }) => { setFrom(f); setTo(t); }} />
       {products.length > 1 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
           <Chip label="Hammasi" on={!product} onPress={() => setProduct(0)} />
@@ -57,7 +61,7 @@ export function Today({ onShift }) {
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
             <Tile label="Qabul qilingan sut" value={fmtQty(tot.quantity)} sub={`kg · ${tot.shifts} ta smena`} />
             {m && <Tile label="Summa" value={fmtMoney(tot.amount)} sub="so'm" />}
-            {d.debt && <Tile label="Qarzdorlik" value={fmtMoney(d.debt.weOwe)} sub="so'm" wide={!m} />}
+            {d.debt && <Tile label="Qarzdorlik" value={fmtMoney(d.debt.weOwe)} sub={to >= today ? "so'm" : `so'm · ${fmtDay(to)} oxirida`} wide={!m} />}
           </View>
           <View style={[s.card, { gap: 6 }]}>
             <Text style={[s.text, { fontWeight: '700' }]}>Mahsulotlar{m ? ' va o\'rtacha tannarx' : ''}</Text>
