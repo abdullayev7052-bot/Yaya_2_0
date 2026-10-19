@@ -301,3 +301,31 @@ test('balances: as-of a past date, and manual balance edit records an adjustment
   const card = (await call(app, 'GET', '/api/admin/suppliers/1/card', b)).body;
   assert.ok(card.statement.entries.some((e) => e.kind === 'adjust'), 'adjustment in the akt-sverka');
 });
+
+test('intro video: supports HTTP range requests for native streaming', async () => {
+  const { app, db } = setup();
+  const bytes = Buffer.from('0123456789abcdef'); // stand-in video payload
+  db.prepare("INSERT INTO files (key, mime, data, updated_at) VALUES ('intro', 'video/mp4', ?, datetime('now'))").run(bytes);
+  const full = await app.inject({ method: 'GET', url: '/api/public/intro' });
+  assert.equal(full.statusCode, 200);
+  assert.equal(full.headers['accept-ranges'], 'bytes');
+  assert.equal(full.headers['content-length'], String(bytes.length));
+  const part = await app.inject({ method: 'GET', url: '/api/public/intro', headers: { range: 'bytes=4-7' } });
+  assert.equal(part.statusCode, 206);
+  assert.equal(part.headers['content-range'], `bytes 4-7/${bytes.length}`);
+  assert.equal(part.rawPayload.length, 4);
+  assert.equal(part.rawPayload.toString(), '4567');
+  const bad = await app.inject({ method: 'GET', url: '/api/public/intro', headers: { range: 'bytes=999-1000' } });
+  assert.equal(bad.statusCode, 416);
+});
+
+test('own shift history needs the view-own-shifts permission', async () => {
+  const { app, db } = setup();
+  // collector has it by default
+  assert.ok((await ali(app)) && (await call(app, 'GET', '/api/mobile/history', await ali(app))).status === 200);
+  // strip it from the collector role → the route is forbidden
+  const role = db.prepare("SELECT id, permissions FROM roles WHERE code = 'collector'").get();
+  const perms = JSON.parse(role.permissions).filter((p) => p !== 'collect.view_own_shifts');
+  db.prepare('UPDATE roles SET permissions = ? WHERE id = ?').run(JSON.stringify(perms), role.id);
+  assert.equal((await call(app, 'GET', '/api/mobile/history', await ali(app))).status, 403);
+});

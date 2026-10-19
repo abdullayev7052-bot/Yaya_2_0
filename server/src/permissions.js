@@ -9,6 +9,7 @@ export const PERMISSIONS = [
   { key: 'collect.edit_own', group: 'Sut qabul qilish (smena)', label: 'Ochiq smenadagi o\'z yozuvini tahrirlash' },
   { key: 'collect.delete_own', group: 'Sut qabul qilish (smena)', label: 'Ochiq smenadagi o\'z yozuvini o\'chirish' },
   { key: 'collect.copy_cancelled', group: 'Sut qabul qilish (smena)', label: 'O\'zining bekor qilingan smenasini nusxalash' },
+  { key: 'collect.view_own_shifts', group: 'Sut qabul qilish (smena)', label: 'O\'zining avvalgi smenalarini ko\'rish' },
 
   // --- suppliers
   { key: 'suppliers.card_own', group: 'Xonadonlar', label: 'O\'ziga biriktirilganlarning kartochkasi: kg tarixi va qarz qoldig\'i (narxsiz)' },
@@ -50,7 +51,7 @@ const ALL = PERMISSIONS.map((p) => p.key);
 
 // Collecting milk is a specific field job. Admins and office staff manage and
 // pay but never open a shift, so these are kept out of the admin role too.
-export const COLLECT_PERMS = ['collect.shift', 'collect.edit_own', 'collect.delete_own', 'collect.copy_cancelled'];
+export const COLLECT_PERMS = ['collect.shift', 'collect.edit_own', 'collect.delete_own', 'collect.copy_cancelled', 'collect.view_own_shifts'];
 // The admin has every permission except the collector ones, so the mobile app
 // never offers an admin a shift to open. Losing collect.* cannot lock anyone out.
 const ADMIN_PERMS = ALL.filter((k) => !COLLECT_PERMS.includes(k));

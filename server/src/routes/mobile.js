@@ -57,7 +57,7 @@ export default async function mobileRoutes(app, { db }) {
     return out;
   });
 
-  app.get('/history', need('collect.shift'), async (req) => myShifts(req.me.id, 60));
+  app.get('/history', need('collect.view_own_shifts'), async (req) => myShifts(req.me.id, 60));
 
   // Copy one of my own cancelled shifts into a new open draft.
   app.post('/shifts/:id/copy', need('collect.copy_cancelled'), async (req, reply) => {
