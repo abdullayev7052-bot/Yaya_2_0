@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import * as api from '../api';
 import { ask, notify } from '../dialog';
 import { Btn, CalendarModal, Chip, Err, Header, ShiftBadge, Tile, addDays, fmtDay, fmtDT, fmtMoney, todayLocal, useLoad } from '../components';
@@ -138,10 +139,19 @@ export function ShiftDetail({ id, onBack, onChanged }) {
       onChanged?.();
     } catch (e) { notify('Bo\'lmadi', e.message); }
   };
+  const copySummary = async () => {
+    try {
+      const { text } = await api.admin('GET', `/shifts/${id}/copytext`);
+      if (!text) { notify('Nusxalash', 'Nusxalash uchun ma\'lumot yo\'q.'); return; }
+      await Clipboard.setStringAsync(text);
+      notify('Nusxalandi', 'Smena ma\'lumotlari klaviaturaga nusxalandi.');
+    } catch (e) { notify('Bo\'lmadi', e.message); }
+  };
   const sh = d?.shift;
   return (
     <View style={{ flex: 1 }}>
-      <Header title={sh ? `${sh.label} — ${sh.employee_name}` : '...'} onBack={onBack} />
+      <Header title={sh ? `${sh.label} — ${sh.employee_name}` : '...'} onBack={onBack}
+        right={d && d.rows?.length ? <Pressable onPress={copySummary} hitSlop={10} style={{ padding: 6 }}><Text style={{ fontSize: 22 }}>📋</Text></Pressable> : null} />
       <Err err={err} />
       {d && (
         <FlatList

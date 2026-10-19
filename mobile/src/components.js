@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Image, Modal, Platform, Pressable, Text, View } from 'react-native';
+import { Image, Modal, Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { getBrand } from './api';
 import { useBack } from './back';
 import { C, fmtTime, s } from './ui';
@@ -111,12 +111,19 @@ export function Keypad({ value, onChange, onSubmit, onCancel, decimals = 2, maxD
 export const toNumber = (v) => Number(String(v).replace(',', '.'));
 export const digitsOf = (v) => String(v ?? '').replace(/\D/g, '');
 
+// Smart text key for search: lower-case, treat "x" and "h" as the same letter,
+// and drop apostrophes/accents. So "Hurmo" finds "Xurmo" and "Ozbek" finds "O'zbek".
+export const normText = (s) => String(s ?? '').toLowerCase()
+  .replace(/['‘’ʻʼ`´]/g, '')
+  .replace(/x/g, 'h');
+export const textMatch = (haystack, query) => normText(haystack).includes(normText(query));
+
 // Search by name, address or phone digits ("93 111" finds 931112233).
 export function matches(item, query) {
-  const q = query.trim().toLowerCase();
+  const q = normText(query.trim());
   if (!q) return true;
-  const d = digitsOf(q);
-  return item.name.toLowerCase().includes(q) || (item.address ?? '').toLowerCase().includes(q)
+  const d = digitsOf(query);
+  return normText(item.name).includes(q) || normText(item.address).includes(q)
     || (d.length >= 2 && digitsOf(item.phone).includes(d));
 }
 
@@ -147,6 +154,26 @@ export function useLoad(fn, deps) {
 }
 
 export const Err = ({ err }) => (err ? <Text style={[s.err, { padding: 12 }]}>{err}</Text> : null);
+
+// A search field with a built-in clear "✕" on the right. `right` adds a button
+// (e.g. "+") next to it.
+export function SearchBar({ value, onChange, placeholder = '🔍  Ism yoki telefon raqam', right }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+      <View style={{ flex: 1, justifyContent: 'center' }}>
+        <TextInput style={[s.input, { paddingRight: 38 }]} value={value} onChangeText={onChange}
+          placeholder={placeholder} placeholderTextColor={C.muted} autoCorrect={false} />
+        {!!value && (
+          <Pressable onPress={() => onChange('')} hitSlop={12}
+            style={{ position: 'absolute', right: 6, width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' }}>
+            <Text style={{ fontSize: 17, color: C.muted }}>✕</Text>
+          </Pressable>
+        )}
+      </View>
+      {right}
+    </View>
+  );
+}
 
 export function DayPicker({ day, onChange }) {
   const today = todayLocal();

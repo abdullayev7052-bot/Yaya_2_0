@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, FlatList, PanResponder, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Animated, FlatList, Modal, PanResponder, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import * as api from '../api';
 import * as store from '../db';
 import SyncBar from '../SyncBar';
 import { useBack } from '../back';
 import { distanceM, openRoute, startLocation, stopLocation, useMyLocation } from '../geo';
 import { ask, notify } from '../dialog';
-import { Btn, Chip, Header, Keypad, Logo, ShiftBadge, fmtDT, matches, toNumber } from '../components';
+import { Btn, Header, Keypad, Logo, SearchBar, ShiftBadge, digitsOf, fmtDT, matches, textMatch, toNumber } from '../components';
 import { NewSupplier, PaymentForm, SupplierCard } from './Supplier';
 import { C, fmtQty, fmtTime, s } from '../ui';
 
@@ -27,6 +27,9 @@ export default function Collector({ tick, refresh, setFull, histReq = 0 }) {
   const [screen, setScreen] = useState(null);
   // null | 'entries' | 'pay' | 'history' | 'close' | 'new' | { edit } | { card, from } | { payFor, from }
   const [toast, setToast] = useState('');
+  // The shift-list search text is kept here so it survives entering a quantity and
+  // coming back — the collector still sees who they just saved for.
+  const [shiftQ, setShiftQ] = useState('');
   void tick;
 
   const setDraft = (d) => { store.setKv('draft', d); setDraftState(d); };
@@ -106,6 +109,8 @@ export default function Collector({ tick, refresh, setFull, histReq = 0 }) {
       <ShiftView
         shift={shift}
         tick={tick}
+        q={shiftQ}
+        setQ={setShiftQ}
         onPick={(supplier) => {
           const def = supplier.products.find((p) => p.isDefault) ?? supplier.products[0];
           setDraft({ supplierId: supplier.id, productId: def?.id ?? null, qty: '' });
@@ -189,8 +194,7 @@ function StartShift({ tick, refresh, onOpen, onNav }) {
 }
 
 // ---------------------------------------------------------------- Shift: supplier list
-function ShiftView({ shift, tick, onPick, onNav }) {
-  const [q, setQ] = useState('');
+function ShiftView({ shift, tick, q, setQ, onPick, onNav }) {
   const suppliers = api.getSuppliers();
   const locationOn = api.locationEnabled();
   const lf = api.listFields();
@@ -229,15 +233,10 @@ function ShiftView({ shift, tick, onPick, onNav }) {
           <Text style={{ fontWeight: '700', color: C.text }}>{shiftName(shift.uuid)}</Text> · ochiq · {fmtTime(shift.opened_at)} · {rows.length} ta ·{' '}
           {Object.entries(totalByProduct).map(([k, v]) => `${k} ${fmtQty(v)}`).join(', ') || '0'}
         </Text>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          <TextInput style={[s.input, { flex: 1 }]} value={q} onChangeText={setQ} placeholder="🔍  Ism yoki telefon raqam"
-            autoCorrect={false} clearButtonMode="while-editing" />
-          {api.can('suppliers.create') && (
-            <Pressable onPress={() => onNav('new')} style={[s.btn, { paddingHorizontal: 18, paddingVertical: 0 }]} accessibilityLabel="Yangi xonadon">
-              <Text style={s.btnText}>＋</Text>
-            </Pressable>
-          )}
-        </View>
+        <SearchBar value={q} onChange={setQ}
+          right={api.can('suppliers.create')
+            ? <Pressable onPress={() => onNav('new')} style={[s.btn, { paddingHorizontal: 18, paddingVertical: 0, justifyContent: 'center' }]} accessibilityLabel="Yangi xonadon"><Text style={s.btnText}>＋</Text></Pressable>
+            : null} />
       </View>
       <FlatList
         data={list}
@@ -317,22 +316,25 @@ function QuantityPad({ title, onTitle, products, product, qty, onProduct, onQty,
     if (value > 1000) ask('Tekshiring', `${fmtQty(value)} ${product.unit || 'kg'} — to'g'rimi?`, 'Ha, saqlash', () => onSave(value));
     else onSave(value);
   };
+  const multi = products.length > 1;
+  const [picking, setPicking] = useState(false);
   return (
     <View style={{ flex: 1, padding: 12, gap: 10 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-        <Pressable onPress={onCancel} hitSlop={16} style={{ paddingRight: 6 }}><Text style={{ fontSize: 28, color: C.muted }}>←</Text></Pressable>
+        <Pressable onPress={onCancel} hitSlop={16} style={{ paddingRight: 2 }}><Text style={{ fontSize: 28, color: C.muted }}>←</Text></Pressable>
+        {/* Product, top-left. Tap to choose another of this household's products. */}
+        <Pressable onPress={() => multi && setPicking(true)} disabled={!multi}
+          style={({ pressed }) => [{ borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6, maxWidth: '55%',
+            backgroundColor: multi ? C.card : 'transparent', borderWidth: multi ? 1 : 0, borderColor: C.line }, pressed && { opacity: 0.6 }]}>
+          <Text style={[s.h2, { color: C.accent }]} numberOfLines={1}>{product.isDefault ? '★ ' : ''}{product.name}{multi ? '  ▾' : ''}</Text>
+        </Pressable>
         <View style={{ flex: 1 }} />
-        {/* Supplier name in the corner: tap for the card (history, debt, payment). */}
-        <Pressable onPress={onTitle} disabled={!onTitle} style={({ pressed }) => [{ maxWidth: '80%', borderRadius: 10, paddingHorizontal: 10,
-          paddingVertical: 6, backgroundColor: onTitle ? '#E6F2ED' : 'transparent' }, pressed && { opacity: 0.6 }]}>
+        {/* Household name: tap for the card (history, debt, payment). */}
+        <Pressable onPress={onTitle} disabled={!onTitle} style={({ pressed }) => [{ maxWidth: '45%', borderRadius: 10, paddingHorizontal: 10,
+          paddingVertical: 6 }, pressed && { opacity: 0.6 }]}>
           <Text style={[s.h2, { color: onTitle ? C.accent : C.text, textAlign: 'right' }]} numberOfLines={2}>{title}{onTitle ? '  ⓘ' : ''}</Text>
         </Pressable>
       </View>
-      {products.length > 1 ? (
-        <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-          {products.map((p) => <Chip key={p.id} label={p.name} on={p.id === product.id} onPress={() => onProduct(p)} />)}
-        </View>
-      ) : <Text style={s.muted}>{product.name}</Text>}
       <View style={[s.card, { alignItems: 'flex-end', paddingVertical: 20 }]}>
         <Text style={{ fontSize: 56, fontWeight: '700', color: qty ? C.text : C.line }} adjustsFontSizeToFit numberOfLines={1}>
           {qty || '0'} <Text style={{ fontSize: 28, color: C.muted }}>{product.unit || 'kg'}</Text>
@@ -342,23 +344,50 @@ function QuantityPad({ title, onTitle, products, product, qty, onProduct, onQty,
       <Pressable style={[s.btn, { paddingVertical: 22 }, !(value > 0) && { opacity: 0.4 }]} onPress={save} disabled={!(value > 0)}>
         <Text style={[s.btnText, { fontSize: 26 }]}>{saveLabel}</Text>
       </Pressable>
+      <Modal visible={picking} transparent animationType="fade" onRequestClose={() => setPicking(false)}>
+        <Pressable onPress={() => setPicking(false)} style={{ flex: 1, backgroundColor: '#0008', justifyContent: 'center', padding: 24 }}>
+          <Pressable onPress={() => {}} style={[s.card, { gap: 2 }]}>
+            <Text style={[s.h2, { marginBottom: 6 }]}>Mahsulotni tanlang</Text>
+            {products.map((p) => (
+              <Pressable key={p.id} onPress={() => { onProduct(p); setPicking(false); }}
+                style={({ pressed }) => [{ paddingVertical: 14, paddingHorizontal: 10, borderRadius: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
+                  p.id === product.id && { backgroundColor: C.line }, pressed && { opacity: 0.6 }]}>
+                <Text style={{ fontSize: 20, width: 22, color: C.warn }}>{p.isDefault ? '★' : ''}</Text>
+                <Text style={[s.text, { fontSize: 19, fontWeight: p.id === product.id ? '700' : '500', flex: 1 }]}>{p.name}</Text>
+                {p.id === product.id && <Text style={{ color: C.accent, fontSize: 18 }}>✓</Text>}
+              </Pressable>
+            ))}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
 
 // ---------------------------------------------------------------- Own entries: edit / delete (open shift only)
 function Entries({ shift, tick, onBack, onEdit, refresh }) {
-  const rows = useMemo(() => store.shiftCollections(shift.uuid), [shift.uuid, tick]);
+  const all = useMemo(() => store.shiftCollections(shift.uuid), [shift.uuid, tick]);
+  const [q, setQ] = useState('');
   const canEdit = api.can('collect.edit_own');
   const canDelete = api.can('collect.delete_own');
+  // Search own entries by household name or phone.
+  const phoneOf = (id) => api.getSuppliers().find((x) => x.id === id)?.phone ?? '';
+  const d = digitsOf(q);
+  const rows = q.trim()
+    ? all.filter((r) => textMatch(r.supplier_name, q) || (d.length >= 2 && digitsOf(phoneOf(r.supplier_id)).includes(d)))
+    : all;
   return (
     <View style={{ flex: 1 }}>
       <Header title={`${shiftName(shift.uuid)} — yozuvlar`} onBack={onBack} />
+      <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}>
+        <SearchBar value={q} onChange={setQ} />
+      </View>
       <FlatList
         data={rows}
         keyExtractor={(r) => r.uuid}
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 12, gap: 8 }}
-        ListEmptyComponent={<Text style={[s.muted, { padding: 16 }]}>Hali yozuv yo'q</Text>}
+        ListEmptyComponent={<Text style={[s.muted, { padding: 16 }]}>{all.length ? 'Topilmadi' : 'Hali yozuv yo\'q'}</Text>}
         renderItem={({ item: r }) => (
           <View style={[s.card, { gap: 6 }]}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
