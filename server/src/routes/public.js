@@ -15,6 +15,11 @@ export default async function publicRoutes(app, { db }) {
       introMime: intro?.mime ?? null,
       locationEnabled: getSetting(db, 'location_enabled') !== '0',
       cancelEnabled: getSetting(db, 'cancel_enabled') !== '0',
+      listFields: {
+        name: getSetting(db, 'list_show_name') !== '0',
+        address: getSetting(db, 'list_show_address') !== '0',
+        phone: getSetting(db, 'list_show_phone') !== '0',
+      },
     };
   });
 

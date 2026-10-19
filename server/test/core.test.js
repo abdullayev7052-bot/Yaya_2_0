@@ -232,11 +232,14 @@ test('admin never collects; recovery credential signs in as admin', async () => 
 test('field staff can set a supplier location with suppliers.location but not rename', async () => {
   const { app, db } = setup();
   const h = await ali(app); // collector: has suppliers.location, not suppliers.edit
-  const loc = await call(app, 'POST', '/api/mobile/suppliers/1/location', h, { lat: 40.5, lng: 71.2, address: 'Buvayda' });
+  // set a manual address first (via admin PATCH, allowed with suppliers.location)
+  await call(app, 'PATCH', '/api/admin/suppliers/1', h, { address: 'Buvayda' });
+  // the map sets only the coordinates — it must never overwrite the manual address
+  const loc = await call(app, 'POST', '/api/mobile/suppliers/1/location', h, { lat: 40.5, lng: 71.2, address: 'Xarita nomi' });
   assert.equal(loc.status, 200);
   const card = (await call(app, 'GET', '/api/mobile/suppliers/1/card', h)).body;
   assert.equal(card.supplier.lat, 40.5);
-  assert.equal(card.supplier.address, 'Buvayda');
+  assert.equal(card.supplier.address, 'Buvayda', 'map does not overwrite the manual address');
   assert.equal(card.canSetLocation, true);
   assert.equal(card.canEdit, false);
   // renaming via admin PATCH is refused for a collector
@@ -328,4 +331,20 @@ test('own shift history needs the view-own-shifts permission', async () => {
   const perms = JSON.parse(role.permissions).filter((p) => p !== 'collect.view_own_shifts');
   db.prepare('UPDATE roles SET permissions = ? WHERE id = ?').run(JSON.stringify(perms), role.id);
   assert.equal((await call(app, 'GET', '/api/mobile/history', await ali(app))).status, 403);
+});
+
+test('list field visibility is saved and exposed to the app via brand', async () => {
+  const { app } = setup();
+  const b = await boss(app);
+  // default: all three on
+  let st = (await call(app, 'GET', '/api/admin/settings', b)).body;
+  assert.deepEqual(st.listFields, { name: true, address: true, phone: true });
+  // turn the phone column off
+  assert.equal((await call(app, 'PUT', '/api/admin/settings', b, { listFields: { name: true, address: true, phone: false } })).status, 200);
+  st = (await call(app, 'GET', '/api/admin/settings', b)).body;
+  assert.equal(st.listFields.phone, false);
+  // the app reads it from the public brand endpoint
+  const brand = (await call(app, 'GET', '/api/public/brand', {})).body;
+  assert.equal(brand.listFields.phone, false);
+  assert.equal(brand.listFields.name, true);
 });

@@ -115,8 +115,9 @@ export default async function mobileRoutes(app, { db }) {
     const lat = inRange(b.lat);
     const lng = inRange(b.lng);
     if (Number.isNaN(lat) || Number.isNaN(lng)) return reply.code(400).send({ error: 'Koordinata noto\'g\'ri' });
-    db.prepare('UPDATE suppliers SET address = COALESCE(?, address), lat = ?, lng = ? WHERE id = ?')
-      .run(b.address === undefined ? null : str(b.address), lat, lng, id);
+    // Only the coordinates are stored. The address is a manual field (set in the
+    // panel), never overwritten by the map's reverse-geocoded name.
+    db.prepare('UPDATE suppliers SET lat = ?, lng = ? WHERE id = ?').run(lat, lng, id);
     audit(db, req.actor, 'suppliers.location', { id, name: s.name, fromApp: true });
     return { ok: true };
   });

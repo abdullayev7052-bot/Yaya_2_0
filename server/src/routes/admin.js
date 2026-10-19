@@ -548,6 +548,12 @@ export default async function adminRoutes(app, { db }) {
     // Location (map) and cancelling default ON; stored only when turned off.
     locationEnabled: getSetting(db, 'location_enabled') !== '0',
     cancelEnabled: getSetting(db, 'cancel_enabled') !== '0',
+    // Which fields show in the collector's shift household list. All on by default.
+    listFields: {
+      name: getSetting(db, 'list_show_name') !== '0',
+      address: getSetting(db, 'list_show_address') !== '0',
+      phone: getSetting(db, 'list_show_phone') !== '0',
+    },
   }));
   app.put('/settings', need('settings.manage'), async (req) => {
     if (req.body?.companyName !== undefined) setSetting(db, 'company_name', str(req.body.companyName, 60));
@@ -558,6 +564,13 @@ export default async function adminRoutes(app, { db }) {
     if (req.body?.locationEnabled !== undefined) setSetting(db, 'location_enabled', req.body.locationEnabled ? '1' : '0');
     // cancel_enabled: when off, no "Bekor qilish" anywhere — only accepting shifts.
     if (req.body?.cancelEnabled !== undefined) setSetting(db, 'cancel_enabled', req.body.cancelEnabled ? '1' : '0');
+    // listFields: which columns show in the collector's shift household list.
+    if (req.body?.listFields) {
+      const lf = req.body.listFields;
+      if (lf.name !== undefined) setSetting(db, 'list_show_name', lf.name ? '1' : '0');
+      if (lf.address !== undefined) setSetting(db, 'list_show_address', lf.address ? '1' : '0');
+      if (lf.phone !== undefined) setSetting(db, 'list_show_phone', lf.phone ? '1' : '0');
+    }
     setSetting(db, 'brand_version', Date.now());
     log(req, 'settings.update', { companyName: req.body?.companyName });
     return { ok: true };
