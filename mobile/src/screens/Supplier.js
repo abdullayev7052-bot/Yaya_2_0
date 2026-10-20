@@ -46,7 +46,8 @@ function MapPicker({ supplier, onPick, onClose }) {
 // debt or advance, recent payments and a "pay" button when allowed.
 export function SupplierCard({ id, onBack, onPay }) {
   const { data: c, err, busy, load } = useLoad(() => api.mobile('GET', `/suppliers/${id}/card`), [id]);
-  const [renaming, setRenaming] = useState(null);
+  const [editing, setEditing] = useState(null); // { name, phone, address }
+  const [priceEdit, setPriceEdit] = useState(null); // { productId, name, value }
   const [mapOpen, setMapOpen] = useState(false);
   const [locBusy, setLocBusy] = useState(false);
   const local = api.getSuppliers().find((x) => x.id === id);
@@ -55,12 +56,19 @@ export function SupplierCard({ id, onBack, onPay }) {
   // Payments made on this phone that have not reached the server yet.
   const unsent = store.recentPayments().filter((p) => p.supplier_id === id && !p.synced_at);
 
-  const rename = async () => {
+  const saveSupplier = async () => {
     try {
-      await api.admin('PATCH', `/suppliers/${id}`, { name: renaming.trim() });
-      setRenaming(null);
+      await api.admin('PATCH', `/suppliers/${id}`, { name: editing.name.trim(), phone: editing.phone, address: editing.address });
+      setEditing(null);
       await load();
       api.syncNow();
+    } catch (e) { notify('Xato', e.message); }
+  };
+  const savePrice = async () => {
+    try {
+      await api.admin('PUT', '/supplier-products', { supplierId: id, productId: priceEdit.productId, price: Math.round(Number(String(priceEdit.value).replace(/\s/g, ''))) || 0 });
+      setPriceEdit(null);
+      await load();
     } catch (e) { notify('Xato', e.message); }
   };
 
@@ -100,15 +108,37 @@ export function SupplierCard({ id, onBack, onPay }) {
         ListHeaderComponent={c ? (
           <View style={{ gap: 10, marginBottom: 8 }}>
             {!!(c.supplier.phone || c.supplier.address) && <Text style={s.muted}>{[c.supplier.phone, c.supplier.address].filter(Boolean).join(' · ')}</Text>}
-            {renaming != null ? (
-              <View style={{ gap: 8 }}>
-                <TextInput style={s.input} value={renaming} onChangeText={setRenaming} autoFocus />
+            {editing != null ? (
+              <View style={[s.card, { gap: 8 }]}>
+                <Text style={[s.text, { fontWeight: '700' }]}>Xonadon ma'lumotlari</Text>
+                <TextInput style={s.input} value={editing.name} onChangeText={(t) => setEditing({ ...editing, name: t })} placeholder="Ism" placeholderTextColor={C.placeholder} autoFocus />
+                <TextInput style={s.input} value={editing.phone} onChangeText={(t) => setEditing({ ...editing, phone: t })} placeholder="Telefon" placeholderTextColor={C.placeholder} keyboardType="phone-pad" />
+                <TextInput style={s.input} value={editing.address} onChangeText={(t) => setEditing({ ...editing, address: t })} placeholder="Manzil" placeholderTextColor={C.placeholder} />
                 <View style={{ flexDirection: 'row', gap: 8 }}>
-                  <Btn title="Bekor" kind="ghost" style={{ flex: 1 }} onPress={() => setRenaming(null)} />
-                  <Btn title="Saqlash" style={{ flex: 1 }} disabled={!renaming.trim()} onPress={rename} />
+                  <Btn title="Bekor" kind="ghost" style={{ flex: 1 }} onPress={() => setEditing(null)} />
+                  <Btn title="Saqlash" style={{ flex: 1 }} disabled={!editing.name.trim()} onPress={saveSupplier} />
                 </View>
               </View>
-            ) : c.canEdit && <Btn title="Ismini tahrirlash" kind="ghost" onPress={() => setRenaming(c.supplier.name)} />}
+            ) : c.canEdit && <Btn title="✎ Ma'lumotlarini tahrirlash" kind="ghost" onPress={() => setEditing({ name: c.supplier.name, phone: c.supplier.phone || '', address: c.supplier.address || '' })} />}
+            {c.seePrices && !!c.products?.length && (
+              <View style={[s.card, { gap: 6 }]}>
+                <Text style={[s.text, { fontWeight: '700' }]}>Mahsulotlar va narxlar</Text>
+                {c.products.map((p) => (priceEdit?.productId === p.id ? (
+                  <View key={p.id} style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                    <Text style={[s.text, { flex: 1 }]}>{p.isDefault ? '★ ' : ''}{p.name}</Text>
+                    <TextInput style={[s.input, { width: 110 }]} value={priceEdit.value} onChangeText={(t) => setPriceEdit({ ...priceEdit, value: t })} keyboardType="numeric" autoFocus />
+                    <Btn title="✓" style={{ paddingHorizontal: 14 }} onPress={savePrice} />
+                    <Btn title="✕" kind="ghost" style={{ paddingHorizontal: 12 }} onPress={() => setPriceEdit(null)} />
+                  </View>
+                ) : (
+                  <View key={p.id} style={{ flexDirection: 'row', gap: 8, alignItems: 'center', borderTopWidth: 1, borderColor: C.line, paddingTop: 6 }}>
+                    <Text style={[s.text, { flex: 1 }]}>{p.isDefault ? '★ ' : ''}{p.name}</Text>
+                    <Text style={[s.text, { fontWeight: '700' }]}>{p.price == null ? 'narx yo\'q' : `${fmtMoney(p.price)} so'm`}</Text>
+                    {c.canManagePrices && <Btn title="✎" kind="ghost" style={{ paddingHorizontal: 12 }} onPress={() => setPriceEdit({ productId: p.id, name: p.name, value: p.price == null ? '' : String(p.price) })} />}
+                  </View>
+                )))}
+              </View>
+            )}
             {c.canSetLocation && api.locationEnabled() && (
               <View style={[s.card, { gap: 8 }]}>
                 <Text style={[s.text, { fontWeight: '700' }]}>📍 Manzil / joylashuv</Text>
@@ -199,14 +229,23 @@ export function NewSupplier({ onBack, onCreated }) {
   const [address, setAddress] = useState('');
   const products = api.getProducts();
   const [picked, setPicked] = useState(products.length === 1 ? [products[0].id] : []);
+  const [prices, setPrices] = useState({}); // productId -> price string (only for price managers)
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const canPrice = api.can('prices.manage');
   const toggle = (id) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
   const save = async () => {
     setBusy(true);
     setErr('');
     try {
       const r = await api.mobile('POST', '/suppliers', { name, phone, address, productIds: picked });
+      // A price manager can set prices right away.
+      if (canPrice) {
+        for (const pid of picked) {
+          const price = Math.round(Number(String(prices[pid] ?? '').replace(/\s/g, '')));
+          if (price > 0) await api.admin('PUT', '/supplier-products', { supplierId: r.id, productId: pid, price, isDefault: pid === picked[0] });
+        }
+      }
       await api.refreshBootstrap();
       onCreated(api.getSuppliers().find((x) => x.id === r.id) ?? null);
     } catch (e) { setErr(e.offline ? 'Yangi xonadon qo\'shish uchun internet kerak' : e.message); } finally { setBusy(false); }
@@ -218,11 +257,24 @@ export function NewSupplier({ onBack, onCreated }) {
         <TextInput style={s.input} value={name} onChangeText={setName} placeholder="Ism familiya" />
         <TextInput style={s.input} value={phone} onChangeText={setPhone} placeholder="Telefon (ixtiyoriy)" keyboardType="phone-pad" />
         <TextInput style={s.input} value={address} onChangeText={setAddress} placeholder="Manzil (ixtiyoriy)" />
-        <Text style={s.muted}>Qaysi mahsulotni topshiradi?</Text>
+        <Text style={s.muted}>Qaysi mahsulotni topshiradi?{picked.length ? ' (birinchisi — asosiy ★)' : ''}</Text>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           {products.map((p) => <Chip key={p.id} label={p.name} on={picked.includes(p.id)} onPress={() => toggle(p.id)} />)}
         </View>
-        <Text style={s.muted}>Narxni admin belgilaydi. Narx belgilanmaguncha smena qabul qilinmaydi.</Text>
+        {canPrice ? (
+          <View style={{ gap: 8 }}>
+            {picked.map((pid, i) => {
+              const p = products.find((x) => x.id === pid);
+              return (
+                <View key={pid} style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                  <Text style={[s.text, { flex: 1 }]}>{i === 0 ? '★ ' : ''}{p?.name} narxi</Text>
+                  <TextInput style={[s.input, { width: 130 }]} value={prices[pid] ?? ''} onChangeText={(t) => setPrices({ ...prices, [pid]: t })} placeholder="so'm" placeholderTextColor={C.placeholder} keyboardType="numeric" />
+                </View>
+              );
+            })}
+            <Text style={s.muted}>Narxni keyin ham o'zgartirish mumkin. Narx belgilanmaguncha smena qabul qilinmaydi.</Text>
+          </View>
+        ) : <Text style={s.muted}>Narxni admin yoki buxgalter belgilaydi. Narx belgilanmaguncha smena qabul qilinmaydi.</Text>}
         {!!err && <Text style={s.err}>{err}</Text>}
         <Btn title={busy ? 'Saqlanmoqda...' : 'Qo\'shish'} disabled={busy || !name.trim() || !picked.length} onPress={save} />
       </ScrollView>
