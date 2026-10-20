@@ -285,20 +285,48 @@ function costTable(products) {
     </table></div></div>`;
 }
 
+// Accepted-quantity difference analytics: real vs. written, real cost and the
+// company's surplus/shortfall value — by product, collector and shift.
+function diffCard(dr) {
+  const m = money();
+  const sign = (n) => `<b style="color:${n > 0 ? 'var(--ok)' : n < 0 ? 'var(--err)' : 'var(--muted)'}">${n > 0 ? '+' : ''}${fmtNum(n)}</b>`;
+  const gain = (n) => (m ? `<b style="color:${n >= 0 ? 'var(--ok)' : 'var(--err)'}">${n >= 0 ? '+' : ''}${fmtMoney(n)}</b>` : '—');
+  return `<div class="card"><h2>Farqdan yutuq / yo'qotish</h2>
+    <div class="tiles">
+      <div class="tile"><div class="k">Jami farq</div><div class="v">${sign(dr.totals.diff_q)}</div><div class="s">kg</div></div>
+      ${m ? `<div class="tile"><div class="k">Yutuq / yo'qotish</div><div class="v">${gain(dr.totals.gain)}</div><div class="s">so'm</div></div>` : ''}
+      <div class="tile"><div class="k">Qabul qilingan</div><div class="v">${fmtNum(dr.totals.real_q)}</div><div class="s">kg (yozilgan ${fmtNum(dr.totals.written_q)})</div></div>
+    </div>
+    <h2 style="margin-top:12px">Mahsulotlar bo'yicha</h2><div class="table-wrap"><table>
+      <tr><th>Mahsulot</th><th class="num">Yozilgan</th><th class="num">Qabul (real)</th><th class="num">Farq</th>${m ? '<th class="num">Nominal tannarx</th><th class="num">Real tannarx</th><th class="num">Yutuq</th>' : ''}</tr>
+      ${dr.byProduct.map((p) => `<tr><td>${esc(p.name)}</td><td class="num">${fmtNum(p.written_q)} ${esc(p.unit)}</td><td class="num"><b>${fmtNum(p.real_q)}</b></td><td class="num">${sign(p.diff_q)}</td>${m ? `<td class="num">${fmtNum(p.nominal_cost)}</td><td class="num"><b>${fmtNum(p.real_cost)}</b></td><td class="num">${gain(p.gain)}</td>` : ''}</tr>`).join('')}
+    </table></div>
+    <h2 style="margin-top:12px">Sut yig'uvchilar bo'yicha</h2><div class="table-wrap"><table>
+      <tr><th>Xodim</th><th class="num">Qabul</th><th class="num">Farq</th>${m ? '<th class="num">Yutuq / yo\'qotish</th>' : ''}</tr>
+      ${dr.byEmployee.map((e) => `<tr><td>${esc(e.name)}</td><td class="num">${fmtNum(e.real_q)}</td><td class="num">${sign(e.diff_q)}</td>${m ? `<td class="num">${gain(e.gain)}</td>` : ''}</tr>`).join('')}
+    </table></div>
+    <h2 style="margin-top:12px">Smenalar bo'yicha</h2><div class="table-wrap"><table>
+      <tr><th>Smena</th><th>Xodim</th><th class="num">Qabul</th><th class="num">Farq</th>${m ? '<th class="num">Yutuq / yo\'qotish</th>' : ''}</tr>
+      ${dr.byShift.map((x) => `<tr><td><a href="#shift?id=${x.id}"><b>${esc(x.label)}</b></a></td><td>${esc(x.employee_name)}</td><td class="num">${fmtNum(x.real_q)}</td><td class="num">${sign(x.diff_q)}</td>${m ? `<td class="num">${gain(x.gain)}</td>` : ''}</tr>`).join('')}
+    </table></div></div>`;
+}
+
 function shiftRows(list, { actions = true, showAmount = true } = {}) {
+  const diffCols = can('diff.view');
+  const sign = (n) => (n == null ? '—' : `<b style="color:${n > 0 ? 'var(--ok)' : n < 0 ? 'var(--err)' : 'var(--muted)'}">${n > 0 ? '+' : ''}${fmtNum(n)}</b>`);
   return `<div class="table-wrap"><table>
-    <tr><th>Smena</th><th>Xodim</th><th>Ochilgan</th><th>Yopilgan</th><th class="num">Uylar</th><th class="num">kg</th>${money() && showAmount ? '<th class="num">Summa</th>' : ''}<th>Holat</th><th></th></tr>
+    <tr><th>Smena</th><th>Xodim</th><th>Ochilgan</th><th>Yopilgan</th><th class="num">Uylar</th><th class="num">kg</th>${diffCols ? '<th class="num">Qabul</th><th class="num">Farq</th>' : ''}${money() && showAmount ? '<th class="num">Summa</th>' : ''}<th>Holat</th><th></th></tr>
     ${list.map((s) => `<tr>
       <td><a href="#shift?id=${s.id}"><b>${esc(s.label)}</b></a></td>
       <td>${esc(s.employee_name)} ${s.is_test ? '<span class="badge test">test</span>' : ''}</td>
       <td>${esc(fmtDate(s.opened_at))}</td><td>${esc(fmtDate(s.closed_at))}</td>
-      <td class="num">${s.suppliers}</td><td class="num"><b>${fmtNum(s.quantity)}</b></td>${money() && showAmount ? `<td class="num">${s.status === 'accepted' ? fmtMoney(s.amount) : '—'}</td>` : ''}
+      <td class="num">${s.suppliers}</td><td class="num"><b>${fmtNum(s.quantity)}</b></td>${diffCols ? `<td class="num">${s.accepted_quantity != null ? fmtNum(s.accepted_quantity) : '—'}</td><td class="num">${sign(s.diff_quantity)}</td>` : ''}${money() && showAmount ? `<td class="num">${s.status === 'accepted' ? fmtMoney(s.amount) : '—'}</td>` : ''}
       <td>${shiftBadge(s.status)}${s.cancel_reason ? `<div class="muted">${esc(s.cancel_reason)}</div>` : ''}</td>
-      <td class="row">${actions ? shiftActions(s) : ''}</td></tr>`).join('') || '<tr><td colspan="9" class="muted">Yo\'q</td></tr>'}
+      <td class="row">${actions ? shiftActions(s) : ''}</td></tr>`).join('') || `<tr><td colspan="${diffCols ? 11 : 9}" class="muted">Yo\'q</td></tr>`}
   </table></div>`;
 }
-const shiftActions = (s) => [
-  s.status === 'closed' && can('shifts.accept') ? `<button class="small" data-accept="${s.id}">Qabul qilish</button>` : '',
+const shiftActions = (s, { skipAccept = false } = {}) => [
+  s.status === 'closed' && can('shifts.accept') && !skipAccept ? `<button class="small" data-accept="${s.id}">Qabul qilish</button>` : '',
   s.status === 'closed' && can('shifts.cancel') && cancelOn() ? `<button class="small ghost" data-cancel="${s.id}">Bekor qilish</button>` : '',
   s.status === 'cancelled' && can('shifts.copy') ? `<button class="small ghost" data-copy="${s.id}">Nusxalash</button>` : '',
 ].join('');
@@ -338,6 +366,7 @@ const views = {
         ${d.debt ? `<div class="tile"><div class="k">Qarzdorlik</div><div class="v">${fmtMoney(d.debt.weOwe)}</div><div class="s"><a href="#debts">batafsil</a></div></div>` : ''}
       </div>
       ${costTable(d.summary.byProduct)}
+      ${d.diff && (d.diff.totals.diff_q || d.diff.totals.gain) ? diffCard(d.diff) : ''}
       ${d.live.length || can('shifts.view_all') ? `<div class="card"><h2>Ochiq smenalar <span class="muted">(hisobga kirmaydi)</span></h2>${shiftRows(d.live, { actions: false })}</div>` : ''}
       ${d.waiting.length ? `<div class="card"><h2>Qabul kutayotgan smenalar</h2>${shiftRows(d.waiting)}</div>` : ''}
       <div class="card"><h2>Qabul qilingan smenalar</h2>${shiftRows(d.accepted)}</div>
@@ -379,6 +408,10 @@ const views = {
     const d = await api('GET', `/shifts/${hashParams().get('id')}`);
     const s = d.shift;
     const missing = d.rows.filter((r) => r.current_price == null && s.status === 'closed');
+    // Difference feature: a closed shift gets per-product real-quantity inputs;
+    // an accepted one shows the real total and the gap. Only for diff.view users.
+    const diffAccept = s.status === 'closed' && can('shifts.accept') && d.diff?.enabled && !!d.diff.products.length;
+    const sign = (n) => `<b style="color:${n > 0 ? 'var(--ok)' : n < 0 ? 'var(--err)' : 'var(--muted)'}">${n > 0 ? '+' : ''}${fmtNum(n)} kg</b>`;
     v.innerHTML = `
       <p><a href="#shifts">← Smenalar</a></p>
       <div class="card"><div class="row" style="justify-content:space-between;align-items:start">
@@ -386,10 +419,23 @@ const views = {
           <div class="muted">Ochilgan: ${esc(fmtDate(s.opened_at))} · Yopilgan: ${esc(fmtDate(s.closed_at)) || '—'}</div>
           ${s.accepted_at ? `<div class="muted">Qabul qildi: ${esc(s.accepted_by?.replace(/^\w+:/, ''))} · ${esc(fmtDate(s.accepted_at))}</div>` : ''}
           ${s.cancelled_at ? `<div class="err">Bekor qildi: ${esc(s.cancelled_by?.replace(/^\w+:/, ''))} · ${esc(fmtDate(s.cancelled_at))} — ${esc(s.cancel_reason)}</div>` : ''}</div>
-        <div class="row">${d.rows.length ? '<button class="small ghost" id="copyText">📋 Nusxalash</button>' : ''}${shiftActions({ ...s, id: s.id })}</div></div>
+        <div class="row">${d.rows.length ? '<button class="small ghost" id="copyText">📋 Nusxalash</button>' : ''}${shiftActions({ ...s, id: s.id }, { skipAccept: diffAccept })}</div></div>
         ${missing.length ? `<p class="err">Narx belgilanmagan: ${[...new Set(missing.map((r) => r.supplier_name))].map(esc).join(', ')} — "Xonadonlar" bo'limida narx qo'ying, keyin qabul qiling.</p>` : ''}
       </div>
       <div class="tiles">${d.byProduct.map((p) => `<div class="tile"><div class="k">${esc(p.name)}</div><div class="v">${fmtNum(p.quantity)}</div><div class="s">${esc(p.unit)} · ${p.pickups} ta</div></div>`).join('')}</div>
+      ${d.diff?.hasReal ? `<div class="card"><h2>Qabul qilingan (real) va farq</h2><div class="table-wrap"><table>
+        <tr><th>Mahsulot</th><th class="num">Yozilgan</th><th class="num">Qabul</th><th class="num">Farq</th></tr>
+        ${d.diff.products.map((p) => `<tr><td>${esc(p.name)}</td><td class="num">${fmtNum(p.written)} ${esc(p.unit)}</td><td class="num"><b>${fmtNum(p.real)}</b></td><td class="num">${sign(p.diff)}</td></tr>`).join('')}
+        <tr><td><b>Jami</b></td><td class="num">${fmtNum(d.diff.written)}</td><td class="num"><b>${fmtNum(d.diff.real)}</b></td><td class="num">${sign(d.diff.diff)}</td></tr>
+      </table></div></div>` : ''}
+      ${diffAccept ? `<div class="card"><h2>Qabul qilingan real miqdor</h2>
+        ${d.diff.products.map((p) => `<div class="row" style="align-items:center;gap:10px;margin-bottom:6px">
+          <div style="flex:1">${esc(p.name)} <span class="muted">— yozilgan ${fmtNum(p.written)} ${esc(p.unit)}</span></div>
+          <input class="diffReal" data-pid="${p.product_id}" data-written="${p.written}" type="number" step="0.1" min="0" value="${p.written}" style="width:130px">
+          <span class="diffOut" style="min-width:90px;text-align:right"></span></div>`).join('')}
+        ${(d.diff.over != null || d.diff.under != null) ? `<p class="muted">Ruxsat etilgan farq: ${d.diff.over != null ? '+' + d.diff.over : '∞'} / ${d.diff.under != null ? '−' + d.diff.under : '∞'} kg</p>` : ''}
+        <p class="err" id="diffWarn" style="display:none">Farq ruxsat etilgan chegaradan tashqarida — qabul qilib bo'lmaydi.</p>
+        <button id="diffAcceptBtn">Qabul qilish</button></div>` : ''}
       <div class="card"><div class="table-wrap"><table>
         <tr><th>Vaqt</th><th>Xonadon</th><th>Mahsulot</th><th class="num">Miqdor</th>${money() ? '<th class="num">Narx</th><th class="num">Summa</th>' : ''}</tr>
         ${d.rows.map((r) => `<tr><td>${esc(fmtDate(r.collected_at))}${r.edited_at ? ' <span class="muted" title="Ochiq paytida tahrirlangan">✎</span>' : ''}</td>
@@ -398,6 +444,32 @@ const views = {
           || '<tr><td colspan="6" class="muted">Bo\'sh smena</td></tr>'}
       </table></div>${money() && s.status !== 'accepted' ? '<p class="muted">* joriy narx; qabul qilinganda shu narx yoziladi.</p>' : ''}</div>`;
     bindShiftActions(v);
+    if (diffAccept) {
+      const over = d.diff.over; const under = d.diff.under;
+      const recompute = () => {
+        let bad = false;
+        $$('.diffReal', v).forEach((inp) => {
+          const w = Number(inp.dataset.written); const val = Number(inp.value); const diff = Math.round((val - w) * 100) / 100;
+          const good = Number.isFinite(val) && val >= 0 && !(over != null && diff > over) && !(under != null && diff < -under);
+          if (!good) bad = true;
+          const out = inp.parentElement.querySelector('.diffOut');
+          out.textContent = `${diff > 0 ? '+' : ''}${fmtNum(diff)} kg`;
+          out.style.cssText = `min-width:90px;text-align:right;font-weight:700;color:${diff > 0 ? 'var(--ok)' : diff < 0 ? 'var(--err)' : 'var(--muted)'}`;
+        });
+        $('#diffWarn', v).style.display = bad ? 'block' : 'none';
+        $('#diffAcceptBtn', v).disabled = bad;
+      };
+      $$('.diffReal', v).forEach((inp) => { inp.oninput = recompute; });
+      recompute();
+      $('#diffAcceptBtn', v).onclick = act(async () => {
+        if (!confirmFor('accept', 'Smena qabul qilinsinmi? Shundan keyin u qarz va hisobotlarga kiradi.')) return;
+        const real = {};
+        $$('.diffReal', v).forEach((inp) => { real[inp.dataset.pid] = Number(inp.value); });
+        await api('POST', `/shifts/${s.id}/accept`, { real });
+        flash('Smena qabul qilindi');
+        route();
+      });
+    }
     const cb = $('#copyText', v);
     if (cb) cb.onclick = act(async () => {
       const { text } = await api('GET', `/shifts/${s.id}/copytext`);
@@ -418,7 +490,8 @@ const views = {
     const to = q.get('to') || today;
     const filt = { employee: q.get('employee') || '', supplier: q.get('supplier') || '' };
     const qs = new URLSearchParams({ from, to, ...filt }).toString();
-    const [s, emps, sups] = await Promise.all([api('GET', '/reports/summary?' + qs), api('GET', '/staff/names'), can('suppliers.view') ? api('GET', '/suppliers') : []]);
+    const [s, emps, sups, dr] = await Promise.all([api('GET', '/reports/summary?' + qs), api('GET', '/staff/names'),
+      can('suppliers.view') ? api('GET', '/suppliers') : [], can('diff.view') ? api('GET', '/reports/diff?' + qs).catch(() => null) : null]);
     const monthStart = today.slice(0, 8) + '01';
     const prevMonthEnd = addDays(monthStart, -1);
     const presets = [
@@ -449,7 +522,8 @@ const views = {
         <tr><th>Mahsulot</th><th class="num">Yetkazib berish</th><th class="num">Miqdor</th>${money() ? '<th class="num">O\'rtacha tannarx</th><th class="num">Summa</th>' : ''}</tr>
         ${s.byProduct.map((p) => `<tr><td>${esc(p.name)}</td><td class="num">${p.pickups}</td><td class="num">${fmtNum(p.quantity)} ${esc(p.unit)}</td>${money() ? `<td class="num">${fmtNum(p.avg_cost)}</td><td class="num">${fmtMoney(p.amount)}</td>` : ''}</tr>`).join('')
           || '<tr><td colspan="5" class="muted">Bu davrda yozuv yo\'q</td></tr>'}
-      </table></div></div>`;
+      </table></div></div>
+      ${dr && (dr.totals.diff_q || dr.totals.gain) ? diffCard(dr) : ''}`;
     dailyChart($('#daily', v), s.byDay, s.range.from, s.range.to);
     Charts.rankBars($('#rankSup', v), { rows: s.bySupplier.map((r) => ({ label: esc(r.name), value: r.quantity, sub: money() ? `${fmtMoney(r.amount)} so'm` : '' })), unit: 'kg' });
     Charts.rankBars($('#rankEmp', v), { rows: s.byEmployee.map((r) => ({ label: esc(r.name), value: r.quantity, sub: `${r.shifts} smena · ${r.pickups} ta` })), unit: 'kg' });
@@ -582,7 +656,7 @@ const views = {
         <tr><th>Sana</th><th>Amal</th><th class="num">Miqdor</th>${money() ? '<th class="num">Narx</th>' : ''}<th class="num">Olindi (+)</th><th class="num">To'landi (−)</th><th class="num">Qarz qoldig'i</th><th>Kim</th></tr>
         ${st.entries.map((e) => `<tr class="${e.voided_at ? 'voided' : ''}">
           <td>${esc(fmtDate(e.at))}</td>
-          <td>${e.kind === 'pickup' ? `${esc(e.product_name)} <span class="muted">#${e.shift_number}${e.copy_no ? '-copy' : ''}</span>` : `To'lov (${METHOD[e.method]})${e.note ? ` — ${esc(e.note)}` : ''}`}${e.voided_at ? ` <span class="muted">bekor: ${esc(e.void_reason)}</span>` : ''}</td>
+          <td>${e.kind === 'pickup' ? `${esc(e.product_name)} <a href="#shift?id=${e.shift_id}" class="muted" title="${esc(e.by_name || '')} · smenani ochish">#${e.shift_number}${e.copy_no ? '-copy' : ''}${e.by_name ? ` · ${esc(e.by_name)}` : ''}</a>` : `To'lov (${METHOD[e.method]})${e.note ? ` — ${esc(e.note)}` : ''}`}${e.voided_at ? ` <span class="muted">bekor: ${esc(e.void_reason)}</span>` : ''}</td>
           <td class="num">${e.kind === 'pickup' ? `${fmtNum(e.quantity)} ${esc(e.unit)}` : ''}</td>${money() ? `<td class="num">${e.kind === 'pickup' ? fmtMoney(e.price) : ''}</td>` : ''}
           <td class="num">${e.kind === 'pickup' ? fmtMoney(e.amount) : ''}</td><td class="num">${e.kind === 'payment' ? fmtMoney(e.amount) : ''}</td>
           <td class="num"><b>${fmtMoney(e.balance)}</b></td><td class="muted">${esc(String(e.by_name).replace(/^\w+:/, ''))}</td></tr>`).join('')}
@@ -965,6 +1039,14 @@ const views = {
           <div style="margin-top:10px"><b>Smenani tahrirlash</b>
             <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="editClosed" ${st.editClosed ? 'checked' : ''}> Qabul qilinmagan smenani tahrirlashga ruxsat</label>
           </div>
+          <div style="margin-top:10px"><b>Farqlar bilan ishlash</b><p class="muted" style="margin:2px 0 6px">Qabul qilishda real miqdor kiritiladi; smena bilan farqi kompaniya foyda/ziyoni bo'ladi (xonadon balansiga tegmaydi). O'chirilsa — to'g'ridan to'g'ri qabul qilinadi.</p>
+            <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="diffEnabled" ${st.diff?.enabled ? 'checked' : ''}> Yoqilgan</label>
+            <div class="row" style="gap:12px;margin-top:6px">
+              <label>Farq limiti — Ko'p (+ kg) <input name="diffOver" type="number" min="0" step="0.1" value="${st.diff?.over ?? ''}" placeholder="cheksiz" style="width:120px"></label>
+              <label>Kam (− kg) <input name="diffUnder" type="number" min="0" step="0.1" value="${st.diff?.under ?? ''}" placeholder="cheksiz" style="width:120px"></label>
+            </div>
+            <p class="muted">Bo'sh = cheklovsiz. Farq limitdan oshsa, smena qabul qilinmaydi.</p>
+          </div>
           <button>Saqlash</button>
         </form>
         <div class="row" style="align-items:center;margin-top:12px">
@@ -1046,6 +1128,7 @@ const views = {
           copyFields: { product: f.cf_product.checked, household: f.cf_household.checked, qty: f.cf_qty.checked, price: f.cf_price.checked },
           confirms: Object.fromEntries(['open','close','accept','cancel','edit','payment','delete','copy_cancelled','entity_delete'].map((k) => [k, f['cfm_' + k].checked])),
           editClosed: f.editClosed.checked,
+          diff: { enabled: f.diffEnabled.checked, over: f.diffOver.value, under: f.diffUnder.value },
         });
         await loadBrand();
         flash('Saqlandi');

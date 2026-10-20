@@ -59,7 +59,7 @@ export function statement(db, supplierId, { limit = 500 } = {}) {
   if (!s) return null;
   const pickups = db.prepare(`
     SELECT 'pickup' AS kind, c.id, c.collected_at AS at, c.quantity, c.price, p.name AS product_name, p.unit,
-      CAST(ROUND(c.quantity * c.price) AS INTEGER) AS amount, u.name AS by_name, sh.number AS shift_number, sh.copy_no
+      CAST(ROUND(c.quantity * c.price) AS INTEGER) AS amount, u.name AS by_name, sh.id AS shift_id, sh.number AS shift_number, sh.copy_no
     FROM collections c JOIN shifts sh ON sh.client_uuid = c.shift_uuid JOIN products p ON p.id = c.product_id
     JOIN users u ON u.id = c.employee_id
     WHERE c.supplier_id = ? AND sh.status = 'accepted' AND u.is_test = 0`).all(supplierId);
