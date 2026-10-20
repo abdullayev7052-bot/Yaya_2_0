@@ -134,6 +134,17 @@ CREATE TABLE IF NOT EXISTS shifts (
 CREATE INDEX IF NOT EXISTS idx_shifts_employee ON shifts(employee_id, status);
 CREATE INDEX IF NOT EXISTS idx_shifts_status ON shifts(status, opened_at);
 
+-- Real accepted quantity per product, entered by the accepting staff when a shift
+-- is accepted (the "difference" feature). The gap between this and what the
+-- collector wrote is the company's own surplus/shortfall; it NEVER touches a
+-- household's balance (households are always paid for what the collector wrote).
+CREATE TABLE IF NOT EXISTS shift_accepts (
+  shift_id INTEGER NOT NULL REFERENCES shifts(id) ON DELETE CASCADE,
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  real_quantity REAL NOT NULL,
+  PRIMARY KEY (shift_id, product_id)
+);
+
 -- One pickup. price is stamped when the shift is accepted.
 CREATE TABLE IF NOT EXISTS collections (
   id INTEGER PRIMARY KEY,
@@ -232,7 +243,10 @@ function seedRoles(db) {
 const NEW_ROLE_PERMS = {
   collector: ['suppliers.location', 'collect.view_own_shifts'],
   // Accountants set prices and edit household data from the app now.
-  viewer: ['suppliers.edit', 'suppliers.location', 'prices.manage'],
+  viewer: ['suppliers.edit', 'suppliers.location', 'prices.manage', 'diff.view'],
+  // Whoever accepts shifts may see the accepted-quantity difference.
+  manager: ['diff.view'],
+  storekeeper: ['diff.view'],
 };
 function backfillNewPermissions(db) {
   for (const [code, keys] of Object.entries(NEW_ROLE_PERMS)) {

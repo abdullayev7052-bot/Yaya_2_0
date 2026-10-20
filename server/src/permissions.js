@@ -26,6 +26,7 @@ export const PERMISSIONS = [
   { key: 'shifts.accept', group: 'Smenalar', label: 'Yopilgan smenani qabul qilish' },
   { key: 'shifts.cancel', group: 'Smenalar', label: 'Smenani bekor qilish' },
   { key: 'shifts.copy', group: 'Smenalar', label: 'Har qanday bekor qilingan smenani nusxalash' },
+  { key: 'diff.view', group: 'Smenalar', label: 'Qabul farqini ko\'rish (real miqdor, yutuq/yo\'qotish)', hint: 'Smena yopilgani bilan qabul qilingan real miqdor orasidagi farq' },
 
   // --- money
   { key: 'debts.view', group: 'Qarzlar va to\'lovlar', label: 'Qarzlar va to\'lovlar tarixini ko\'rish' },
@@ -64,9 +65,9 @@ export const BUILTIN_ROLES = [
     perms: ALL.filter((k) => !['panel.access', 'staff.manage', 'settings.manage', 'audit.view', 'data.backup', 'tester.use',
       ...COLLECT_PERMS].includes(k)) },
   { code: 'storekeeper', name: 'Omborchi', locked: 0,
-    perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'shifts.copy', 'suppliers.view', 'debts.view', 'payments.create', 'reports.view'] },
+    perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'shifts.copy', 'diff.view', 'suppliers.view', 'debts.view', 'payments.create', 'reports.view'] },
   { code: 'viewer', name: 'Buxgalter', locked: 0,
-    perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'suppliers.view', 'suppliers.edit', 'suppliers.location',
+    perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'diff.view', 'suppliers.view', 'suppliers.edit', 'suppliers.location',
       'prices.view', 'prices.manage', 'debts.view', 'payments.create', 'payments.void', 'reports.view', 'reports.export'] },
   { code: 'collector', name: 'Sut yig\'uvchi', locked: 0,
     perms: [...COLLECT_PERMS, 'suppliers.card_own', 'suppliers.location', 'payments.create'] },

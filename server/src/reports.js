@@ -76,6 +76,65 @@ export function dailyCost(db, day) {
   };
 }
 
+// The accepted-quantity difference analysis. Per accepted shift+product: the
+// written total (what the collector entered), the real quantity recorded at
+// acceptance (falls back to written when none), the money paid to households, and
+// the surplus/shortfall value  gain = (real − written) × (amount / written)  — i.e.
+// the value of the extra/missing milk at the average price actually paid. A
+// supplier filter is ignored here because a real quantity belongs to the whole
+// shift, not one household. Only accepted, non-test shifts count.
+export function diffReport(db, q) {
+  const range = parseRange(q);
+  const params = { from: range.from, to: range.to };
+  const conds = [`${LOCAL_DAY} BETWEEN @from AND @to`, ACCEPTED];
+  const emp = Number(q.employee); if (Number.isInteger(emp) && emp > 0) { conds.push('sh.employee_id = @employee'); params.employee = emp; }
+  const prod = Number(q.product); if (Number.isInteger(prod) && prod > 0) { conds.push('c.product_id = @product'); params.product = prod; }
+  const rows = db.prepare(`
+    WITH sp AS (
+      SELECT sh.id AS shift_id, sh.number, sh.copy_no, sh.employee_id, ${LOCAL_DAY} AS day, c.product_id,
+        ROUND(SUM(c.quantity), 2) AS written_q, CAST(SUM(ROUND(c.quantity * c.price)) AS INTEGER) AS amount
+      FROM collections c JOIN shifts sh ON sh.client_uuid = c.shift_uuid JOIN users u ON u.id = sh.employee_id
+      WHERE ${conds.join(' AND ')}
+      GROUP BY sh.id, c.product_id)
+    SELECT sp.shift_id, sp.number, sp.copy_no, sp.employee_id, sp.day, sp.product_id, sp.written_q, sp.amount,
+      COALESCE(sa.real_quantity, sp.written_q) AS real_q, pr.name AS product_name, pr.unit,
+      COALESCE(us.name, us.login) AS employee_name
+    FROM sp
+    LEFT JOIN shift_accepts sa ON sa.shift_id = sp.shift_id AND sa.product_id = sp.product_id
+    JOIN products pr ON pr.id = sp.product_id
+    JOIN users us ON us.id = sp.employee_id`).all(params);
+
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const gainOf = (r) => (r.written_q > 0 ? Math.round((r.real_q - r.written_q) * (r.amount / r.written_q)) : 0);
+  const label = (r) => `#${r.number}${r.copy_no ? `-copy${r.copy_no > 1 ? r.copy_no : ''}` : ''}`;
+  const add = (map, key, base, r) => {
+    const g = map.get(key) || map.set(key, { ...base, written_q: 0, real_q: 0, amount: 0, gain: 0 }).get(key);
+    g.written_q = r2(g.written_q + r.written_q); g.real_q = r2(g.real_q + r.real_q);
+    g.amount += r.amount; g.gain += gainOf(r);
+  };
+  const byProduct = new Map(); const byEmployee = new Map(); const byShift = new Map();
+  const totals = { written_q: 0, real_q: 0, amount: 0, gain: 0 };
+  for (const r of rows) {
+    add(byProduct, r.product_id, { id: r.product_id, name: r.product_name, unit: r.unit }, r);
+    add(byEmployee, r.employee_id, { id: r.employee_id, name: r.employee_name }, r);
+    add(byShift, r.shift_id, { id: r.shift_id, label: label(r), employee_name: r.employee_name, day: r.day }, r);
+    totals.written_q = r2(totals.written_q + r.written_q); totals.real_q = r2(totals.real_q + r.real_q);
+    totals.amount += r.amount; totals.gain += gainOf(r);
+  }
+  const finish = (g) => ({
+    ...g, diff_q: r2(g.real_q - g.written_q),
+    nominal_cost: g.written_q ? r2(g.amount / g.written_q) : null,
+    real_cost: g.real_q ? r2(g.amount / g.real_q) : null,
+  });
+  return {
+    range,
+    totals: finish(totals),
+    byProduct: [...byProduct.values()].map(finish).sort((a, b) => b.real_q - a.real_q),
+    byEmployee: [...byEmployee.values()].map(finish).sort((a, b) => b.gain - a.gain),
+    byShift: [...byShift.values()].map(finish).sort((a, b) => (a.day < b.day ? 1 : -1)),
+  };
+}
+
 // Flat rows for CSV export (opens directly in Excel).
 export function exportRows(db, q) {
   const w = where(q);

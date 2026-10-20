@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { emitEvent } from './db/index.js';
+import { diffFlags } from './settings.js';
 
 // Shift lifecycle. A shift is a draft while open; closing freezes it; accepting
 // makes it real (prices are stamped, debts and cost reports include it);
@@ -52,9 +53,9 @@ export function shiftTotals(db, uuid) {
 // Each part (product header, per-household line, quantity, price) can be turned
 // off. Prices use the stamped price (accepted) or the current price otherwise.
 export function shiftCopyText(db, shiftId, opts = {}) {
-  const { prices = true, showProduct = true, showHousehold = true, showPrice = true, showQty = true } = opts;
+  const { prices = true, showProduct = true, showHousehold = true, showPrice = true, showQty = true, showDiff = false } = opts;
   const price = showPrice && prices;
-  const head = db.prepare(`SELECT sh.number, sh.copy_no, COALESCE(u.name, u.login) AS who
+  const head = db.prepare(`SELECT sh.id, sh.client_uuid, sh.number, sh.copy_no, COALESCE(u.name, u.login) AS who
     FROM shifts sh JOIN users u ON u.id = sh.employee_id WHERE sh.id = ?`).get(shiftId);
   const rows = db.prepare(`
     SELECT s.name AS supplier, p.id AS product_id, p.name AS product, p.unit,
@@ -94,6 +95,16 @@ export function shiftCopyText(db, shiftId, opts = {}) {
         if (price && r.unit_price != null) line += ` x ${r.unit_price}`;
         lines.push(line);
       }
+    }
+  }
+  // The accepted-quantity difference, when recorded and the caller may see it.
+  if (showDiff && head) {
+    const d = shiftDiff(db, head);
+    if (d.hasReal) {
+      const sign = (n) => (n > 0 ? `+${q(n)}` : q(n));
+      lines.push(`Jami: ${q(d.written)} kg`);
+      lines.push(`Qabul: ${q(d.real)} kg`);
+      lines.push(`Farq: ${sign(d.diff)} kg`);
     }
   }
   return lines.join('\n');
@@ -142,9 +153,36 @@ export function reopenShift(db, id, actor) {
   return next;
 }
 
+// Written quantity per product for a shift (what the collector entered).
+const writtenByProduct = (db, uuid) => db.prepare(`SELECT c.product_id, p.name AS product, p.unit,
+    ROUND(SUM(c.quantity), 2) AS written FROM collections c JOIN products p ON p.id = c.product_id
+    WHERE c.shift_uuid = ? GROUP BY c.product_id ORDER BY p.name`).all(uuid);
+
+// The accepted-quantity difference for one shift: per product, what the collector
+// wrote vs. the real quantity the acceptor recorded, and the gap. hasReal is false
+// when no real quantities were recorded (feature off, or not yet accepted), in
+// which case real == written and every diff is 0.
+export function shiftDiff(db, s) {
+  const written = writtenByProduct(db, s.client_uuid);
+  const accepts = Object.fromEntries(db.prepare('SELECT product_id, real_quantity FROM shift_accepts WHERE shift_id = ?')
+    .all(s.id).map((r) => [r.product_id, r.real_quantity]));
+  const hasReal = Object.keys(accepts).length > 0;
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const products = written.map((w) => {
+    const real = accepts[w.product_id] ?? w.written;
+    return { product_id: w.product_id, name: w.product, unit: w.unit, written: w.written, real: r2(real), diff: r2(real - w.written) };
+  });
+  const totals = products.reduce((a, p) => ({ written: r2(a.written + p.written), real: r2(a.real + p.real), diff: r2(a.diff + p.diff) }),
+    { written: 0, real: 0, diff: 0 });
+  return { hasReal, products, ...totals };
+}
+
 // Accepting stamps today's agreed price on every pickup. If a supplier has no
 // price for the product yet (e.g. added in the field), acceptance is refused.
-export function acceptShift(db, id, actor) {
+// When the "difference" feature is on, the acceptor may pass real quantities per
+// product (opts.real = { [productId]: kg }); the gap to the written total is
+// checked against the configured limit and stored — it never changes any balance.
+export function acceptShift(db, id, actor, opts = {}) {
   const s = db.prepare('SELECT * FROM shifts WHERE id = ?').get(id);
   if (!s) throw new ShiftError('Smena topilmadi');
   if (s.status !== 'closed') throw new ShiftError(s.status === 'open' ? 'Smena hali yopilmagan' : 'Faqat yopilgan (kutayotgan) smenani qabul qilish mumkin');
@@ -154,10 +192,31 @@ export function acceptShift(db, id, actor) {
     WHERE c.shift_uuid = ?`).all(s.client_uuid);
   const missing = [...new Set(rows.filter((r) => r.price == null).map((r) => `${r.supplier} — ${r.product}`))];
   if (missing.length) throw new ShiftError(`Narx belgilanmagan: ${missing.join(', ')}. Avval narxni belgilang.`, { missing });
+
+  const flags = diffFlags(db);
+  const real = (opts && typeof opts.real === 'object' && opts.real) || {};
+  const accepts = [];
+  if (flags.enabled) {
+    for (const w of writtenByProduct(db, s.client_uuid)) {
+      const given = real[w.product_id] ?? real[String(w.product_id)];
+      const qty = given == null || given === '' ? w.written : Math.round(Number(given) * 100) / 100;
+      if (!Number.isFinite(qty) || qty < 0) throw new ShiftError(`${w.product}: real miqdor noto'g'ri`);
+      const d = Math.round((qty - w.written) * 100) / 100;
+      if (flags.over != null && d > flags.over) throw new ShiftError(`${w.product}: farq +${d} kg, ruxsat +${flags.over} kg dan oshdi`, { limit: true });
+      if (flags.under != null && d < -flags.under) throw new ShiftError(`${w.product}: farq ${d} kg, ruxsat −${flags.under} kg dan oshdi`, { limit: true });
+      accepts.push({ product_id: w.product_id, qty });
+    }
+  }
+
   db.transaction(() => {
     const stamp = db.prepare('UPDATE collections SET price = ? WHERE id = ?');
     for (const r of rows) stamp.run(r.price, r.id);
     db.prepare("UPDATE shifts SET status = 'accepted', accepted_by = ?, accepted_at = ? WHERE id = ?").run(actor, now(), s.id);
+    db.prepare('DELETE FROM shift_accepts WHERE shift_id = ?').run(s.id);
+    if (flags.enabled) {
+      const ins = db.prepare('INSERT INTO shift_accepts (shift_id, product_id, real_quantity) VALUES (?, ?, ?)');
+      for (const a of accepts) ins.run(s.id, a.product_id, a.qty);
+    }
   })();
   const next = db.prepare('SELECT * FROM shifts WHERE id = ?').get(s.id);
   emitEvent(db, 'shift.accepted', { ...eventPayload(db, next), by: actor });
@@ -212,14 +271,20 @@ export function listShifts(db, { from, to, status, employee, limit = 500 }) {
       u.id AS employee_id, u.name AS employee_name, u.is_test,
       COUNT(c.id) AS pickups, ROUND(COALESCE(SUM(c.quantity), 0), 2) AS quantity,
       CAST(COALESCE(SUM(ROUND(c.quantity * c.price)), 0) AS INTEGER) AS amount,
-      COUNT(DISTINCT c.supplier_id) AS suppliers, MAX(c.collected_at) AS last_at
+      COUNT(DISTINCT c.supplier_id) AS suppliers, MAX(c.collected_at) AS last_at, sa.real_q AS accepted_quantity
     FROM shifts sh JOIN users u ON u.id = sh.employee_id
     LEFT JOIN collections c ON c.shift_uuid = sh.client_uuid
+    LEFT JOIN (SELECT shift_id, ROUND(SUM(real_quantity), 2) AS real_q FROM shift_accepts GROUP BY shift_id) sa ON sa.shift_id = sh.id
     WHERE (@from IS NULL OR date(sh.opened_at, '+5 hours') BETWEEN @from AND @to)
       AND (@status IS NULL OR sh.status = @status) AND (@employee IS NULL OR sh.employee_id = @employee)
     GROUP BY sh.id ORDER BY sh.opened_at DESC LIMIT ${Number(limit) || 500}`)
     .all({ from: from ?? null, to: to ?? null, status: status ?? null, employee: employee ?? null })
-    .map((r) => ({ ...r, amount: r.status === 'accepted' ? r.amount : null, status: displayStatus(r), label: shiftLabel(r) }));
+    .map((r) => ({
+      ...r, amount: r.status === 'accepted' ? r.amount : null, status: displayStatus(r), label: shiftLabel(r),
+      // Accepted real total and its gap to the written total (difference feature).
+      accepted_quantity: r.status === 'accepted' && r.accepted_quantity != null ? r.accepted_quantity : null,
+      diff_quantity: r.status === 'accepted' && r.accepted_quantity != null ? Math.round((r.accepted_quantity - r.quantity) * 100) / 100 : null,
+    }));
 }
 
 export function shiftDetail(db, id) {
@@ -238,5 +303,5 @@ export function shiftDetail(db, id) {
     byProduct[k].quantity = Math.round((byProduct[k].quantity + r.quantity) * 100) / 100;
     byProduct[k].pickups++;
   }
-  return { shift: { ...s, status: displayStatus(s), label: shiftLabel(s) }, rows, byProduct: Object.values(byProduct) };
+  return { shift: { ...s, status: displayStatus(s), label: shiftLabel(s) }, rows, byProduct: Object.values(byProduct), diff: shiftDiff(db, s) };
 }

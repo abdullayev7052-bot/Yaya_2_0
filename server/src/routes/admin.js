@@ -4,10 +4,10 @@ import { randomInt, randomUUID } from 'node:crypto';
 import { audit, ensureDeviceSlots, roleIdByCode } from '../db/index.js';
 import { makeGuard, normalizeLogin } from '../auth.js';
 import { PERMISSIONS, PERMISSION_KEYS } from '../permissions.js';
-import { summary, exportRows, toCsv, parseRange, dailyCost, todayLocal } from '../reports.js';
+import { summary, exportRows, toCsv, parseRange, dailyCost, todayLocal, diffReport } from '../reports.js';
 import { balances, statement, supplierBalance } from '../ledger.js';
 import { templateXlsx, importSuppliers, exportSuppliersXlsx } from '../importer.js';
-import { CONFIRM_KEYS, confirmFlags, getSetting, setSetting } from '../settings.js';
+import { CONFIRM_KEYS, confirmFlags, diffFlags, getSetting, setSetting } from '../settings.js';
 import { ShiftError, acceptShift, cancelShift, copyShift, listShifts, shiftCopyText, shiftDetail, shiftLabel } from '../shifts.js';
 import { decrypt, encrypt, listSafety, loadSafety, restore, saveSafety, snapshot, wipeHistory } from '../backup.js';
 import { actorName, describe } from '../auditText.js';
@@ -418,10 +418,18 @@ export default async function adminRoutes(app, { db }) {
     const status = ['open', 'closed', 'accepted', 'cancelled'].includes(q.status) ? q.status : null;
     // Open and waiting shifts are shown whatever the date, so nothing is missed.
     const range = status === 'open' || status === 'closed' ? { from: null, to: null } : parseRange(q);
-    return listShifts(db, { ...range, status, employee: num(q.employee) });
+    const list = listShifts(db, { ...range, status, employee: num(q.employee) });
+    if (!has(req, 'diff.view')) for (const s of list) { delete s.accepted_quantity; delete s.diff_quantity; }
+    return list;
   });
 
-  app.get('/shifts/:id', need('shifts.view_all'), async (req, reply) => shiftDetail(db, req.params.id) ?? reply.code(404).send({ error: 'Topilmadi' }));
+  app.get('/shifts/:id', need('shifts.view_all'), async (req, reply) => {
+    const d = shiftDetail(db, req.params.id);
+    if (!d) return reply.code(404).send({ error: 'Topilmadi' });
+    // The accepted-quantity difference is only for those allowed to see it.
+    if (!has(req, 'diff.view')) delete d.diff;
+    return d;
+  });
 
   // Plain-text summary of a shift for the clipboard (grouped by product). What it
   // includes is controlled by the "Nusxalash sozlamalari" settings; prices are
@@ -433,12 +441,15 @@ export default async function adminRoutes(app, { db }) {
       showHousehold: getSetting(db, 'copy_show_household') !== '0',
       showPrice: getSetting(db, 'copy_show_price') !== '0',
       showQty: getSetting(db, 'copy_show_qty') !== '0',
+      showDiff: has(req, 'diff.view'),
     }),
   }));
 
   app.post('/shifts/:id/accept', need('shifts.accept'), async (req, reply) => {
     try {
-      const s = acceptShift(db, Number(req.params.id), req.actor);
+      // Optional per-product real quantities for the difference feature.
+      const real = req.body && typeof req.body.real === 'object' ? req.body.real : {};
+      const s = acceptShift(db, Number(req.params.id), req.actor, { real });
       const u = db.prepare('SELECT name FROM users WHERE id = ?').get(s.employee_id);
       log(req, 'shift.accept', { shift: shiftLabel(s), employee: u?.name });
       return { ok: true };
@@ -564,6 +575,9 @@ export default async function adminRoutes(app, { db }) {
 
   // ---------------------------------------------------------------- reports
   app.get('/reports/summary', need('reports.view'), async (req) => summary(db, req.query));
+  // Accepted-quantity difference report: real vs. written, real cost, and how much
+  // the company gained/lost from the gaps — by product, collector and shift.
+  app.get('/reports/diff', need('diff.view'), async (req) => diffReport(db, req.query));
   app.get('/reports/daily-cost', need('reports.view'), async (req) =>
     dailyCost(db, /^\d{4}-\d{2}-\d{2}$/.test(req.query.day ?? '') ? req.query.day : todayLocal()));
 
@@ -589,7 +603,9 @@ export default async function adminRoutes(app, { db }) {
     const out = {
       from, to, product: product ?? null,
       summary: summary(db, q),
-      accepted: listShifts(db, { from, to, status: 'accepted' }).filter((s) => !s.is_test),
+      diff: has(req, 'diff.view') ? diffReport(db, q) : null,
+      accepted: listShifts(db, { from, to, status: 'accepted' }).filter((s) => !s.is_test)
+        .map((s) => (has(req, 'diff.view') ? s : (delete s.accepted_quantity, delete s.diff_quantity, s))),
       live: has(req, 'shifts.view_all') ? listShifts(db, { status: 'open' }).filter((s) => !s.is_test) : [],
       waiting: has(req, 'shifts.view_all') ? listShifts(db, { status: 'closed' }).filter((s) => !s.is_test) : [],
     };
@@ -624,6 +640,8 @@ export default async function adminRoutes(app, { db }) {
     confirms: confirmFlags(db),
     // Editing a closed-but-not-accepted shift (default on).
     editClosed: getSetting(db, 'edit_closed_enabled') !== '0',
+    // Accepted-quantity difference feature (default on) + optional limits (kg).
+    diff: diffFlags(db),
   }));
   app.put('/settings', need('settings.manage'), async (req) => {
     if (req.body?.companyName !== undefined) setSetting(db, 'company_name', str(req.body.companyName, 60));
@@ -652,6 +670,14 @@ export default async function adminRoutes(app, { db }) {
     // confirms: per-action "are you sure?" prompts.
     if (req.body?.confirms) for (const k of CONFIRM_KEYS) if (req.body.confirms[k] !== undefined) setSetting(db, `confirm_${k}`, req.body.confirms[k] ? '1' : '0');
     if (req.body?.editClosed !== undefined) setSetting(db, 'edit_closed_enabled', req.body.editClosed ? '1' : '0');
+    // diff: accepted-quantity difference feature on/off + surplus/shortfall limits.
+    if (req.body?.diff) {
+      const d = req.body.diff;
+      if (d.enabled !== undefined) setSetting(db, 'diff_enabled', d.enabled ? '1' : '0');
+      const lim = (v) => (v == null || v === '' || !(Number(v) > 0) ? '' : Math.abs(Number(v)));
+      if (d.over !== undefined) setSetting(db, 'diff_limit_over', lim(d.over));
+      if (d.under !== undefined) setSetting(db, 'diff_limit_under', lim(d.under));
+    }
     setSetting(db, 'brand_version', Date.now());
     log(req, 'settings.update', { companyName: req.body?.companyName });
     return { ok: true };

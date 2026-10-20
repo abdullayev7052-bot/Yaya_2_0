@@ -5,6 +5,16 @@ import { randomBytes } from 'node:crypto';
 export const CONFIRM_KEYS = ['open', 'close', 'accept', 'cancel', 'edit', 'payment', 'delete', 'copy_cancelled', 'entity_delete'];
 export const confirmFlags = (db) => Object.fromEntries(CONFIRM_KEYS.map((k) => [k, getSetting(db, `confirm_${k}`) !== '0']));
 
+// "Difference" feature: when accepting a shift the acceptor records the real
+// quantity received per product; the gap to what the collector wrote is the
+// company's surplus/shortfall. `enabled` default ON (the acceptor just leaves the
+// pre-filled real = written when there is no difference). `over`/`under` are the
+// allowed surplus/shortfall in kg; null = no limit (acceptance never blocked).
+export const diffFlags = (db) => {
+  const n = (k) => { const v = getSetting(db, k); return v == null || v === '' ? null : Math.abs(Number(v)); };
+  return { enabled: getSetting(db, 'diff_enabled') !== '0', over: n('diff_limit_over'), under: n('diff_limit_under') };
+};
+
 export function getSetting(db, key) {
   return db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value ?? null;
 }

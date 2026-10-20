@@ -166,6 +166,57 @@ test('roles: storekeeper accepts without seeing prices; collector card shows bal
   assert.equal(other, 403, 'collector cannot add suppliers by default');
 });
 
+test('difference feature: real accepted quantity, cost, gain — never touches a balance', async () => {
+  const { app, db } = setup();
+  const h = await ali(app);
+  const b = await boss(app);
+  // written: 95 kg of product 1 at 5000 = 475 000 paid to the household
+  await runShift(app, h, 'd1', [{ supplierId: 1, quantity: 95 }], { close: true });
+  const sh = db.prepare("SELECT id FROM shifts WHERE client_uuid = 'd1'").get().id;
+  // accept with a real quantity of 100 kg (the company got 5 kg more)
+  assert.equal((await call(app, 'POST', `/api/admin/shifts/${sh}/accept`, b, { real: { 1: 100 } })).status, 200);
+  // the household is still only paid for the 95 kg it was credited with
+  assert.equal((await call(app, 'GET', '/api/admin/balances', b)).body.rows.find((r) => r.id === 1).balance, 100000 + 475000);
+  // the shift detail carries the difference
+  const d = (await call(app, 'GET', `/api/admin/shifts/${sh}`, b)).body.diff;
+  assert.equal(d.hasReal, true);
+  assert.deepEqual([d.written, d.real, d.diff], [95, 100, 5]);
+  // the shift list carries the real total and the gap
+  const row = (await call(app, 'GET', '/api/admin/shifts?status=accepted', b)).body.find((x) => x.id === sh);
+  assert.deepEqual([row.accepted_quantity, row.diff_quantity], [100, 5]);
+  // the diff report: real cost 4750 (475000/100), nominal 5000, gain +5 kg = 25 000
+  const rep = (await call(app, 'GET', '/api/admin/reports/diff', b)).body;
+  const p = rep.byProduct.find((x) => x.id === 1);
+  assert.deepEqual([p.written_q, p.real_q, p.diff_q], [95, 100, 5]);
+  assert.equal(p.real_cost, 4750);
+  assert.equal(p.nominal_cost, 5000);
+  assert.equal(p.gain, 25000);
+  assert.equal(rep.totals.gain, 25000);
+  // a collector may never see the difference
+  assert.equal((await call(app, 'GET', '/api/admin/reports/diff', h)).status, 403);
+});
+
+test('difference limit blocks acceptance; turning the feature off accepts directly', async () => {
+  const { app, db } = setup();
+  const h = await ali(app);
+  const b = await boss(app);
+  await call(app, 'PUT', '/api/admin/settings', b, { diff: { enabled: true, over: 6, under: 3 } });
+  await runShift(app, h, 'l1', [{ supplierId: 1, quantity: 50 }], { close: true });
+  const sh = db.prepare("SELECT id FROM shifts WHERE client_uuid = 'l1'").get().id;
+  // +10 kg is over the +6 limit -> refused, shift stays closed
+  assert.equal((await call(app, 'POST', `/api/admin/shifts/${sh}/accept`, b, { real: { 1: 60 } })).status, 400);
+  assert.equal(db.prepare('SELECT status FROM shifts WHERE id = ?').get(sh).status, 'closed');
+  // within the limit -> accepted
+  assert.equal((await call(app, 'POST', `/api/admin/shifts/${sh}/accept`, b, { real: { 1: 53 } })).status, 200);
+  // feature off: a real quantity is ignored and acceptance is direct (no diff stored)
+  await call(app, 'PUT', '/api/admin/settings', b, { diff: { enabled: false } });
+  await runShift(app, h, 'l2', [{ supplierId: 1, quantity: 20 }], { close: true });
+  const sh2 = db.prepare("SELECT id FROM shifts WHERE client_uuid = 'l2'").get().id;
+  assert.equal((await call(app, 'POST', `/api/admin/shifts/${sh2}/accept`, b, { real: { 1: 999 } })).status, 200);
+  assert.equal((await call(app, 'GET', `/api/admin/shifts/${sh2}`, b)).body.diff.hasReal, false);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM shift_accepts WHERE shift_id = ?').get(sh2).n, 0);
+});
+
 test('payments from the field are offline-safe and need permission', async () => {
   const { app, db } = setup();
   const h = await ali(app);
