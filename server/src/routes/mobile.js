@@ -19,7 +19,7 @@ export default async function mobileRoutes(app, { db }) {
 
   const assignedSuppliers = (userId) => {
     const suppliers = db.prepare(`
-      SELECT s.id, s.name, s.phone, s.address, s.lat, s.lng
+      SELECT s.id, s.name, s.phone, s.address, s.lat, s.lng, s.address2, s.lat2, s.lng2
       FROM suppliers s
       WHERE s.active = 1
         AND s.id NOT IN (SELECT supplier_id FROM employee_hidden_suppliers WHERE employee_id = ?)
@@ -104,7 +104,7 @@ export default async function mobileRoutes(app, { db }) {
     if (!(me.perms.has('suppliers.view') || (me.perms.has('suppliers.card_own') && !isHidden(me.id, id)))) {
       return reply.code(403).send({ error: 'Bu xonadon kartochkasiga ruxsat yo\'q' });
     }
-    const s = db.prepare('SELECT id, name, phone, address, note, lat, lng, active FROM suppliers WHERE id = ?').get(id);
+    const s = db.prepare('SELECT id, name, phone, address, note, lat, lng, address2, lat2, lng2, active FROM suppliers WHERE id = ?').get(id);
     if (!s) return reply.code(404).send({ error: 'Topilmadi' });
     const pickups = db.prepare(`SELECT c.collected_at, c.quantity, p.name AS product_name, p.unit, sh.status, sh.number, sh.copy_no, u.name AS by_name
       FROM collections c JOIN shifts sh ON sh.client_uuid = c.shift_uuid JOIN products p ON p.id = c.product_id JOIN users u ON u.id = c.employee_id
@@ -146,9 +146,11 @@ export default async function mobileRoutes(app, { db }) {
     const lat = inRange(b.lat);
     const lng = inRange(b.lng);
     if (Number.isNaN(lat) || Number.isNaN(lng)) return reply.code(400).send({ error: 'Koordinata noto\'g\'ri' });
-    // Only the coordinates are stored. The address is a manual field (set in the
-    // panel), never overwritten by the map's reverse-geocoded name.
-    db.prepare('UPDATE suppliers SET lat = ?, lng = ? WHERE id = ?').run(lat, lng, id);
+    // slot 2 = the optional additional location. Only the coordinates are stored;
+    // the address is a manual field, never overwritten by the map's name.
+    const slot = Number(b.slot) === 2 ? 2 : 1;
+    if (slot === 2) db.prepare('UPDATE suppliers SET lat2 = ?, lng2 = ? WHERE id = ?').run(lat, lng, id);
+    else db.prepare('UPDATE suppliers SET lat = ?, lng = ? WHERE id = ?').run(lat, lng, id);
     audit(db, req.actor, 'suppliers.location', { id, name: s.name, fromApp: true });
     return { ok: true };
   });

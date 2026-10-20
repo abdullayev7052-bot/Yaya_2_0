@@ -225,6 +225,7 @@ function ShiftView({ shift, tick, q, setQ, onPick, onNav }) {
   const suppliers = api.getSuppliers();
   const locationOn = api.locationEnabled();
   const lf = api.listFields();
+  const [routePick, setRoutePick] = useState(null);
   const here = useMyLocation();
   const rows = useMemo(() => store.shiftCollections(shift.uuid), [shift.uuid, tick]);
 
@@ -277,10 +278,17 @@ function ShiftView({ shift, tick, q, setQ, onPick, onNav }) {
         renderItem={({ item }) => {
           const got = done[item.id];
           const noProduct = !item.products?.length;
-          // Swipe a row left→right to open its location in Google Maps (when it has one).
-          const canRoute = locationOn && item.lat != null;
+          // Swipe a row left→right to open its location in Google Maps. With a second
+          // location, a chooser asks which one.
+          const has1 = item.lat != null, has2 = item.lat2 != null;
+          const canRoute = locationOn && (has1 || has2);
+          const swipe = () => {
+            if (has1 && has2) setRoutePick(item);
+            else if (has1) openRoute(item);
+            else openRoute({ lat: item.lat2, lng: item.lng2 });
+          };
           return (
-            <SwipeRow enabled={canRoute} onSwipe={() => openRoute(item)}>
+            <SwipeRow enabled={canRoute} onSwipe={swipe}>
             <Pressable
               onPress={() => (noProduct
                 ? notify('Mahsulot yo\'q', 'Bu xonadonga admin mahsulot biriktirmagan.')
@@ -309,6 +317,16 @@ function ShiftView({ shift, tick, q, setQ, onPick, onNav }) {
         {api.can('payments.create') && <Btn title="To'lov" kind="ghost" style={{ flex: 1 }} onPress={() => onNav('pay')} />}
         <Btn title="Yopish" kind="ghost" style={{ flex: 1 }} onPress={() => onNav('close')} />
       </View>
+      <Modal visible={!!routePick} transparent animationType="fade" onRequestClose={() => setRoutePick(null)}>
+        <Pressable onPress={() => setRoutePick(null)} style={{ flex: 1, backgroundColor: '#0008', justifyContent: 'center', padding: 24 }}>
+          <Pressable onPress={() => {}} style={[s.card, { gap: 8 }]}>
+            <Text style={[s.h2, { marginBottom: 4 }]}>Qaysi manzil?</Text>
+            <Btn title={`1-manzil${routePick?.address ? ` — ${routePick.address}` : ''}`} onPress={() => { const r = routePick; setRoutePick(null); openRoute(r); }} />
+            <Btn title={`2-manzil${routePick?.address2 ? ` — ${routePick.address2}` : ''}`} onPress={() => { const r = routePick; setRoutePick(null); openRoute({ lat: r.lat2, lng: r.lng2 }); }} />
+            <Btn title="Bekor" kind="ghost" onPress={() => setRoutePick(null)} />
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }

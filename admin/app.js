@@ -561,6 +561,11 @@ const views = {
           <div class="muted">📍 ${s.address ? esc(s.address) : '<i>manzil kiritilmagan</i>'}${s.lat != null ? ` <span title="xaritada belgilangan">· 🗺️</span>` : ''}
             ${(can('suppliers.location') || can('suppliers.edit')) ? '<button class="small ghost" id="mapBtn">Xaritada belgilash</button>' : ''}
             ${s.lat != null ? `<a class="small ghost btnlike" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}">Ko'rish ↗</a>` : ''}</div>
+          ${(s.address2 || s.lat2 != null) ? `<div class="muted">📍 2-manzil: ${s.address2 ? esc(s.address2) : '<i>manzil kiritilmagan</i>'}${s.lat2 != null ? ` <span title="xaritada belgilangan">· 🗺️</span>` : ''}
+            ${(can('suppliers.location') || can('suppliers.edit')) ? '<button class="small ghost" id="mapBtn2">Xaritada belgilash</button>' : ''}
+            ${s.lat2 != null ? `<a class="small ghost btnlike" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${s.lat2},${s.lng2}">Ko'rish ↗</a>` : ''}
+            ${(can('suppliers.location') || can('suppliers.edit')) ? '<button class="small ghost" id="delLoc2">🗑 O\'chirish</button>' : ''}</div>`
+            : ((can('suppliers.location') || can('suppliers.edit')) ? '<div class="muted"><button class="small ghost" id="addLoc2">＋ Qo\'shimcha manzil</button></div>' : '')}
           ${s.note ? `<div class="muted">${esc(s.note)}</div>` : ''}
           <div class="muted">Sut yig'uvchi: ${c.collectors.map((e) => esc(e.name || e.login)).join(', ') || '—'}</div>
           ${money() ? `<div style="margin-top:6px">${c.products.map((p) => `${p.is_default ? '★ ' : ''}${esc(p.name)}: <b>${p.price == null ? '<span class="err">narx yo\'q</span>' : fmtMoney(p.price)}</b> so'm/${esc(p.unit)}`).join(' · ') || '<span class="err">Mahsulot biriktirilmagan</span>'}</div>` : ''}</div>
@@ -593,6 +598,21 @@ const views = {
       flash('Joylashuv saqlandi');
       route();
     }));
+    const setLoc2 = act(async () => {
+      const r = await openMap({ lat: s.lat2, lng: s.lng2, name: s.name, address: s.address2 });
+      if (!r) return;
+      await api('PATCH', `/suppliers/${s.id}`, { lat2: r.lat, lng2: r.lng });
+      flash('Qo\'shimcha joylashuv saqlandi');
+      route();
+    });
+    $('#mapBtn2', v) && ($('#mapBtn2', v).onclick = setLoc2);
+    $('#addLoc2', v) && ($('#addLoc2', v).onclick = setLoc2);
+    $('#delLoc2', v) && ($('#delLoc2', v).onclick = act(async () => {
+      if (!confirm('Qo\'shimcha manzilni o\'chirishni tasdiqlaysizmi?')) return;
+      await api('PATCH', `/suppliers/${s.id}`, { address2: null, lat2: null, lng2: null });
+      flash('Qo\'shimcha manzil o\'chirildi');
+      route();
+    }));
   },
 
   // ------------------------------------------------------------------ suppliers & prices
@@ -606,6 +626,7 @@ const views = {
       { name: 'name', label: 'F.I.Sh', value: s.name, required: true },
       { name: 'phone', label: 'Telefon', value: s.phone, inputmode: 'tel' },
       { name: 'address', label: 'Manzil', value: s.address },
+      { name: 'address2', label: 'Qo\'shimcha manzil (ixtiyoriy)', value: s.address2 },
       { name: 'note', label: 'Izoh', value: s.note },
       ...(!s.id && can('payments.create') ? [{ name: 'openingBalance', label: 'Hozirgi qarzimiz (so\'m, ixtiyoriy)', type: 'number', step: 1, hint: 'U bizga qarz bo\'lsa — minus bilan' }] : []),
     ];

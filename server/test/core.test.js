@@ -250,6 +250,28 @@ test('field staff can set a supplier location with suppliers.location but not re
   assert.equal((await call(app, 'PATCH', '/api/admin/suppliers/1', h, { address: 'Yangi' })).status, 200);
 });
 
+test('a household can carry a second address and location, independently of the first', async () => {
+  const { app } = setup();
+  const h = await ali(app); // collector: suppliers.location
+  await call(app, 'PATCH', '/api/admin/suppliers/1', h, { address: 'Birinchi', lat: 40.1, lng: 71.1 });
+  // second address (manual) via admin PATCH, second coordinates via the mobile map (slot 2)
+  await call(app, 'PATCH', '/api/admin/suppliers/1', h, { address2: 'Ikkinchi' });
+  const loc2 = await call(app, 'POST', '/api/mobile/suppliers/1/location', h, { lat: 41.2, lng: 69.3, slot: 2 });
+  assert.equal(loc2.status, 200);
+  let card = (await call(app, 'GET', '/api/mobile/suppliers/1/card', h)).body;
+  assert.equal(card.supplier.address, 'Birinchi');
+  assert.equal(card.supplier.lat, 40.1, 'slot 2 must not touch the primary coordinates');
+  assert.equal(card.supplier.address2, 'Ikkinchi');
+  assert.equal(card.supplier.lat2, 41.2);
+  assert.equal(card.supplier.lng2, 69.3);
+  // the second location can be cleared without affecting the first
+  await call(app, 'PATCH', '/api/admin/suppliers/1', h, { address2: null, lat2: null, lng2: null });
+  card = (await call(app, 'GET', '/api/mobile/suppliers/1/card', h)).body;
+  assert.equal(card.supplier.lat2, null);
+  assert.equal(card.supplier.address2, null);
+  assert.equal(card.supplier.lat, 40.1, 'clearing slot 2 leaves the primary location intact');
+});
+
 test('self profile: admin changes own login and name; payment records its author', async () => {
   const { app, db } = setup();
   const b = await boss(app);

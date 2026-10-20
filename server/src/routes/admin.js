@@ -247,8 +247,8 @@ export default async function adminRoutes(app, { db }) {
     const b = req.body ?? {};
     const name = str(b.name, 120);
     if (!name) return bad(reply, 'Ism shart');
-    const id = Number(db.prepare('INSERT INTO suppliers (name, phone, address, note, lat, lng, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(name, str(b.phone, 30)?.replace(/[^\d+]/g, '') || null, str(b.address), str(b.note), coord(b.lat), coord(b.lng), req.actor).lastInsertRowid);
+    const id = Number(db.prepare('INSERT INTO suppliers (name, phone, address, address2, note, lat, lng, lat2, lng2, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(name, str(b.phone, 30)?.replace(/[^\d+]/g, '') || null, str(b.address), str(b.address2), str(b.note), coord(b.lat), coord(b.lng), coord(b.lat2), coord(b.lng2), req.actor).lastInsertRowid);
     if (b.openingBalance != null && has(req, 'payments.create')) {
       db.prepare('UPDATE suppliers SET opening_balance = ? WHERE id = ?').run(Number(b.openingBalance) || 0, id);
     }
@@ -264,7 +264,7 @@ export default async function adminRoutes(app, { db }) {
     const s = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(req.params.id);
     if (!s) return reply.code(404).send({ error: 'Topilmadi' });
     const touchesIdentity = ['name', 'phone', 'note', 'active'].some((k) => b[k] !== undefined);
-    const touchesLocation = ['address', 'lat', 'lng'].some((k) => b[k] !== undefined);
+    const touchesLocation = ['address', 'lat', 'lng', 'address2', 'lat2', 'lng2'].some((k) => b[k] !== undefined);
     if (touchesIdentity && !has(req, 'suppliers.edit')) return reply.code(403).send({ error: 'Ma\'lumotlarni o\'zgartirishga ruxsatingiz yo\'q' });
     if (touchesLocation && !has(req, 'suppliers.location') && !has(req, 'suppliers.edit')) {
       return reply.code(403).send({ error: 'Manzil/joylashuvni o\'zgartirishga ruxsatingiz yo\'q' });
@@ -277,10 +277,12 @@ export default async function adminRoutes(app, { db }) {
     if (b.name !== undefined && !str(b.name)) return bad(reply, 'Ism bo\'sh bo\'lmasin');
     db.prepare(`UPDATE suppliers SET name = COALESCE(?, name), phone = CASE WHEN ? THEN ? ELSE phone END,
       note = CASE WHEN ? THEN ? ELSE note END, active = COALESCE(?, active),
-      address = CASE WHEN ? THEN ? ELSE address END, lat = CASE WHEN ? THEN ? ELSE lat END, lng = CASE WHEN ? THEN ? ELSE lng END WHERE id = ?`)
+      address = CASE WHEN ? THEN ? ELSE address END, lat = CASE WHEN ? THEN ? ELSE lat END, lng = CASE WHEN ? THEN ? ELSE lng END,
+      address2 = CASE WHEN ? THEN ? ELSE address2 END, lat2 = CASE WHEN ? THEN ? ELSE lat2 END, lng2 = CASE WHEN ? THEN ? ELSE lng2 END WHERE id = ?`)
       .run(touchesIdentity ? str(b.name, 120) : null, Number(b.phone !== undefined), str(b.phone, 30)?.replace(/[^\d+]/g, '') || null,
         Number(b.note !== undefined), str(b.note), touchesIdentity && b.active != null ? Number(!!b.active) : null,
-        Number(b.address !== undefined), str(b.address), Number(b.lat !== undefined), coord(b.lat), Number(b.lng !== undefined), coord(b.lng), s.id);
+        Number(b.address !== undefined), str(b.address), Number(b.lat !== undefined), coord(b.lat), Number(b.lng !== undefined), coord(b.lng),
+        Number(b.address2 !== undefined), str(b.address2), Number(b.lat2 !== undefined), coord(b.lat2), Number(b.lng2 !== undefined), coord(b.lng2), s.id);
     if (touchesLocation) log(req, 'suppliers.location', { id: s.id, name: s.name });
     if (touchesIdentity) log(req, 'suppliers.update', { id: s.id, name: b.name ?? s.name, active: b.active });
     return { ok: true };

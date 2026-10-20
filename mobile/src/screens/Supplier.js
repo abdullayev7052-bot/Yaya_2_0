@@ -48,7 +48,7 @@ export function SupplierCard({ id, onBack, onPay }) {
   const { data: c, err, busy, load } = useLoad(() => api.mobile('GET', `/suppliers/${id}/card`), [id]);
   const [editing, setEditing] = useState(null); // { name, phone, address }
   const [priceEdit, setPriceEdit] = useState(null); // { productId, name, value }
-  const [mapOpen, setMapOpen] = useState(false);
+  const [mapSlot, setMapSlot] = useState(0); // 0 closed, 1 primary, 2 additional
   const [locBusy, setLocBusy] = useState(false);
   const local = api.getSuppliers().find((x) => x.id === id);
   const name = c?.supplier.name ?? local?.name ?? '...';
@@ -79,19 +79,24 @@ export function SupplierCard({ id, onBack, onPay }) {
       api.syncNow();
     } catch (e) { notify('Bo\'lmadi', e.message); }
   };
-  const saveHere = async () => {
+  const saveHere = async (slot = 1) => {
     setLocBusy(true);
     try {
       const here = await getOnce();
       if (!here) { notify('Joylashuv yo\'q', 'Telefonda joylashuvni (GPS) yoqing va ruxsat bering.'); return; }
-      await saveLocation({ lat: here.lat, lng: here.lng });
-      notify('Saqlandi', 'Xonadonning joylashuvi hozirgi joyingizga belgilandi.');
+      await saveLocation({ lat: here.lat, lng: here.lng, slot });
+      notify('Saqlandi', 'Joylashuv hozirgi joyingizga belgilandi.');
     } finally { setLocBusy(false); }
   };
+  const deleteLoc2 = async () => {
+    try { await api.admin('PATCH', `/suppliers/${id}`, { lat2: null, lng2: null, address2: null }); await load(); api.syncNow(); }
+    catch (e) { notify('Xato', e.message); }
+  };
 
-  if (mapOpen && c) {
-    return <MapPicker supplier={c.supplier} onClose={() => setMapOpen(false)}
-      onPick={async (r) => { setMapOpen(false); await saveLocation(r); }} />;
+  if (mapSlot && c) {
+    const sup = mapSlot === 2 ? { ...c.supplier, lat: c.supplier.lat2, lng: c.supplier.lng2, address: c.supplier.address2 } : c.supplier;
+    return <MapPicker supplier={sup} onClose={() => setMapSlot(0)}
+      onPick={async (r) => { const sl = mapSlot; setMapSlot(0); await saveLocation({ ...r, slot: sl }); }} />;
   }
 
   const bal = c?.balance;
@@ -144,9 +149,20 @@ export function SupplierCard({ id, onBack, onPay }) {
                 <Text style={[s.text, { fontWeight: '700' }]}>📍 Manzil / joylashuv</Text>
                 <Text style={s.muted}>{c.supplier.address || 'Manzil kiritilmagan'}{c.supplier.lat != null ? ' · xaritada belgilangan' : ''}</Text>
                 <View style={{ flexDirection: 'row', gap: 8 }}>
-                  <Btn title={locBusy ? '...' : '📍 Hozirgi joyni saqlash'} kind="ghost" style={{ flex: 1 }} disabled={locBusy} onPress={saveHere} />
-                  <Btn title="🗺️ Xaritada" kind="ghost" style={{ flex: 1 }} onPress={() => setMapOpen(true)} />
+                  <Btn title={locBusy ? '...' : '📍 Hozirgi joy'} kind="ghost" style={{ flex: 1 }} disabled={locBusy} onPress={() => saveHere(1)} />
+                  <Btn title="🗺️ Xaritada" kind="ghost" style={{ flex: 1 }} onPress={() => setMapSlot(1)} />
                 </View>
+                {(c.supplier.lat2 != null || c.supplier.address2) ? (
+                  <View style={{ gap: 6, borderTopWidth: 1, borderColor: C.line, paddingTop: 8 }}>
+                    <Text style={[s.text, { fontWeight: '600' }]}>2-manzil</Text>
+                    <Text style={s.muted}>{c.supplier.address2 || 'Manzil kiritilmagan'}{c.supplier.lat2 != null ? ' · xaritada belgilangan' : ''}</Text>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <Btn title={locBusy ? '...' : '📍 Hozirgi joy'} kind="ghost" style={{ flex: 1 }} disabled={locBusy} onPress={() => saveHere(2)} />
+                      <Btn title="🗺️ Xaritada" kind="ghost" style={{ flex: 1 }} onPress={() => setMapSlot(2)} />
+                      <Btn title="🗑" kind="warn" style={{ paddingHorizontal: 14 }} onPress={deleteLoc2} />
+                    </View>
+                  </View>
+                ) : <Btn title="＋ Qo'shimcha manzil" kind="ghost" onPress={() => setMapSlot(2)} />}
               </View>
             )}
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>

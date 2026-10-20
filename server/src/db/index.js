@@ -67,6 +67,9 @@ CREATE TABLE IF NOT EXISTS suppliers (
   opening_balance REAL NOT NULL DEFAULT 0,
   lat REAL,
   lng REAL,
+  address2 TEXT,
+  lat2 REAL,
+  lng2 REAL,
   active INTEGER NOT NULL DEFAULT 1,
   created_by TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -344,6 +347,9 @@ export function openDb(file) {
   // Columns added to a table that already existed (a no-op when already present).
   const addColumn = (table, col, def) => { try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`); } catch { /* already there */ } };
   addColumn('shifts', 'reopened_at', 'TEXT');
+  addColumn('suppliers', 'address2', 'TEXT');
+  addColumn('suppliers', 'lat2', 'REAL');
+  addColumn('suppliers', 'lng2', 'REAL');
   seedRoles(db);
   backfillNewPermissions(db);
   db.pragma(`user_version = ${SCHEMA_VERSION}`);
