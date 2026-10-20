@@ -95,3 +95,5 @@ export function acceptLab(db, shiftId, actor) {
   if (!rep.over_limit) throw new Error('Bu smenada limitdan o\'tgan qiymat yo\'q — qabul qilish shart emas');
   db.prepare("UPDATE lab_reports SET accepted_by = ?, accepted_at = datetime('now') WHERE shift_id = ?").run(actor, shiftId);
 }
+
+// v2.8 deployed — laboratory section live.
