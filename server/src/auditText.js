@@ -38,6 +38,7 @@ const T = {
   'shift.accept': (d) => `${d.shift} smena qabul qilindi (${d.employee ?? ''})`,
   'shift.cancel': (d) => `${d.shift} smena bekor qilindi (${d.employee ?? ''}). Sabab: ${d.reason}`,
   'shift.copy': (d) => `${d.from} smena nusxalandi → ${d.to}`,
+  'shift.edit': (d) => `${d.shift} smena tahrirlash uchun qayta ochildi`,
   'collection.edit': (d) => `Ochiq smenada yozuv tahrirlandi: ${kg(d.was)} → ${kg(d.quantity)}`,
   'collection.delete': (d) => `Ochiq smenadan yozuv o'chirildi (${kg(d.was)})`,
   'payment.create': (d) => `To'lov: ${d.supplier ?? `xonadon #${d.supplierId}`} — ${money(d.amount)} (${METHOD[d.method] ?? d.method})${d.fromApp ? ', ilovadan' : ''}`,

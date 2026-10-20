@@ -74,7 +74,9 @@ export default function Collector({ tick, refresh, setFull, histReq = 0 }) {
       return <SupplierCard id={screen.card} onBack={() => setScreen(screen.from ?? null)}
         onPay={(sup) => setScreen({ payFor: sup, from: screen })} />;
     }
-    if (screen === 'history') return <History onBack={back} onCopied={() => { back(); refresh(); say('Nusxa ochildi — qatorlarni tuzatib, yopishingiz mumkin'); }} />;
+    if (screen === 'history') return <History onBack={back}
+      onCopied={() => { back(); refresh(); say('Nusxa ochildi — qatorlarni tuzatib, yopishingiz mumkin'); }}
+      onReopened={() => { back(); refresh(); say('Smena tahrir uchun ochildi — tuzatib, qayta yoping'); }} />;
     if (screen === 'pay') return <PickSupplier title="To'lov: kimga?" onBack={back} onPick={(sup) => setScreen({ payFor: { id: sup.id, name: sup.name }, from: 'pay' })} />;
     if (screen === 'new') {
       return <NewSupplier onBack={back} onCreated={(sup) => {
@@ -501,17 +503,24 @@ export function PickSupplier({ title, onBack, onPick }) {
 }
 
 // ---------------------------------------------------------------- History (online)
-function History({ onBack, onCopied }) {
+function History({ onBack, onCopied, onReopened }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState('');
   const load = useCallback(() => { setErr(''); api.history().then(setRows).catch((e) => setErr(e.message)); }, []);
   useEffect(load, [load]);
   const canCopy = api.can('collect.copy_cancelled');
+  const canEdit = api.editClosedEnabled() && api.can('collect.edit_own');
   const copy = (r) => confirmAction('copy_cancelled', 'Nusxa olish', `${r.label} smenaning nusxasi yangi ochiq smena sifatida ochiladi. Qatorlarni tuzatib, qayta yopasiz.`, 'Ha', async () => {
     try {
       await api.mobile('POST', `/shifts/${r.id}/copy`);
       await api.refreshBootstrap();
       onCopied();
+    } catch (e) { notify('Bo\'lmadi', e.message); }
+  });
+  const edit = (r) => confirmAction('edit', 'Tahrirlash', `${r.label} smena tahrirlash uchun qayta ochiladi. Tuzatib, qayta yoping.`, 'Ha', async () => {
+    try {
+      await api.reopenShiftForEdit(r.id);
+      onReopened();
     } catch (e) { notify('Bo\'lmadi', e.message); }
   });
   return (
@@ -532,6 +541,7 @@ function History({ onBack, onCopied }) {
             <Text style={s.text}>{r.pickups} ta qabul · {fmtQty(r.quantity)} kg</Text>
             {!!r.cancel_reason && <Text style={{ color: C.err }}>Sabab: {r.cancel_reason}</Text>}
             {r.status === 'cancelled' && canCopy && <Btn title="Nusxa olib tuzatish" kind="ghost" onPress={() => copy(r)} />}
+            {r.status === 'closed' && canEdit && <Btn title="Tahrirlash" kind="ghost" onPress={() => edit(r)} />}
           </View>
         )}
       />

@@ -19,7 +19,7 @@ const addDays = (day, n) => new Date(Date.parse(day) + n * 864e5).toISOString().
 const dayLabel = (day) => `${day.slice(8, 10)}.${day.slice(5, 7)}`;
 const digits = (s) => String(s ?? '').replace(/\D/g, '');
 const METHOD = { cash: 'Naqd', card: 'Karta', transfer: 'O\'tkazma' };
-const SHIFT_STATUS = { open: ['Ochiq', 'pending'], closed: ['Qabul kutmoqda', 'pending'], accepted: ['Qabul qilingan', 'sent'], cancelled: ['Bekor qilingan', 'error'] };
+const SHIFT_STATUS = { open: ['Ochiq', 'pending'], editing: ['Tahrir', 'pending'], closed: ['Qabul kutmoqda', 'pending'], accepted: ['Qabul qilingan', 'sent'], cancelled: ['Bekor qilingan', 'error'] };
 const cancelOn = () => brand.cancelEnabled !== false;
 
 let token = null;

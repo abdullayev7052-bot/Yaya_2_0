@@ -258,6 +258,15 @@ export async function refreshBootstrap() {
 }
 export const history = () => call('GET', '/api/mobile/history');
 
+// Reopen a closed-but-not-accepted shift for editing: the server moves it back to
+// the editable state and hands it back as the open shift, which we re-adopt.
+export async function reopenShiftForEdit(serverId) {
+  await call('POST', `/api/mobile/shifts/${serverId}/reopen`);
+  const r = await refreshBootstrap();
+  if (r.openShift) store.reopenLocalShift(r.openShift);
+  return r.openShift;
+}
+
 // ---------------------------------------------------------------- background sync
 const listeners = new Set();
 export function onSyncState(fn) { listeners.add(fn); return () => listeners.delete(fn); }

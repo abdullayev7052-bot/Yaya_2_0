@@ -125,7 +125,8 @@ CREATE TABLE IF NOT EXISTS shifts (
   accepted_at TEXT,
   cancelled_by TEXT,
   cancelled_at TEXT,
-  cancel_reason TEXT
+  cancel_reason TEXT,
+  reopened_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_shifts_employee ON shifts(employee_id, status);
 CREATE INDEX IF NOT EXISTS idx_shifts_status ON shifts(status, opened_at);
@@ -340,6 +341,9 @@ export function openDb(file) {
     migrateV3toV4(db);
   }
   db.exec(SCHEMA);
+  // Columns added to a table that already existed (a no-op when already present).
+  const addColumn = (table, col, def) => { try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`); } catch { /* already there */ } };
+  addColumn('shifts', 'reopened_at', 'TEXT');
   seedRoles(db);
   backfillNewPermissions(db);
   db.pragma(`user_version = ${SCHEMA_VERSION}`);

@@ -433,3 +433,34 @@ test('household delete: only a deactivated household with no balance and no hist
   assert.equal((await call(app, 'DELETE', `/api/admin/suppliers/${id}`, b)).status, 200);
   assert.ok(!db.prepare('SELECT 1 FROM suppliers WHERE id = ?').get(id), 'gone from the system');
 });
+
+test('edit a closed-not-accepted shift: reopen -> editing, cannot accept, re-close -> accept', async () => {
+  const { app, db } = setup();
+  const b = await boss(app);
+  const h = await ali(app);
+  await runShift(app, h, 'e1', [{ supplierId: 1, quantity: 10 }], { close: true });
+  let sh = (await call(app, 'GET', '/api/admin/shifts?status=closed', b)).body[0];
+  // reopen for editing
+  const id = sh.id;
+  assert.equal((await call(app, 'POST', `/api/mobile/shifts/${id}/reopen`, h)).status, 200);
+  // shown as "editing" (DB stays open + reopened_at)
+  assert.equal((await call(app, 'GET', `/api/admin/shifts/${id}`, b)).body.shift.status, 'editing');
+  assert.equal(db.prepare('SELECT status FROM shifts WHERE id = ?').get(id).status, 'open');
+  // cannot be accepted while editing
+  assert.equal((await call(app, 'POST', `/api/admin/shifts/${id}/accept`, b)).status, 400);
+  // the collector cannot open a new shift while one is in editing
+  const blocked = (await call(app, 'POST', '/api/mobile/sync', h, { shifts: [{ uuid: 'e2', openedAt: now() }] })).body;
+  assert.equal(blocked.shifts.rejected.length, 1);
+  // add another pickup during the edit, then re-close
+  assert.equal((await call(app, 'POST', '/api/mobile/sync', h, { collections: [{ uuid: 'e1-x', shiftUuid: 'e1', supplierId: 1, productId: 1, quantity: 7, collectedAt: now() }] })).body.accepted.length, 1);
+  await call(app, 'POST', '/api/mobile/sync', h, { shifts: [{ uuid: 'e1', openedAt: now(), closedAt: now() }] });
+  assert.equal(db.prepare("SELECT status FROM shifts WHERE client_uuid = 'e1'").get().status, 'closed');
+  // now acceptance works, with both pickups (10 + 7 = 17)
+  assert.equal((await call(app, 'POST', `/api/admin/shifts/${id}/accept`, b)).status, 200);
+  assert.equal(db.prepare("SELECT ROUND(SUM(quantity),2) q FROM collections WHERE shift_uuid = 'e1'").get().q, 17);
+  // turning the setting off blocks reopening
+  await call(app, 'PUT', '/api/admin/settings', b, { editClosed: false });
+  await runShift(app, h, 'e3', [{ supplierId: 1, quantity: 3 }], { close: true });
+  const sh3 = db.prepare("SELECT id FROM shifts WHERE client_uuid = 'e3'").get().id;
+  assert.equal((await call(app, 'POST', `/api/mobile/shifts/${sh3}/reopen`, h)).status, 403);
+});

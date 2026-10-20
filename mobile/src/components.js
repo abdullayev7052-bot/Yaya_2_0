@@ -39,7 +39,7 @@ export function Tile({ label, value, sub, wide }) {
 }
 
 const STATUS = {
-  open: ['Ochiq', C.warn], closed: ['Qabul kutmoqda', C.warn], accepted: ['Qabul qilingan', C.ok], cancelled: ['Bekor qilingan', C.err],
+  open: ['Ochiq', C.warn], editing: ['Tahrir', C.warn], closed: ['Qabul kutmoqda', C.warn], accepted: ['Qabul qilingan', C.ok], cancelled: ['Bekor qilingan', C.err],
 };
 export function ShiftBadge({ status }) {
   const [t, color] = STATUS[status] ?? [status, C.muted];

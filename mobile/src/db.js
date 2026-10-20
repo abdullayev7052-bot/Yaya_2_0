@@ -102,6 +102,20 @@ export function adoptShift(s) {
     }
   });
 }
+// A closed shift reopened for editing on the server becomes the open shift here
+// again: clear its closed mark and make sure its pickups are present locally.
+export function reopenLocalShift(s) {
+  db.withTransactionSync(() => {
+    const existing = db.getFirstSync('SELECT uuid FROM shifts WHERE uuid = ?', s.uuid);
+    if (existing) db.runSync('UPDATE shifts SET closed_at = NULL, dirty = 0, error = NULL WHERE uuid = ?', s.uuid);
+    else db.runSync('INSERT INTO shifts (uuid, opened_at, dirty) VALUES (?, ?, 0)', s.uuid, s.opened_at);
+    for (const c of s.collections ?? []) {
+      db.runSync(`INSERT OR IGNORE INTO collections (uuid, shift_uuid, supplier_id, supplier_name, product_id, product_name, unit, quantity, collected_at, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, c.uuid, s.uuid, c.supplier_id, c.supplier_name, c.product_id, c.product_name, c.unit ?? 'kg',
+      c.quantity, c.collected_at, now());
+    }
+  });
+}
 // A shift the server refused (e.g. another one was still waiting): drop it and its pickups.
 export function discardShift(uuid) {
   db.withTransactionSync(() => {

@@ -7,6 +7,9 @@ import { emitEvent } from './db/index.js';
 // new open draft with the same number and a "-copy" suffix.
 
 export const shiftLabel = (s) => `#${s.number}${s.copy_no ? `-copy${s.copy_no > 1 ? s.copy_no : ''}` : ''}`;
+// A shift reopened for editing stays 'open' in the DB (the status column's allowed
+// set) but is shown as 'editing' so the UI can mark it "Tahrir".
+export const displayStatus = (s) => (s.status === 'open' && s.reopened_at ? 'editing' : s.status);
 
 export class ShiftError extends Error {
   constructor(message, details) {
@@ -24,15 +27,15 @@ const nextNumber = (db) => (db.prepare('SELECT MAX(number) AS n FROM shifts').ge
 // else the cancelled one), or null when everything is resolved.
 export const blockingShift = (db, userId) => {
   const unresolved = db.prepare(`SELECT number FROM shifts WHERE employee_id = ? GROUP BY number
-    HAVING MAX(status = 'accepted') = 0 AND MAX(status IN ('open', 'closed', 'cancelled')) = 1`).all(userId).map((r) => r.number);
+    HAVING MAX(status = 'accepted') = 0 AND MAX(status IN ('open', 'editing', 'closed', 'cancelled')) = 1`).all(userId).map((r) => r.number);
   if (!unresolved.length) return null;
   return db.prepare(`SELECT * FROM shifts WHERE employee_id = ? AND number IN (${unresolved.join(',')})
-    ORDER BY (status IN ('open', 'closed')) DESC, opened_at DESC LIMIT 1`).get(userId);
+    ORDER BY (status IN ('open', 'editing', 'closed')) DESC, opened_at DESC LIMIT 1`).get(userId);
 };
 
-// Only an open/closed shift blocks copying (the cancelled one being copied is
-// expected). Used so a collector can fix a cancelled shift but not run two at once.
-export const activeShift = (db, userId) => db.prepare(`SELECT * FROM shifts WHERE employee_id = ? AND status IN ('open', 'closed')
+// Only an open/editing/closed shift blocks copying (the cancelled one being copied
+// is expected). Used so a collector can fix a cancelled shift but not run two at once.
+export const activeShift = (db, userId) => db.prepare(`SELECT * FROM shifts WHERE employee_id = ? AND status IN ('open', 'editing', 'closed')
   ORDER BY opened_at DESC LIMIT 1`).get(userId);
 
 export function shiftTotals(db, uuid) {
@@ -116,10 +119,26 @@ export function ensureShift(db, userId, { uuid, openedAt }) {
 }
 
 export function closeShift(db, s, closedAt) {
-  if (s.status !== 'open') return s;
+  // A shift is closed from the open draft, or re-closed after an edit (editing).
+  if (s.status !== 'open' && s.status !== 'editing') return s;
   db.prepare("UPDATE shifts SET status = 'closed', closed_at = ? WHERE id = ?").run(closedAt ?? now(), s.id);
   const next = db.prepare('SELECT * FROM shifts WHERE id = ?').get(s.id);
   emitEvent(db, 'shift.closed', eventPayload(db, next));
+  return next;
+}
+
+// Re-open a closed-but-not-accepted shift for editing (a collector who closed it
+// by mistake). It goes to the "editing" state: it is editable again, blocks a new
+// shift, and cannot be accepted until the collector re-closes it.
+export function reopenShift(db, id, actor) {
+  const s = db.prepare('SELECT * FROM shifts WHERE id = ?').get(id);
+  if (!s) throw new ShiftError('Smena topilmadi');
+  if (s.status !== 'closed') throw new ShiftError('Faqat yopilgan (hali qabul qilinmagan) smenani tahrirlash mumkin');
+  // Back to the open (editable) state, but marked as reopened so the UI can show
+  // it as "Tahrir". Status stays within the table's allowed set.
+  db.prepare("UPDATE shifts SET status = 'open', closed_at = NULL, reopened_at = ? WHERE id = ?").run(now(), s.id);
+  const next = db.prepare('SELECT * FROM shifts WHERE id = ?').get(s.id);
+  emitEvent(db, 'shift.edit', { ...eventPayload(db, next), by: actor });
   return next;
 }
 
@@ -188,7 +207,7 @@ export function copyShift(db, id, actor) {
 // Shift list with totals, for reviewers and the live view.
 export function listShifts(db, { from, to, status, employee, limit = 500 }) {
   return db.prepare(`
-    SELECT sh.id, sh.client_uuid, sh.number, sh.copy_no, sh.opened_at, sh.closed_at, sh.status,
+    SELECT sh.id, sh.client_uuid, sh.number, sh.copy_no, sh.opened_at, sh.closed_at, sh.status, sh.reopened_at,
       sh.accepted_by, sh.accepted_at, sh.cancelled_by, sh.cancelled_at, sh.cancel_reason,
       u.id AS employee_id, u.name AS employee_name, u.is_test,
       COUNT(c.id) AS pickups, ROUND(COALESCE(SUM(c.quantity), 0), 2) AS quantity,
@@ -200,7 +219,7 @@ export function listShifts(db, { from, to, status, employee, limit = 500 }) {
       AND (@status IS NULL OR sh.status = @status) AND (@employee IS NULL OR sh.employee_id = @employee)
     GROUP BY sh.id ORDER BY sh.opened_at DESC LIMIT ${Number(limit) || 500}`)
     .all({ from: from ?? null, to: to ?? null, status: status ?? null, employee: employee ?? null })
-    .map((r) => ({ ...r, label: shiftLabel(r), amount: r.status === 'accepted' ? r.amount : null }));
+    .map((r) => ({ ...r, amount: r.status === 'accepted' ? r.amount : null, status: displayStatus(r), label: shiftLabel(r) }));
 }
 
 export function shiftDetail(db, id) {
@@ -219,5 +238,5 @@ export function shiftDetail(db, id) {
     byProduct[k].quantity = Math.round((byProduct[k].quantity + r.quantity) * 100) / 100;
     byProduct[k].pickups++;
   }
-  return { shift: { ...s, label: shiftLabel(s) }, rows, byProduct: Object.values(byProduct) };
+  return { shift: { ...s, status: displayStatus(s), label: shiftLabel(s) }, rows, byProduct: Object.values(byProduct) };
 }

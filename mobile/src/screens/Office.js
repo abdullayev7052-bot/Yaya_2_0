@@ -166,6 +166,7 @@ export function ShiftDetail({ id, onBack, onChanged }) {
               {sh.accepted_at && <Text style={s.muted}>Qabul qildi: {String(sh.accepted_by ?? '').replace(/^user:/, '')} · {fmtDT(sh.accepted_at)}</Text>}
               {sh.cancelled_at && <Text style={{ color: C.err }}>Bekor qildi: {String(sh.cancelled_by ?? '').replace(/^user:/, '')} · {fmtDT(sh.cancelled_at)}. Sabab: {sh.cancel_reason}</Text>}
               {sh.status === 'open' && <Text style={{ color: C.warn }}>Ochiq smena. Hisobga kirmaydi.</Text>}
+              {sh.status === 'editing' && <Text style={{ color: C.warn }}>Tahrir qilinmoqda. Xodim qayta yopmaguncha qabul qilib bo'lmaydi.</Text>}
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                 {d.byProduct.map((p) => <Tile key={p.name} label={p.name} value={fmtQty(p.quantity)} sub={`${p.unit} · ${p.pickups} ta`} />)}
               </View>

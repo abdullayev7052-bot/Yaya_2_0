@@ -2,7 +2,7 @@ import { audit } from '../db/index.js';
 import { makeGuard } from '../auth.js';
 import { getSetting } from '../settings.js';
 import { supplierBalance } from '../ledger.js';
-import { ShiftError, blockingShift, closeShift, copyShift, ensureShift, shiftLabel, shiftTotals } from '../shifts.js';
+import { ShiftError, blockingShift, closeShift, copyShift, displayStatus, ensureShift, reopenShift, shiftLabel, shiftTotals } from '../shifts.js';
 
 // API for the field part of the mobile app (collecting milk). Everything a
 // collector does offline is uploaded through /sync and is idempotent by
@@ -30,9 +30,9 @@ export default async function mobileRoutes(app, { db }) {
     return suppliers;
   };
 
-  const myShifts = (userId, limit = 20) => db.prepare(`SELECT id, client_uuid AS uuid, number, copy_no, status, opened_at, closed_at,
+  const myShifts = (userId, limit = 20) => db.prepare(`SELECT id, client_uuid AS uuid, number, copy_no, status, reopened_at, opened_at, closed_at,
       cancel_reason, accepted_at, cancelled_at FROM shifts WHERE employee_id = ? ORDER BY opened_at DESC LIMIT ?`).all(userId, limit)
-    .map((s) => ({ ...s, label: shiftLabel(s), ...shiftTotals(db, s.uuid) }));
+    .map((s) => ({ ...s, status: displayStatus(s), label: shiftLabel(s), ...shiftTotals(db, s.uuid) }));
 
   // Everything the phone needs to work offline. Prices are never sent here.
   app.get('/bootstrap', need(), async (req) => {
@@ -51,8 +51,9 @@ export default async function mobileRoutes(app, { db }) {
       shifts: collects ? myShifts(me.id) : [],
       serverTime: new Date().toISOString(),
     };
-    // A shift opened on the server (a copy of a cancelled one) is handed to the phone.
-    const open = collects && db.prepare("SELECT * FROM shifts WHERE employee_id = ? AND status = 'open' ORDER BY opened_at DESC LIMIT 1").get(me.id);
+    // A shift opened on the server (a copy of a cancelled one, or one reopened for
+    // editing) is handed to the phone as its open shift.
+    const open = collects && db.prepare("SELECT * FROM shifts WHERE employee_id = ? AND status IN ('open', 'editing') ORDER BY opened_at DESC LIMIT 1").get(me.id);
     if (open) {
       out.openShift = {
         uuid: open.client_uuid, label: shiftLabel(open), opened_at: open.opened_at,
@@ -77,6 +78,22 @@ export default async function mobileRoutes(app, { db }) {
     } catch (e) {
       if (e instanceof ShiftError) return reply.code(400).send({ error: e.message });
       throw e;
+    }
+  });
+
+  // Re-open a closed-but-not-accepted shift for editing (a mistaken close). Only
+  // the owner, only while the admin allows it. The phone then adopts it as open.
+  app.post('/shifts/:id/reopen', need('collect.edit_own'), async (req, reply) => {
+    if (getSetting(db, 'edit_closed_enabled') === '0') return reply.code(403).send({ error: 'Yopilgan smenani tahrirlash o\'chirib qo\'yilgan' });
+    const s = db.prepare('SELECT * FROM shifts WHERE id = ?').get(req.params.id);
+    if (!s || s.employee_id !== req.me.id) return reply.code(404).send({ error: 'Smena topilmadi' });
+    try {
+      const e = reopenShift(db, s.id, req.actor);
+      audit(db, req.actor, 'shift.edit', { shift: shiftLabel(e) });
+      return { id: e.id, uuid: e.client_uuid, label: shiftLabel(e) };
+    } catch (err) {
+      if (err instanceof ShiftError) return reply.code(400).send({ error: err.message });
+      throw err;
     }
   });
 
@@ -208,7 +225,7 @@ export default async function mobileRoutes(app, { db }) {
         const sh = shiftOf.get(c.shiftUuid);
         if (!can('collect.shift')) { reject('Sut qabul qilishga ruxsat yo\'q'); continue; }
         if (!sh || sh.employee_id !== me.id) { reject('Smena topilmadi'); continue; }
-        if (sh.status !== 'open') { reject(`${shiftLabel(sh)} smena yopilgan — o'zgartirib bo'lmaydi`); continue; }
+        if (sh.status !== 'open' && sh.status !== 'editing') { reject(`${shiftLabel(sh)} smena yopilgan — o'zgartirib bo'lmaydi`); continue; }
         if (!visible(c.supplierId)) { reject('Bu xonadon sizga ko\'rinmaydi'); continue; }
         if (!linked.get(c.supplierId, c.productId)) { reject('Bu mahsulot xonadonga biriktirilmagan'); continue; }
         db.prepare(`INSERT INTO collections (client_uuid, shift_uuid, employee_id, supplier_id, product_id, quantity, collected_at)
@@ -227,7 +244,7 @@ export default async function mobileRoutes(app, { db }) {
           if (op.type === 'delete') { db.prepare('INSERT INTO applied_ops (uuid) VALUES (?)').run(op.uuid); out.ops.accepted.push(op.uuid); } else reject('Yozuv topilmadi');
           continue;
         }
-        if (c.status !== 'open') { reject('Smena yopilgan — o\'zgartirib bo\'lmaydi'); continue; }
+        if (c.status !== 'open' && c.status !== 'editing') { reject('Smena yopilgan — o\'zgartirib bo\'lmaydi'); continue; }
         if (op.type === 'delete') {
           if (!can('collect.delete_own')) { reject('O\'chirishga ruxsat yo\'q'); continue; }
           db.prepare('DELETE FROM collections WHERE id = ?').run(c.id);
