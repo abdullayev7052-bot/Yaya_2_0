@@ -276,8 +276,11 @@ const emit = (patch) => { state = { ...state, ...patch }; listeners.forEach((fn)
 export const getSyncState = () => state;
 
 let inFlight = null;
+let resyncQueued = false;
 export function syncNow() {
-  if (inFlight) return inFlight;
+  // If a sync is already running, remember to run once more right after, so a
+  // shift just closed (or any change) is pushed immediately, not at the next tick.
+  if (inFlight) { resyncQueued = true; return inFlight; }
   inFlight = (async () => {
     if (!getSession()) return;
     emit({ syncing: true });
@@ -308,6 +311,7 @@ export function syncNow() {
       inFlight = null;
     }
   })();
+  inFlight.finally(() => { if (resyncQueued) { resyncQueued = false; syncNow(); } });
   return inFlight;
 }
 

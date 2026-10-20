@@ -9,6 +9,7 @@ import { balances, statement, supplierBalance } from '../ledger.js';
 import { templateXlsx, importSuppliers, exportSuppliersXlsx } from '../importer.js';
 import { CONFIRM_KEYS, confirmFlags, diffFlags, getSetting, setSetting } from '../settings.js';
 import { ShiftError, acceptShift, cancelShift, copyShift, listShifts, shiftCopyText, shiftDetail, shiftLabel } from '../shifts.js';
+import { labFields, labList, labDetail, saveLab, acceptLab } from '../lab.js';
 import { decrypt, encrypt, listSafety, loadSafety, restore, saveSafety, snapshot, wipeHistory } from '../backup.js';
 import { actorName, describe } from '../auditText.js';
 
@@ -288,25 +289,34 @@ export default async function adminRoutes(app, { db }) {
     return { ok: true };
   });
 
-  // Permanently remove a deactivated household — only when it carries no balance
-  // and no history, so reports and debts are never affected.
+  // Permanently remove a deactivated household. The only hard rule is a zero
+  // balance (no qarzdorlik/haqdorlik) — money must be settled first. A household
+  // with no history is removed cleanly; one WITH history needs force: true, which
+  // also deletes its milk/payment history (so past reports change). The panel asks
+  // a stronger confirmation before sending force.
   app.delete('/suppliers/:id', need('suppliers.edit'), async (req, reply) => {
     const id = Number(req.params.id);
     const s = db.prepare('SELECT id, name, active FROM suppliers WHERE id = ?').get(id);
     if (!s) return reply.code(404).send({ error: 'Topilmadi' });
     if (s.active) return bad(reply, 'Avval xonadonni o\'chiring (nofaol qiling), keyin butunlay o\'chirib bo\'ladi.');
-    if (supplierBalance(db, id) !== 0) return bad(reply, 'Bu xonadonda qarzdorlik yoki haqdorlik bor — butunlay o\'chirib bo\'lmaydi.');
-    const refs = db.prepare('SELECT 1 FROM collections WHERE supplier_id = ? LIMIT 1').get(id)
+    if (supplierBalance(db, id) !== 0) return bad(reply, 'Bu xonadonda qarzdorlik yoki haqdorlik bor — avval hisob-kitobni 0 qiling.');
+    const hasHistory = db.prepare('SELECT 1 FROM collections WHERE supplier_id = ? LIMIT 1').get(id)
       || db.prepare('SELECT 1 FROM payments WHERE supplier_id = ? LIMIT 1').get(id)
       || db.prepare('SELECT 1 FROM adjustments WHERE supplier_id = ? LIMIT 1').get(id);
-    if (refs) return bad(reply, 'Bu xonadonda sut yoki to\'lov tarixi bor — butunlay o\'chirib bo\'lmaydi. Nofaol holatda qoladi.');
+    const force = req.body?.force === true || req.query?.force === '1';
+    if (hasHistory && !force) return reply.code(409).send({ error: 'Bu xonadonda sut yoki to\'lov tarixi bor. Tarix bilan birga butunlay o\'chirish uchun tasdiqlang.', hasHistory: true });
     db.transaction(() => {
+      if (hasHistory) {
+        db.prepare('DELETE FROM collections WHERE supplier_id = ?').run(id);
+        db.prepare('DELETE FROM payments WHERE supplier_id = ?').run(id);
+        db.prepare('DELETE FROM adjustments WHERE supplier_id = ?').run(id);
+      }
       db.prepare('DELETE FROM supplier_products WHERE supplier_id = ?').run(id);
       db.prepare('DELETE FROM employee_suppliers WHERE supplier_id = ?').run(id);
       db.prepare('DELETE FROM employee_hidden_suppliers WHERE supplier_id = ?').run(id);
       db.prepare('DELETE FROM suppliers WHERE id = ?').run(id);
     })();
-    log(req, 'suppliers.delete', { id, name: s.name });
+    log(req, 'suppliers.delete', { id, name: s.name, withHistory: !!hasHistory });
     return { ok: true };
   });
 
@@ -475,6 +485,64 @@ export default async function adminRoutes(app, { db }) {
       log(req, 'shift.copy', { from: from && shiftLabel(from), to: shiftLabel(s) });
       return { id: s.id, label: shiftLabel(s) };
     } catch (e) { return shiftErr(reply, e); }
+  });
+
+  // ---------------------------------------------------------------- laboratory
+  // Field configuration (panel only in practice — needs lab.fields).
+  app.get('/lab/fields', need('lab.view'), async () => labFields(db));
+  app.post('/lab/fields', need('lab.fields'), async (req, reply) => {
+    const b = req.body ?? {};
+    const name = str(b.name, 60);
+    if (!name) return bad(reply, 'Nom shart');
+    const type = b.type === 'variant' ? 'variant' : 'number';
+    const numOrNull = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+    const bad_option = type === 'variant' && (b.badOption === 'bor' || b.badOption === 'yoq') ? b.badOption : null;
+    const sort = Number(b.sort) || (db.prepare('SELECT COALESCE(MAX(sort), 0) + 1 AS n FROM lab_fields').get().n);
+    const id = db.prepare('INSERT INTO lab_fields (name, type, limit_min, limit_max, bad_option, sort) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(name, type, type === 'number' ? numOrNull(b.limitMin) : null, type === 'number' ? numOrNull(b.limitMax) : null, bad_option, sort).lastInsertRowid;
+    log(req, 'lab.field.create', { id: Number(id), name });
+    return { id: Number(id) };
+  });
+  app.patch('/lab/fields/:id', need('lab.fields'), async (req, reply) => {
+    const id = Number(req.params.id);
+    const f = db.prepare('SELECT * FROM lab_fields WHERE id = ?').get(id);
+    if (!f) return reply.code(404).send({ error: 'Topilmadi' });
+    const b = req.body ?? {};
+    const numOrNull = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+    const type = b.type === 'variant' || b.type === 'number' ? b.type : f.type;
+    db.prepare(`UPDATE lab_fields SET name = COALESCE(?, name), type = ?,
+      limit_min = CASE WHEN ? THEN ? ELSE limit_min END, limit_max = CASE WHEN ? THEN ? ELSE limit_max END,
+      bad_option = CASE WHEN ? THEN ? ELSE bad_option END, sort = COALESCE(?, sort) WHERE id = ?`)
+      .run(b.name !== undefined ? str(b.name, 60) : null, type,
+        Number(b.limitMin !== undefined), type === 'number' ? numOrNull(b.limitMin) : null,
+        Number(b.limitMax !== undefined), type === 'number' ? numOrNull(b.limitMax) : null,
+        Number(b.badOption !== undefined), type === 'variant' && (b.badOption === 'bor' || b.badOption === 'yoq') ? b.badOption : null,
+        b.sort !== undefined ? Number(b.sort) : null, id);
+    log(req, 'lab.field.update', { id, name: b.name ?? f.name });
+    return { ok: true };
+  });
+  app.delete('/lab/fields/:id', need('lab.fields'), async (req) => {
+    db.prepare('UPDATE lab_fields SET active = 0 WHERE id = ?').run(Number(req.params.id));
+    log(req, 'lab.field.delete', { id: Number(req.params.id) });
+    return { ok: true };
+  });
+
+  // Lab worklist and one shift's report.
+  app.get('/lab', need('lab.view'), async () => labList(db, {}));
+  app.get('/lab/:id', need('lab.view'), async (req, reply) => labDetail(db, Number(req.params.id)) ?? reply.code(404).send({ error: 'Topilmadi' }));
+  app.put('/lab/:id', need('lab.edit'), async (req, reply) => {
+    try {
+      const r = saveLab(db, Number(req.params.id), req.body?.values ?? {}, req.actor);
+      log(req, 'lab.save', { shiftId: Number(req.params.id), overLimit: r.overLimit });
+      return { ok: true, overLimit: r.overLimit };
+    } catch (e) { return bad(reply, e.message); }
+  });
+  app.post('/lab/:id/accept', need('lab.accept'), async (req, reply) => {
+    try {
+      acceptLab(db, Number(req.params.id), req.actor);
+      log(req, 'lab.accept', { shiftId: Number(req.params.id) });
+      return { ok: true };
+    } catch (e) { return bad(reply, e.message); }
   });
 
   // ---------------------------------------------------------------- payments & debts

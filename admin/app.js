@@ -58,7 +58,7 @@ async function request(method, url, body) {
 async function api(method, path, body, base = '/api/admin') {
   const res = await request(method, base + path, body);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'Xatolik: ' + res.status);
+  if (!res.ok) { const err = new Error(data.error || 'Xatolik: ' + res.status); err.status = res.status; err.data = data; throw err; }
   return data;
 }
 // File downloads need the auth header, so fetch them instead of following a link.
@@ -214,7 +214,7 @@ const PAGES = [
   ['dashboard', 'Bugun', 'reports.view'], ['shifts', 'Smenalar', 'shifts.view_all'], ['reports', 'Hisobotlar', 'reports.view'],
   ['debts', 'Qarzlar va to\'lovlar', 'debts.view'], ['suppliers', 'Xonadonlar', 'suppliers.view'],
   ['staff', 'Xodimlar', 'staff.manage'], ['roles', 'Rollar va ruxsatlar', 'staff.manage'], ['devices', 'Qurilmalar', 'staff.manage'],
-  ['catalog', 'Mahsulotlar', 'catalog.manage'], ['tester', 'Ilovani sinash', 'tester.use'], ['settings', 'Sozlamalar', null],
+  ['catalog', 'Mahsulotlar', 'catalog.manage'], ['lab', 'Laboratoriya', 'lab.fields'], ['tester', 'Ilovani sinash', 'tester.use'], ['settings', 'Sozlamalar', null],
 ];
 
 async function show() {
@@ -749,8 +749,16 @@ const views = {
     }); });
     $$('[data-remove]', v).forEach((b) => { b.onclick = act(async () => {
       const s = sups.find((x) => String(x.id) === b.dataset.remove);
-      if (!confirmFor('entity_delete', `${s.name} tizimdan BUTUNLAY o'chiriladi. Faqat qarzi/haqi va tarixi bo'lmasa o'chadi. Davom etasizmi?`)) return;
-      await api('DELETE', `/suppliers/${s.id}`);
+      if (!confirmFor('entity_delete', `${s.name} tizimdan BUTUNLAY o'chiriladi (qarzi/haqi 0 bo'lishi shart). Davom etasizmi?`)) return;
+      try {
+        await api('DELETE', `/suppliers/${s.id}`);
+      } catch (e) {
+        // History exists: ask once more, then delete together with the history.
+        if (e.status === 409 || /tarixi bor/.test(e.message || '')) {
+          if (!confirm(`${s.name}da sut/to'lov tarixi bor. Tarix bilan birga o'chirilsa — o'tgan hisobotlar o'zgaradi. Baribir butunlay o'chirilsinmi?`)) return;
+          await api('DELETE', `/suppliers/${s.id}`, { force: true });
+        } else throw e;
+      }
       flash('Xonadon butunlay o\'chirildi');
       route();
     }); });
@@ -1009,6 +1017,38 @@ const views = {
   },
 
   // ------------------------------------------------------------------ settings, data, audit
+  // ------------------------------------------------------------------ laboratory fields
+  async lab(v) {
+    const fields = await api('GET', '/lab/fields');
+    const typeLabel = (f) => (f.type === 'variant' ? 'Variant (Bor/Yo\'q)' : 'Raqam');
+    const limitText = (f) => {
+      if (f.type === 'variant') return f.bad_option ? `"${f.bad_option === 'bor' ? 'Bor' : 'Yo\'q'}" bo'lsa limitdan o'tgan` : 'erkin';
+      const p = [];
+      if (f.limit_min != null) p.push(`min ${f.limit_min}`);
+      if (f.limit_max != null) p.push(`max ${f.limit_max}`);
+      return p.length ? p.join(' · ') : 'erkin';
+    };
+    v.innerHTML = `
+      <div class="card"><div class="row" style="justify-content:space-between"><h2>Laboratoriya maydonlari</h2><button id="add">+ Yangi maydon</button></div>
+        <p class="muted">Laborant har bir <b>qabul qilingan</b> smenaga shu qiymatlarni ilovadagi "Laborant" bo'limida kiritadi. Limitdan o'tsa — smena qizil ramkada belgilanadi va admin ko'rib qabul qilmaguncha shunday turadi. Bu yerda faqat maydonlar sozlanadi, kunlik ma'lumot kiritilmaydi.</p>
+        <div class="table-wrap"><table>
+          <tr><th>Maydon</th><th>Turi</th><th>Limit</th><th></th></tr>
+          ${fields.map((f) => `<tr><td><b>${esc(f.name)}</b></td><td>${typeLabel(f)}</td><td>${limitText(f)}</td>
+            <td class="row"><button class="small ghost" data-edit="${f.id}">Tahrirlash</button><button class="small ghost" data-del="${f.id}">O'chirish</button></td></tr>`).join('')
+            || '<tr><td colspan="4" class="muted">Hali maydon yo\'q. Masalan: Жир, Вода, Кислотист (raqam) yoki Антибиотик, Мастит (Bor/Yo\'q).</td></tr>'}
+        </table></div></div>`;
+    const form = (f = {}) => [
+      { name: 'name', label: 'Nomi', value: f.name, required: true },
+      { name: 'type', label: 'Turi', type: 'select', value: f.type || 'number', options: [['number', 'Raqam (masalan 3.65)'], ['variant', 'Variant (Bor / Yo\'q)']] },
+      { name: 'limitMin', label: 'Limit — eng kam (ixtiyoriy, faqat raqam uchun)', type: 'number', step: 'any', value: f.limit_min },
+      { name: 'limitMax', label: 'Limit — eng ko\'p (ixtiyoriy, faqat raqam uchun)', type: 'number', step: 'any', value: f.limit_max },
+      { name: 'badOption', label: 'Variant uchun: qaysi javob "limitdan o\'tgan" hisoblansin', type: 'select', value: f.bad_option || '', options: [['', 'Erkin (limit yo\'q)'], ['bor', '"Bor" bo\'lsa'], ['yoq', '"Yo\'q" bo\'lsa']] },
+    ];
+    $('#add', v).onclick = () => openForm({ title: 'Yangi laboratoriya maydoni', fields: form(), onSubmit: async (d) => { await api('POST', '/lab/fields', d); flash('Qo\'shildi'); } });
+    $$('[data-edit]', v).forEach((b) => { b.onclick = () => { const f = fields.find((x) => String(x.id) === b.dataset.edit); openForm({ title: 'Maydonni tahrirlash', fields: form(f), onSubmit: async (d) => { await api('PATCH', `/lab/fields/${f.id}`, d); flash('Saqlandi'); } }); }; });
+    $$('[data-del]', v).forEach((b) => { b.onclick = act(async () => { if (!confirm('Bu maydon o\'chirilsinmi? Eski yozuvlarga ta\'sir qilmaydi.')) return; await api('DELETE', `/lab/fields/${b.dataset.del}`); flash('O\'chirildi'); route(); }); });
+  },
+
   async settings(v) {
     const st = can('settings.manage') ? await api('GET', '/settings') : null;
     const safety = can('data.backup') ? await api('GET', '/data/safety') : [];

@@ -33,6 +33,12 @@ export const PERMISSIONS = [
   { key: 'payments.create', group: 'Qarzlar va to\'lovlar', label: 'Xonadonga to\'lov qilish' },
   { key: 'payments.void', group: 'Qarzlar va to\'lovlar', label: 'To\'lovni bekor qilish' },
 
+  // --- laboratory
+  { key: 'lab.view', group: 'Laboratoriya', label: 'Laborant bo\'limini ko\'rish (narx va xonadonlarsiz)' },
+  { key: 'lab.edit', group: 'Laboratoriya', label: 'Laboratoriya qiymatlarini kiritish va saqlash' },
+  { key: 'lab.accept', group: 'Laboratoriya', label: 'Limitdan o\'tgan smenani qabul qilish (laborantga ko\'rinmaydi)' },
+  { key: 'lab.fields', group: 'Laboratoriya', label: 'Laboratoriya maydonlari va limitlarini sozlash' },
+
   // --- reports
   { key: 'reports.view', group: 'Hisobotlar', label: 'Hisobotlar, o\'rtacha tannarx, kunlik ko\'rsatkichlar' },
   { key: 'reports.export', group: 'Hisobotlar', label: 'Hisobotni Excel\'ga yuklab olish' },
@@ -65,12 +71,14 @@ export const BUILTIN_ROLES = [
     perms: ALL.filter((k) => !['panel.access', 'staff.manage', 'settings.manage', 'audit.view', 'data.backup', 'tester.use',
       ...COLLECT_PERMS].includes(k)) },
   { code: 'storekeeper', name: 'Omborchi', locked: 0,
-    perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'shifts.copy', 'diff.view', 'suppliers.view', 'debts.view', 'payments.create', 'reports.view'] },
+    perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'shifts.copy', 'diff.view', 'suppliers.view', 'debts.view', 'payments.create', 'reports.view',
+      'lab.view', 'lab.accept'] },
   { code: 'viewer', name: 'Buxgalter', locked: 0,
     perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'diff.view', 'suppliers.view', 'suppliers.edit', 'suppliers.location',
-      'prices.view', 'prices.manage', 'debts.view', 'payments.create', 'payments.void', 'reports.view', 'reports.export'] },
+      'prices.view', 'prices.manage', 'debts.view', 'payments.create', 'payments.void', 'reports.view', 'reports.export', 'lab.view', 'lab.accept'] },
   { code: 'collector', name: 'Sut yig\'uvchi', locked: 0,
     perms: [...COLLECT_PERMS, 'suppliers.card_own', 'suppliers.location', 'payments.create'] },
+  { code: 'lab', name: 'Laborant', locked: 0, perms: ['lab.view', 'lab.edit'] },
 ];
 
 // v3 permission keys -> v4 keys (used once by the v3 -> v4 migration).

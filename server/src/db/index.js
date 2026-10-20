@@ -145,6 +145,34 @@ CREATE TABLE IF NOT EXISTS shift_accepts (
   PRIMARY KEY (shift_id, product_id)
 );
 
+-- Laboratory report fields, configured in the panel. A field is a number
+-- (flagged when outside limit_min..limit_max, either bound optional) or a
+-- variant (answer 'bor'/'yoq'; bad_option names the flagged answer, NULL = free).
+CREATE TABLE IF NOT EXISTS lab_fields (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'number' CHECK (type IN ('number','variant')),
+  limit_min REAL,
+  limit_max REAL,
+  bad_option TEXT CHECK (bad_option IN ('bor','yoq') OR bad_option IS NULL),
+  sort INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- One lab report per accepted shift. values is JSON { "<fieldId>": number|"bor"|"yoq" }.
+-- over_limit is cached at save time; a flagged report waits for an accept.
+CREATE TABLE IF NOT EXISTS lab_reports (
+  shift_id INTEGER PRIMARY KEY REFERENCES shifts(id) ON DELETE CASCADE,
+  vals TEXT NOT NULL,
+  over_limit INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT,
+  accepted_by TEXT,
+  accepted_at TEXT
+);
+
 -- One pickup. price is stamped when the shift is accepted.
 CREATE TABLE IF NOT EXISTS collections (
   id INTEGER PRIMARY KEY,
@@ -243,10 +271,10 @@ function seedRoles(db) {
 const NEW_ROLE_PERMS = {
   collector: ['suppliers.location', 'collect.view_own_shifts'],
   // Accountants set prices and edit household data from the app now.
-  viewer: ['suppliers.edit', 'suppliers.location', 'prices.manage', 'diff.view'],
-  // Whoever accepts shifts may see the accepted-quantity difference.
-  manager: ['diff.view'],
-  storekeeper: ['diff.view'],
+  viewer: ['suppliers.edit', 'suppliers.location', 'prices.manage', 'diff.view', 'lab.view', 'lab.accept'],
+  // Whoever accepts shifts may see the accepted-quantity difference and the lab.
+  manager: ['diff.view', 'lab.view', 'lab.accept', 'lab.fields'],
+  storekeeper: ['diff.view', 'lab.view', 'lab.accept'],
 };
 function backfillNewPermissions(db) {
   for (const [code, keys] of Object.entries(NEW_ROLE_PERMS)) {

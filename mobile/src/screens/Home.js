@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import * as api from '../api';
 import { Logo } from '../components';
 import Collector from './Collector';
 import Profile from './Profile';
-import { Debts, Payments, ShiftDetail, Shifts, Today } from './Office';
+import { Debts, Lab, LabDetail, Payments, ShiftDetail, Shifts, Today } from './Office';
 import { PaymentForm, SupplierCard } from './Supplier';
 import { C, s } from '../ui';
 
@@ -15,6 +15,7 @@ const TABS = [
   ['collect', 'Smena', () => api.can('collect.shift')],
   ['today', 'Kun', () => api.can('reports.view')],
   ['shifts', 'Smenalar', () => api.can('shifts.view_all')],
+  ['lab', 'Laborant', () => api.can('lab.view')],
   ['debts', 'Qarzlar', () => api.can('debts.view')],
   ['pays', 'To\'lovlar', () => api.can('debts.view')],
   ['me', 'Profil', () => true],
@@ -27,8 +28,19 @@ export default function Home({ tick, refresh, onLogout }) {
   // Detail screens opened from the office tabs.
   const [shiftId, setShiftId] = useState(null);
   const [cardId, setCardId] = useState(null);
+  const [labId, setLabId] = useState(null);
   const [payFor, setPayFor] = useState(null);
+  const [labFlag, setLabFlag] = useState(false);
   const [toast, setToast] = useState('');
+  // Red dot on the Laborant tab while any accepted shift is flagged (over a limit).
+  useEffect(() => {
+    if (!api.can('lab.view')) return undefined;
+    let alive = true;
+    const check = () => api.admin('GET', '/lab').then((d) => { if (alive) setLabFlag((d.flagged || 0) > 0); }).catch(() => {});
+    check();
+    const t = setInterval(check, 30000);
+    return () => { alive = false; clearInterval(t); };
+  }, [tick]);
   // Long-pressing the "Smena" tab (2s) opens the collector's own shift history,
   // even while a shift is open. Bumping this counter signals the request.
   const [histReq, setHistReq] = useState(0);
@@ -43,14 +55,17 @@ export default function Home({ tick, refresh, onLogout }) {
     body = <SupplierCard id={cardId} onBack={() => setCardId(null)} onPay={setPayFor} />;
   } else if (shiftId) {
     body = <ShiftDetail id={shiftId} onBack={() => setShiftId(null)} onChanged={refresh} onCard={setCardId} />;
+  } else if (labId) {
+    body = <LabDetail id={labId} onBack={() => setLabId(null)} onChanged={refresh} />;
   } else if (current === 'collect') body = <Collector tick={tick} refresh={refresh} setFull={setFull} histReq={histReq} />;
   else if (current === 'today') body = <Today onShift={setShiftId} />;
   else if (current === 'shifts') body = <Shifts onShift={setShiftId} tick={tick} />;
+  else if (current === 'lab') body = <Lab onOpen={setLabId} />;
   else if (current === 'debts') body = <Debts onOpen={setCardId} onPay={setPayFor} tick={tick} />;
   else if (current === 'pays') body = <Payments onOpen={setCardId} />;
   else body = <Profile tick={tick} onLogout={onLogout} setFull={setFull} />;
 
-  const detail = !!(payFor || cardId || shiftId);
+  const detail = !!(payFor || cardId || shiftId || labId);
   const chrome = !full && !detail;
   return (
     <View style={{ flex: 1 }}>
@@ -70,7 +85,10 @@ export default function Home({ tick, refresh, onLogout }) {
               onLongPress={k === 'collect' && api.can('collect.view_own_shifts') ? () => { setTab('collect'); setHistReq((n) => n + 1); } : undefined}
               delayLongPress={2000}
               style={{ flex: 1, paddingVertical: 14, alignItems: 'center' }}>
-              <Text style={{ fontSize: 15, fontWeight: current === k ? '700' : '500', color: current === k ? C.accent : C.muted }}>{t}</Text>
+              <View>
+                <Text style={{ fontSize: 15, fontWeight: current === k ? '700' : '500', color: current === k ? C.accent : C.muted }}>{t}</Text>
+                {k === 'lab' && labFlag && <View style={{ position: 'absolute', top: -2, right: -10, width: 9, height: 9, borderRadius: 5, backgroundColor: C.err }} />}
+              </View>
             </Pressable>
           ))}
         </View>

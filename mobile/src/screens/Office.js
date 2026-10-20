@@ -146,6 +146,12 @@ export function Shifts({ onShift, tick }) {
   const [status, setStatus] = useState(() => loadOrder()[0]);
   const from = addDays(todayLocal(), -13);
   const { data, err, busy, load } = useLoad(() => api.admin('GET', `/shifts?status=${status}&from=${from}&to=${todayLocal()}`), [status, tick]);
+  // Keep the waiting/open lists fresh so a just-closed shift shows up on its own.
+  useEffect(() => {
+    if (status !== 'closed' && status !== 'open') return undefined;
+    const t = setInterval(load, 12000);
+    return () => clearInterval(t);
+  }, [status, load]);
   const saveOrder = (arr) => { setOrder(arr); try { store.setKv('shiftTabsOrder', arr); } catch { /* ignore */ } };
   return (
     <View style={{ flex: 1 }}>
@@ -344,6 +350,112 @@ export function Payments({ onOpen }) {
           </Pressable>
         )}
       />
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- laboratory
+// Frame colour by lab status: yellow = not entered, red = over a limit (awaiting
+// review), green = normal or reviewed.
+const LAB_FRAME = { pending: C.warn, flagged: C.err, ok: C.ok, accepted: C.ok };
+const LAB_LABEL = { pending: 'Kiritilmagan', flagged: 'Limitdan o\'tgan!', ok: 'Normada', accepted: 'Qabul qilingan' };
+// Client-side mirror of the server's over-limit check, for live colouring.
+const labOver = (f, raw) => {
+  if (raw == null || raw === '') return false;
+  if (f.type === 'variant') return f.bad_option != null && String(raw) === f.bad_option;
+  const n = toNumber(raw);
+  if (!Number.isFinite(n)) return false;
+  return (f.limit_max != null && n > f.limit_max) || (f.limit_min != null && n < f.limit_min);
+};
+
+export function Lab({ onOpen }) {
+  const { data, err, busy, load } = useLoad(() => api.admin('GET', '/lab'), []);
+  useEffect(() => { const t = setInterval(load, 20000); return () => clearInterval(t); }, [load]);
+  const shifts = data?.shifts ?? [];
+  return (
+    <View style={{ flex: 1 }}>
+      <Err err={err} />
+      <FlatList
+        data={shifts}
+        keyExtractor={(x) => String(x.id)}
+        refreshControl={<RefreshControl refreshing={busy} onRefresh={load} />}
+        contentContainerStyle={{ padding: 12, gap: 8 }}
+        ListHeaderComponent={<Text style={[s.muted, { marginBottom: 2 }]}>Qabul qilingan smenalar. Faqat umumiy real miqdor — narx va xonadonlar ko'rinmaydi.</Text>}
+        ListEmptyComponent={<Text style={[s.muted, { padding: 16 }]}>{data ? 'Qabul qilingan smena yo\'q' : 'Yuklanmoqda...'}</Text>}
+        renderItem={({ item: x }) => (
+          <Pressable onPress={() => onOpen(x.id)} style={({ pressed }) => [s.card, { borderWidth: 2, borderColor: LAB_FRAME[x.labStatus] || C.line, gap: 4 }, pressed && { opacity: 0.6 }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+              <Text style={[s.text, { fontWeight: '700', flex: 1 }]} numberOfLines={1}>{x.label} · {x.collector}</Text>
+              <Text style={{ color: LAB_FRAME[x.labStatus], fontWeight: '700', fontSize: 12 }}>{LAB_LABEL[x.labStatus]}</Text>
+            </View>
+            <Text style={s.muted}>{fmtDT(x.accepted_at)} · <Text style={{ fontWeight: '700', color: C.text }}>{fmtQty(x.total_kg)} kg</Text></Text>
+          </Pressable>
+        )}
+      />
+    </View>
+  );
+}
+
+export function LabDetail({ id, onBack, onChanged }) {
+  const { data: d, err, busy, load } = useLoad(() => api.admin('GET', `/lab/${id}`), [id]);
+  const [vals, setVals] = useState({});
+  useEffect(() => {
+    if (d) setVals(Object.fromEntries(Object.entries(d.values).map(([k, v]) => [k, String(v)])));
+  }, [id, d?.report?.updated_at, d?.report?.created_at]); // eslint-disable-line react-hooks/exhaustive-deps
+  const sh = d?.shift;
+  const canEdit = api.can('lab.edit');
+  const save = async () => {
+    try {
+      const payload = {};
+      for (const f of d.fields) { const raw = vals[f.id]; if (raw == null || raw === '') continue; payload[f.id] = f.type === 'variant' ? raw : toNumber(raw); }
+      const r = await api.admin('PUT', `/lab/${id}`, { values: payload });
+      notify('Saqlandi', r.overLimit ? 'Diqqat: ba\'zi qiymatlar limitdan o\'tgan. Admin ko\'rib qabul qiladi.' : 'Laboratoriya ma\'lumoti saqlandi.');
+      await load(); onChanged?.();
+    } catch (e) { notify('Bo\'lmadi', e.message); }
+  };
+  const accept = () => confirmAction('accept', 'Qabul qilish', `${sh.label}: limitdan o'tgan laboratoriya natijasi qabul qilinsinmi?`, 'Ha', async () => {
+    try { await api.admin('POST', `/lab/${id}/accept`); notify('Tayyor', 'Qabul qilindi.'); await load(); onChanged?.(); } catch (e) { notify('Bo\'lmadi', e.message); }
+  });
+  return (
+    <View style={{ flex: 1 }}>
+      <Header title={sh ? `${sh.label} — ${sh.collector}` : '...'} onBack={onBack} />
+      <Err err={err} />
+      {d && (
+        <ScrollView contentContainerStyle={{ padding: 12, gap: 10 }} refreshControl={<RefreshControl refreshing={busy} onRefresh={load} />}>
+          <View style={[s.card, { borderWidth: 2, borderColor: LAB_FRAME[d.labStatus] || C.line, gap: 4 }]}>
+            <Text style={{ color: LAB_FRAME[d.labStatus], fontWeight: '700' }}>{LAB_LABEL[d.labStatus]}</Text>
+            <Text style={s.muted}>Qabul qilingan {fmtDT(sh.accepted_at)} · umumiy <Text style={{ fontWeight: '700', color: C.text }}>{fmtQty(sh.total_kg)} kg</Text></Text>
+          </View>
+          {!d.fields.length && <Text style={s.muted}>Laboratoriya maydonlari sozlanmagan. Admin panelda "Laboratoriya" bo'limida qo'shiladi.</Text>}
+          {d.fields.map((f) => {
+            const raw = vals[f.id] ?? '';
+            const over = labOver(f, raw);
+            return (
+              <View key={f.id} style={{ gap: 4 }}>
+                <Text style={[s.text, { fontWeight: '600' }, over && { color: C.err }]}>{f.name}
+                  {f.type === 'number' && (f.limit_min != null || f.limit_max != null) ? <Text style={s.muted}>  (ruxsat {f.limit_min != null ? `${f.limit_min}` : '∞'}–{f.limit_max != null ? `${f.limit_max}` : '∞'})</Text> : null}</Text>
+                {f.type === 'variant' ? (
+                  <View style={{ flexDirection: 'row', gap: 8 }}>
+                    {[['bor', 'Bor'], ['yoq', 'Yo\'q']].map(([val, lbl]) => {
+                      const on = raw === val; const bad = f.bad_option === val;
+                      return (
+                        <Btn key={val} title={lbl} kind={on ? (bad ? 'danger' : 'main') : 'ghost'} style={{ flex: 1 }}
+                          disabled={!canEdit} onPress={() => setVals((x) => ({ ...x, [f.id]: val }))} />
+                      );
+                    })}
+                  </View>
+                ) : (
+                  <TextInput style={[s.input, over && { borderColor: C.err }]} keyboardType="decimal-pad" editable={canEdit}
+                    value={raw} onChangeText={(t) => setVals((x) => ({ ...x, [f.id]: t }))} placeholder="qiymat" placeholderTextColor={C.placeholder} />
+                )}
+              </View>
+            );
+          })}
+          {canEdit && !!d.fields.length && <Btn title="Saqlash" onPress={save} />}
+          {d.labStatus === 'flagged' && api.can('lab.accept') && <Btn title="Qabul qilish (limitdan o'tgan)" kind="warn" onPress={accept} />}
+          {d.report?.accepted_at && <Text style={s.muted}>Qabul qildi: {String(d.report.accepted_by ?? '').replace(/^user:/, '')} · {fmtDT(d.report.accepted_at)}</Text>}
+        </ScrollView>
+      )}
     </View>
   );
 }

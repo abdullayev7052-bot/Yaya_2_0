@@ -67,29 +67,34 @@ export function ReorderTabs({ items, order, active, onPick, onReorder }) {
   const ordered = order.filter((k) => items.some((i) => i[0] === k))
     .concat(items.filter((i) => !order.includes(i[0])).map((i) => i[0]));
   const labelOf = (k) => (items.find((i) => i[0] === k) || [k, k])[1];
-  const move = (k, dir) => {
+  const move = (dir) => {
     const arr = [...ordered];
-    const i = arr.indexOf(k); const j = i + dir;
+    const i = arr.indexOf(active); const j = i + dir;
     if (j < 0 || j >= arr.length) return;
     [arr[i], arr[j]] = [arr[j], arr[i]];
     onReorder(arr);
   };
+  // A single, never-wrapping row of tabs; long-press any tab to arrange, then
+  // move the selected one left/right. Kept to one row so it never balloons.
   return (
     <View style={{ gap: 6 }}>
-      <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+      <View style={{ flexDirection: 'row', gap: 6 }}>
         {ordered.map((k) => (
-          <View key={k} style={{ flexGrow: 1, flexDirection: 'row', alignItems: 'center' }}>
-            {edit && <Pressable onPress={() => move(k, -1)} hitSlop={8} style={{ paddingHorizontal: 4 }}><Text style={{ color: C.accent, fontSize: 20, fontWeight: '700' }}>‹</Text></Pressable>}
-            <Pressable onPress={() => (edit ? setEdit(false) : onPick(k))} onLongPress={() => setEdit(true)} delayLongPress={600}
-              style={[s.btnGhost, { flex: 1, paddingHorizontal: 12, paddingVertical: 10 },
-                active === k && !edit && { backgroundColor: C.accent, borderColor: C.accent }, edit && { borderStyle: 'dashed', borderColor: C.accent }]}>
-              <Text style={[s.btnGhostText, active === k && !edit && { color: C.accentText }]} numberOfLines={1}>{labelOf(k)}</Text>
-            </Pressable>
-            {edit && <Pressable onPress={() => move(k, 1)} hitSlop={8} style={{ paddingHorizontal: 4 }}><Text style={{ color: C.accent, fontSize: 20, fontWeight: '700' }}>›</Text></Pressable>}
-          </View>
+          <Pressable key={k} onPress={() => onPick(k)} onLongPress={() => setEdit(true)} delayLongPress={600}
+            style={[s.btnGhost, { flex: 1, paddingHorizontal: 6, paddingVertical: 10 },
+              active === k && { backgroundColor: C.accent, borderColor: C.accent }, edit && active !== k && { borderStyle: 'dashed', borderColor: C.accent }]}>
+            <Text style={[s.btnGhostText, active === k && { color: C.accentText }]} numberOfLines={1}>{labelOf(k)}</Text>
+          </Pressable>
         ))}
       </View>
-      {edit && <Pressable onPress={() => setEdit(false)} style={{ alignSelf: 'center', padding: 6 }}><Text style={{ color: C.accent, fontWeight: '700' }}>✓ Tayyor</Text></Pressable>}
+      {edit && (
+        <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+          <Text style={[s.muted, { flex: 1 }]} numberOfLines={1}>«{labelOf(active)}» ni ko'chiring</Text>
+          <Pressable onPress={() => move(-1)} style={[s.btnGhost, { paddingHorizontal: 16 }]}><Text style={s.btnGhostText}>◀</Text></Pressable>
+          <Pressable onPress={() => move(1)} style={[s.btnGhost, { paddingHorizontal: 16 }]}><Text style={s.btnGhostText}>▶</Text></Pressable>
+          <Pressable onPress={() => setEdit(false)} style={[s.btn, { paddingHorizontal: 16, paddingVertical: 10 }]}><Text style={s.btnText}>✓</Text></Pressable>
+        </View>
+      )}
     </View>
   );
 }

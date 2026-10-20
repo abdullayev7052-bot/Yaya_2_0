@@ -217,6 +217,51 @@ test('difference limit blocks acceptance; turning the feature off accepts direct
   assert.equal(db.prepare('SELECT COUNT(*) n FROM shift_accepts WHERE shift_id = ?').get(sh2).n, 0);
 });
 
+test('laboratory: fields, flagging over a limit, review, and no price/household leak', async () => {
+  const { app, db } = setup();
+  const b = await boss(app);
+  const h = await ali(app);
+  // accept a shift so the lab has something to work on
+  await runShift(app, h, 'lb1', [{ supplierId: 1, quantity: 50 }], { close: true });
+  const sh = db.prepare("SELECT id FROM shifts WHERE client_uuid = 'lb1'").get().id;
+  await call(app, 'POST', `/api/admin/shifts/${sh}/accept`, b, { real: { 1: 50 } });
+  // configure fields: Вода (number, max 4.0) and Антибиотик (variant, bad = bor)
+  const voda = (await call(app, 'POST', '/api/admin/lab/fields', b, { name: 'Вода', type: 'number', limitMax: 4.0 })).body.id;
+  const anti = (await call(app, 'POST', '/api/admin/lab/fields', b, { name: 'Антибиотик', type: 'variant', badOption: 'bor' })).body.id;
+  // the lab worklist shows the accepted shift, with no money/household data
+  let list = (await call(app, 'GET', '/api/admin/lab', b)).body;
+  assert.equal(list.shifts.length, 1);
+  assert.equal(list.shifts[0].labStatus, 'pending');
+  assert.equal(list.shifts[0].total_kg, 50);
+  assert.ok(!JSON.stringify(list).includes('5000') && !JSON.stringify(list).includes('Karimova'), 'no prices or households in the lab list');
+  // a collector may not see the lab at all
+  assert.equal((await call(app, 'GET', '/api/admin/lab', h)).status, 403);
+  // save an over-limit value -> flagged
+  await call(app, 'PUT', `/api/admin/lab/${sh}`, b, { values: { [voda]: 4.5, [anti]: 'yoq' } });
+  let det = (await call(app, 'GET', `/api/admin/lab/${sh}`, b)).body;
+  assert.equal(det.overLimit, true);
+  assert.equal(det.over[voda], true);
+  assert.equal(det.over[anti], false);
+  assert.equal((await call(app, 'GET', '/api/admin/lab', b)).body.flagged, 1);
+  assert.equal(det.labStatus, 'flagged');
+  // review it -> accepted (green)
+  assert.equal((await call(app, 'POST', `/api/admin/lab/${sh}/accept`, b)).status, 200);
+  assert.equal((await call(app, 'GET', `/api/admin/lab/${sh}`, b)).body.labStatus, 'accepted');
+  // re-saving within limits clears the flag and needs no review
+  await call(app, 'PUT', `/api/admin/lab/${sh}`, b, { values: { [voda]: 3.6, [anti]: 'yoq' } });
+  det = (await call(app, 'GET', `/api/admin/lab/${sh}`, b)).body;
+  assert.equal(det.overLimit, false);
+  assert.equal(det.labStatus, 'ok');
+  // a lab user can enter values but not review a flag
+  const labRole = db.prepare("SELECT id FROM roles WHERE code = 'lab'").get().id;
+  db.prepare("INSERT INTO users (login, name, password_hash, role_id) VALUES ('lab1', 'Laborant', '" + (await import('bcryptjs')).default.hashSync('lab12345', 4) + "', ?)").run(labRole);
+  const lid = db.prepare("SELECT id FROM users WHERE login = 'lab1'").get().id;
+  db.prepare('INSERT INTO devices (user_id, name) VALUES (?, ?)').run(lid, 'Q1');
+  const lab = await login(app, 'lab1', 'lab12345');
+  await call(app, 'PUT', `/api/admin/lab/${sh}`, lab, { values: { [voda]: 5.0 } });
+  assert.equal((await call(app, 'POST', `/api/admin/lab/${sh}/accept`, lab)).status, 403, 'lab may not accept a flag');
+});
+
 test('payments from the field are offline-safe and need permission', async () => {
   const { app, db } = setup();
   const h = await ali(app);
