@@ -7,7 +7,7 @@ import { PERMISSIONS, PERMISSION_KEYS } from '../permissions.js';
 import { summary, exportRows, toCsv, parseRange, dailyCost, todayLocal } from '../reports.js';
 import { balances, statement, supplierBalance } from '../ledger.js';
 import { templateXlsx, importSuppliers, exportSuppliersXlsx } from '../importer.js';
-import { getSetting, setSetting } from '../settings.js';
+import { CONFIRM_KEYS, confirmFlags, getSetting, setSetting } from '../settings.js';
 import { ShiftError, acceptShift, cancelShift, copyShift, listShifts, shiftCopyText, shiftDetail, shiftLabel } from '../shifts.js';
 import { decrypt, encrypt, listSafety, loadSafety, restore, saveSafety, snapshot, wipeHistory } from '../backup.js';
 import { actorName, describe } from '../auditText.js';
@@ -283,6 +283,28 @@ export default async function adminRoutes(app, { db }) {
         Number(b.address !== undefined), str(b.address), Number(b.lat !== undefined), coord(b.lat), Number(b.lng !== undefined), coord(b.lng), s.id);
     if (touchesLocation) log(req, 'suppliers.location', { id: s.id, name: s.name });
     if (touchesIdentity) log(req, 'suppliers.update', { id: s.id, name: b.name ?? s.name, active: b.active });
+    return { ok: true };
+  });
+
+  // Permanently remove a deactivated household — only when it carries no balance
+  // and no history, so reports and debts are never affected.
+  app.delete('/suppliers/:id', need('suppliers.edit'), async (req, reply) => {
+    const id = Number(req.params.id);
+    const s = db.prepare('SELECT id, name, active FROM suppliers WHERE id = ?').get(id);
+    if (!s) return reply.code(404).send({ error: 'Topilmadi' });
+    if (s.active) return bad(reply, 'Avval xonadonni o\'chiring (nofaol qiling), keyin butunlay o\'chirib bo\'ladi.');
+    if (supplierBalance(db, id) !== 0) return bad(reply, 'Bu xonadonda qarzdorlik yoki haqdorlik bor — butunlay o\'chirib bo\'lmaydi.');
+    const refs = db.prepare('SELECT 1 FROM collections WHERE supplier_id = ? LIMIT 1').get(id)
+      || db.prepare('SELECT 1 FROM payments WHERE supplier_id = ? LIMIT 1').get(id)
+      || db.prepare('SELECT 1 FROM adjustments WHERE supplier_id = ? LIMIT 1').get(id);
+    if (refs) return bad(reply, 'Bu xonadonda sut yoki to\'lov tarixi bor — butunlay o\'chirib bo\'lmaydi. Nofaol holatda qoladi.');
+    db.transaction(() => {
+      db.prepare('DELETE FROM supplier_products WHERE supplier_id = ?').run(id);
+      db.prepare('DELETE FROM employee_suppliers WHERE supplier_id = ?').run(id);
+      db.prepare('DELETE FROM employee_hidden_suppliers WHERE supplier_id = ?').run(id);
+      db.prepare('DELETE FROM suppliers WHERE id = ?').run(id);
+    })();
+    log(req, 'suppliers.delete', { id, name: s.name });
     return { ok: true };
   });
 
@@ -596,6 +618,10 @@ export default async function adminRoutes(app, { db }) {
       price: getSetting(db, 'copy_show_price') !== '0',
       qty: getSetting(db, 'copy_show_qty') !== '0',
     },
+    // Per-action confirmation prompts (on = ask "are you sure?").
+    confirms: confirmFlags(db),
+    // Editing a closed-but-not-accepted shift (default on).
+    editClosed: getSetting(db, 'edit_closed_enabled') !== '0',
   }));
   app.put('/settings', need('settings.manage'), async (req) => {
     if (req.body?.companyName !== undefined) setSetting(db, 'company_name', str(req.body.companyName, 60));
@@ -621,6 +647,9 @@ export default async function adminRoutes(app, { db }) {
       if (cf.price !== undefined) setSetting(db, 'copy_show_price', cf.price ? '1' : '0');
       if (cf.qty !== undefined) setSetting(db, 'copy_show_qty', cf.qty ? '1' : '0');
     }
+    // confirms: per-action "are you sure?" prompts.
+    if (req.body?.confirms) for (const k of CONFIRM_KEYS) if (req.body.confirms[k] !== undefined) setSetting(db, `confirm_${k}`, req.body.confirms[k] ? '1' : '0');
+    if (req.body?.editClosed !== undefined) setSetting(db, 'edit_closed_enabled', req.body.editClosed ? '1' : '0');
     setSetting(db, 'brand_version', Date.now());
     log(req, 'settings.update', { companyName: req.body?.companyName });
     return { ok: true };

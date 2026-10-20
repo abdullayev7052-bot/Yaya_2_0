@@ -1,4 +1,4 @@
-import { getSetting } from '../settings.js';
+import { confirmFlags, getSetting } from '../settings.js';
 
 // Unauthenticated branding, so the login screens can show the company logo.
 export default async function publicRoutes(app, { db }) {
@@ -20,6 +20,8 @@ export default async function publicRoutes(app, { db }) {
         address: getSetting(db, 'list_show_address') !== '0',
         phone: getSetting(db, 'list_show_phone') !== '0',
       },
+      confirms: confirmFlags(db),
+      editClosed: getSetting(db, 'edit_closed_enabled') !== '0',
     };
   });
 

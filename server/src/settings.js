@@ -1,5 +1,10 @@
 import { randomBytes } from 'node:crypto';
 
+// Per-action "are you sure?" confirmation prompts. Each can be turned off in the
+// settings. Default: on (ask). Used by both the app and the panel.
+export const CONFIRM_KEYS = ['open', 'close', 'accept', 'cancel', 'edit', 'payment', 'delete', 'copy_cancelled', 'entity_delete'];
+export const confirmFlags = (db) => Object.fromEntries(CONFIRM_KEYS.map((k) => [k, getSetting(db, `confirm_${k}`) !== '0']));
+
 export function getSetting(db, key) {
   return db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value ?? null;
 }

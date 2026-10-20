@@ -403,8 +403,11 @@ test('copy shift text: grouped by product with weighted averages; settings toggl
   const sh = (await call(app, 'GET', '/api/admin/shifts?status=closed', b)).body[0];
   await call(app, 'POST', `/api/admin/shifts/${sh.id}/accept`, b);
   const full = (await call(app, 'GET', `/api/admin/shifts/${sh.id}/copytext`, b)).body.text;
-  // Yog'li sut: (10*5000 + 8*6000) / 18 = 5444.44 weighted average
-  assert.match(full, /Yog'li sut - 18 kg x 5444\.44 \(o'rtacha\)/);
+  // starts with the shift number and the collector's name
+  assert.match(full, /^#\d+\nAli\n/);
+  // Yog'li sut: (10*5000 + 8*6000) / 18 = 5444.44 weighted average, no "(o'rtacha)"
+  assert.match(full, /Yog'li sut - 18 kg x 5444\.44\n/);
+  assert.ok(!full.includes("o'rtacha"), 'the "(o\'rtacha)" label is gone');
   assert.match(full, / Karimova Oydin - 10 kg x 5000/);
   assert.match(full, / Begmatov - 8 kg x 6000/);
   assert.match(full, /Yog'siz sut - 5 kg x 3000\.00/);
@@ -416,4 +419,17 @@ test('copy shift text: grouped by product with weighted averages; settings toggl
   // a collector has no prices.view, so their copy never shows prices
   const asCollector = (await call(app, 'PUT', '/api/admin/settings', b, { copyFields: { price: true } }));
   assert.equal(asCollector.status, 200);
+});
+
+test('household delete: only a deactivated household with no balance and no history', async () => {
+  const { app, db } = setup();
+  const b = await boss(app);
+  // supplier 1 has an opening balance (100000) -> blocked while active and after
+  assert.match((await call(app, 'DELETE', '/api/admin/suppliers/1', b)).body.error, /Avval xonadonni o'chiring/);
+  await call(app, 'PATCH', '/api/admin/suppliers/1', b, { active: false });
+  assert.match((await call(app, 'DELETE', '/api/admin/suppliers/1', b)).body.error, /qarzdorlik yoki haqdorlik/);
+  // a fresh empty household: create, deactivate, delete succeeds
+  const id = db.prepare("INSERT INTO suppliers (name, active) VALUES ('Bo''sh', 0)").run().lastInsertRowid;
+  assert.equal((await call(app, 'DELETE', `/api/admin/suppliers/${id}`, b)).status, 200);
+  assert.ok(!db.prepare('SELECT 1 FROM suppliers WHERE id = ?').get(id), 'gone from the system');
 });

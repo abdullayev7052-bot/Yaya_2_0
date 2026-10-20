@@ -96,14 +96,23 @@ export default async function mobileRoutes(app, { db }) {
     const payments = db.prepare(`SELECT paid_at, amount, method, note, voided_at,
         (SELECT COALESCE(u.name, u.login) FROM users u WHERE 'user:' || u.login = payments.created_by) AS by_name
       FROM payments WHERE supplier_id = ? ORDER BY paid_at DESC LIMIT 20`).all(id);
+    // Products the household supplies. Prices are only included for users allowed
+    // to see them (admin/accountant); collectors get names only.
+    const seePrices = me.perms.has('prices.view');
+    const products = db.prepare(`SELECT p.id, p.name, p.unit, sp.price, sp.is_default FROM supplier_products sp
+      JOIN products p ON p.id = sp.product_id AND p.active = 1 WHERE sp.supplier_id = ? ORDER BY sp.is_default DESC, p.name`).all(id)
+      .map((p) => ({ id: p.id, name: p.name, unit: p.unit, isDefault: !!p.is_default, ...(seePrices ? { price: p.price } : {}) }));
     return {
       supplier: s,
+      products,
       balance: supplierBalance(db, id),
       lastPickup: pickups.find((p) => p.counted) ?? pickups[0] ?? null,
       pickups,
       payments,
       canPay: me.perms.has('payments.create'),
       canEdit: me.perms.has('suppliers.edit'),
+      canManagePrices: me.perms.has('prices.manage'),
+      seePrices,
       canSetLocation: me.perms.has('suppliers.location') || me.perms.has('suppliers.edit'),
     };
   });

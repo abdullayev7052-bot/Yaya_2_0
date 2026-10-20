@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as api from '../api';
-import { ask, notify } from '../dialog';
+import { confirmAction, notify } from '../dialog';
 import { Btn, CalendarModal, Chip, Err, Header, ShiftBadge, Tile, addDays, fmtDay, fmtDT, fmtMoney, todayLocal, useLoad } from '../components';
 import { C, fmtQty, fmtTime, s } from '../ui';
 
@@ -170,7 +170,7 @@ export function ShiftDetail({ id, onBack, onChanged }) {
                 {d.byProduct.map((p) => <Tile key={p.name} label={p.name} value={fmtQty(p.quantity)} sub={`${p.unit} · ${p.pickups} ta`} />)}
               </View>
               {sh.status === 'closed' && api.can('shifts.accept') && (
-                <Btn title="Qabul qilish" onPress={() => ask('Qabul qilish', `${sh.label} smena qabul qilinsinmi? Shundan keyin u qarz va hisobotlarga kiradi.`, 'Ha', () => act('accept', null, 'Smena qabul qilindi'))} />
+                <Btn title="Qabul qilish" onPress={() => confirmAction('accept', 'Qabul qilish', `${sh.label} smena qabul qilinsinmi? Shundan keyin u qarz va hisobotlarga kiradi.`, 'Ha', () => act('accept', null, 'Smena qabul qilindi'))} />
               )}
               {sh.status === 'closed' && api.can('shifts.cancel') && api.cancelEnabled() && (cancelling ? (
                 <View style={{ gap: 8 }}>

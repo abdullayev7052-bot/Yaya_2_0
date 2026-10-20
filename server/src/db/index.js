@@ -225,7 +225,11 @@ function seedRoles(db) {
 // Permissions added in a later version are granted to the built-in roles that
 // should have them by default, on an already-upgraded database. Only brand-new
 // permission keys are added, so an admin's own edits are never overwritten.
-const NEW_ROLE_PERMS = { collector: ['suppliers.location', 'collect.view_own_shifts'] };
+const NEW_ROLE_PERMS = {
+  collector: ['suppliers.location', 'collect.view_own_shifts'],
+  // Accountants set prices and edit household data from the app now.
+  viewer: ['suppliers.edit', 'suppliers.location', 'prices.manage'],
+};
 function backfillNewPermissions(db) {
   for (const [code, keys] of Object.entries(NEW_ROLE_PERMS)) {
     const row = db.prepare('SELECT id, permissions FROM roles WHERE code = ?').get(code);

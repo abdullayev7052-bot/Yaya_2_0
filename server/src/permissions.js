@@ -66,8 +66,8 @@ export const BUILTIN_ROLES = [
   { code: 'storekeeper', name: 'Omborchi', locked: 0,
     perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'shifts.copy', 'suppliers.view', 'debts.view', 'payments.create', 'reports.view'] },
   { code: 'viewer', name: 'Buxgalter', locked: 0,
-    perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'suppliers.view', 'prices.view', 'debts.view', 'payments.create',
-      'payments.void', 'reports.view', 'reports.export'] },
+    perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'suppliers.view', 'suppliers.edit', 'suppliers.location',
+      'prices.view', 'prices.manage', 'debts.view', 'payments.create', 'payments.void', 'reports.view', 'reports.export'] },
   { code: 'collector', name: 'Sut yig\'uvchi', locked: 0,
     perms: [...COLLECT_PERMS, 'suppliers.card_own', 'suppliers.location', 'payments.create'] },
 ];

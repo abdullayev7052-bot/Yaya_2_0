@@ -75,6 +75,10 @@ export const listFields = () => ({ ...DEFAULT_LIST_FIELDS, ...(getBrand().listFi
 export const locationEnabled = () => getBrand().locationEnabled !== false;
 // Whether the "Bekor qilish" feature is on (admin can switch it off).
 export const cancelEnabled = () => getBrand().cancelEnabled !== false;
+// Whether a given action still asks "are you sure?" (admin can switch each off).
+export const confirmOn = (action) => (getBrand().confirms || {})[action] !== false;
+// Whether editing a closed-but-not-accepted shift is allowed (admin setting).
+export const editClosedEnabled = () => getBrand().editClosed !== false;
 const toDataUri = async (url) => {
   const blob = await (await fetch(url)).blob();
   return new Promise((resolve, reject) => {
@@ -84,13 +88,38 @@ const toDataUri = async (url) => {
     r.readAsDataURL(blob);
   });
 };
+
+// The entry video plays from a cached data URI (exactly like the logo), not by
+// streaming the remote URL — remote video streaming proved unreliable on the
+// phone. Kept in its own key so it never bloats the frequently-read brand object.
+export function getCachedIntro() {
+  const b = getBrand();
+  if (!b.intro) return null;
+  const c = store.getKv('introData');
+  return c && c.version === b.version && c.uri ? c.uri : null;
+}
+export function getIntroSrc() {
+  return getCachedIntro() || getBrand().intro || null; // cached data URI, else remote
+}
+async function cacheIntro(version, url) {
+  try {
+    const cur = store.getKv('introData');
+    if (cur && cur.version === version && cur.uri) return; // already cached
+    const uri = await toDataUri(url);
+    // data: URIs over ~12 MB are impractical; above that stay with the remote URL.
+    store.setKv('introData', { version, uri: uri && uri.length < 12 * 1024 * 1024 ? uri : null });
+  } catch { /* keep the remote URL as the fallback */ }
+}
+
 export async function refreshBrand(knownVersion) {
   const cur = getBrand();
-  if (knownVersion && cur.version === String(knownVersion)) return cur;
+  if (knownVersion && cur.version === String(knownVersion)) {
+    if (cur.intro) cacheIntro(cur.version, cur.intro); // make sure it is cached
+    return cur;
+  }
   try {
     const b = await call('GET', '/api/public/brand');
     const logo = b.logoUrl ? await toDataUri(getServerUrl() + b.logoUrl) : null;
-    // The intro video is streamed from the server (not cached: it can be large).
     const next = {
       companyName: b.companyName,
       greeting: b.greeting ?? '',
@@ -100,8 +129,12 @@ export async function refreshBrand(knownVersion) {
       locationEnabled: b.locationEnabled !== false,
       cancelEnabled: b.cancelEnabled !== false,
       listFields: { ...DEFAULT_LIST_FIELDS, ...(b.listFields || {}) },
+      confirms: b.confirms || {},
+      editClosed: b.editClosed !== false,
     };
     store.setKv('brand', next);
+    // Download the video into the cache (fire and forget) so the splash plays it locally.
+    if (next.intro) cacheIntro(next.version, next.intro);
     return next;
   } catch {
     return cur;

@@ -40,14 +40,19 @@ export function shiftTotals(db, uuid) {
     COUNT(DISTINCT supplier_id) AS suppliers FROM collections WHERE shift_uuid = ?`).get(uuid);
 }
 
-// Plain-text summary of a shift to copy to the clipboard, grouped by product:
-//   Yog'li sut - 98.5 kg x 4961.93 (o'rtacha)
+// Plain-text summary of a shift to copy to the clipboard. Starts with the shift
+// number and the collector's name, then grouped by product:
+//   #5
+//   Barkamol
+//   Yog'li sut - 98.5 kg x 4961.93
 //    Yoqutxon - 65 kg x 5200
 // Each part (product header, per-household line, quantity, price) can be turned
 // off. Prices use the stamped price (accepted) or the current price otherwise.
 export function shiftCopyText(db, shiftId, opts = {}) {
   const { prices = true, showProduct = true, showHousehold = true, showPrice = true, showQty = true } = opts;
   const price = showPrice && prices;
+  const head = db.prepare(`SELECT sh.number, sh.copy_no, COALESCE(u.name, u.login) AS who
+    FROM shifts sh JOIN users u ON u.id = sh.employee_id WHERE sh.id = ?`).get(shiftId);
   const rows = db.prepare(`
     SELECT s.name AS supplier, p.id AS product_id, p.name AS product, p.unit,
       ROUND(SUM(c.quantity), 2) AS qty,
@@ -71,11 +76,12 @@ export function shiftCopyText(db, shiftId, opts = {}) {
     g.amount += Math.round(r.qty * (r.unit_price ?? 0));
   }
   const lines = [];
+  if (head) { lines.push(shiftLabel(head)); lines.push(head.who); }
   for (const g of groups.values()) {
     if (showProduct) {
       let line = g.name;
       if (showQty) line += ` - ${q(g.qty)} ${g.unit}`;
-      if (price && g.qty) line += ` x ${avg2(g.amount / g.qty)} (o'rtacha)`;
+      if (price && g.qty) line += ` x ${avg2(g.amount / g.qty)}`;
       lines.push(line);
     }
     if (showHousehold) {

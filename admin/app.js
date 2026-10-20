@@ -38,6 +38,8 @@ if (!deviceId) {
 }
 const can = (perm) => !!me?.permissions.includes(perm);
 const money = () => can('prices.view');
+// Confirm an action only when its prompt is enabled in settings.
+const confirmFor = (action, message) => (brand.confirms || {})[action] === false || confirm(message);
 
 async function request(method, url, body) {
   let res;
@@ -301,7 +303,7 @@ const shiftActions = (s) => [
   s.status === 'cancelled' && can('shifts.copy') ? `<button class="small ghost" data-copy="${s.id}">Nusxalash</button>` : '',
 ].join('');
 function bindShiftActions(v) {
-  $$('[data-accept]', v).forEach((b) => { b.onclick = act(async () => { await api('POST', `/shifts/${b.dataset.accept}/accept`); flash('Smena qabul qilindi'); route(); }); });
+  $$('[data-accept]', v).forEach((b) => { b.onclick = act(async () => { if (!confirmFor('accept', 'Smena qabul qilinsinmi? Shundan keyin u qarz va hisobotlarga kiradi.')) return; await api('POST', `/shifts/${b.dataset.accept}/accept`); flash('Smena qabul qilindi'); route(); }); });
   $$('[data-cancel]', v).forEach((b) => { b.onclick = () => reasonForm('Smenani bekor qilish', `/shifts/${b.dataset.cancel}/cancel`); });
   $$('[data-copy]', v).forEach((b) => { b.onclick = act(async () => {
     const r = await api('POST', `/shifts/${b.dataset.copy}/copy`);
@@ -627,7 +629,7 @@ const views = {
               ${prices ? `<button class="small ghost" data-price="${s.id}|${l.product_id}">✎</button><button class="small ghost" data-del="${s.id}/${l.product_id}">✕</button>` : ''}</div>`).join('')
               || '<span class="err">Mahsulot biriktirilmagan</span>'}</td>
           <td class="row">${prices ? `<button class="small" data-price="${s.id}|">+ Narx</button>` : ''}
-            ${can('suppliers.edit') ? `<button class="small ghost" data-edit="${s.id}">Tahrirlash</button><button class="small ghost" data-toggle="${s.id}">${s.active ? 'O\'chirish' : 'Yoqish'}</button>` : ''}</td>
+            ${can('suppliers.edit') ? `<button class="small ghost" data-edit="${s.id}">Tahrirlash</button><button class="small ghost" data-toggle="${s.id}">${s.active ? 'O\'chirish' : 'Yoqish'}</button>${!s.active ? `<button class="small ghost" data-remove="${s.id}">Butunlay o'chirish</button>` : ''}` : ''}</td>
         </tr>`).join('') || '<tr><td colspan="4" class="muted">Hali xonadon yo\'q</td></tr>'}
       </table></div></div>`;
     void staff;
@@ -648,6 +650,13 @@ const views = {
     $$('[data-toggle]', v).forEach((b) => { b.onclick = act(async () => {
       const s = sups.find((x) => String(x.id) === b.dataset.toggle);
       await api('PATCH', `/suppliers/${s.id}`, { active: !s.active });
+      route();
+    }); });
+    $$('[data-remove]', v).forEach((b) => { b.onclick = act(async () => {
+      const s = sups.find((x) => String(x.id) === b.dataset.remove);
+      if (!confirmFor('entity_delete', `${s.name} tizimdan BUTUNLAY o'chiriladi. Faqat qarzi/haqi va tarixi bo'lmasa o'chadi. Davom etasizmi?`)) return;
+      await api('DELETE', `/suppliers/${s.id}`);
+      flash('Xonadon butunlay o\'chirildi');
       route();
     }); });
     $$('[data-price]', v).forEach((b) => { b.onclick = () => {
@@ -718,7 +727,7 @@ const views = {
     }); });
     $$('[data-remove]', v).forEach((b) => { b.onclick = act(async () => {
       const u = rows.find((x) => String(x.id) === b.dataset.remove);
-      if (!confirm(`${u.name || u.login} tizimdan BUTUNLAY o'chiriladi. Bu amalni qaytarib bo'lmaydi. Davom etasizmi?`)) return;
+      if (!confirmFor('entity_delete', `${u.name || u.login} tizimdan BUTUNLAY o'chiriladi. Bu amalni qaytarib bo'lmaydi. Davom etasizmi?`)) return;
       await api('DELETE', `/staff/${u.id}`);
       flash('Xodim butunlay o\'chirildi');
       route();
@@ -928,6 +937,13 @@ const views = {
             <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="cf_qty" ${st.copyFields.qty ? 'checked' : ''}> Miqdori</label>
             <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="cf_price" ${st.copyFields.price ? 'checked' : ''}> Narxi</label>
           </div>
+          <div style="margin-top:10px"><b>Tasdiq so'rovlari</b><p class="muted" style="margin:2px 0 6px">Belgilangan amallarda "Ha yoki Yo'q" so'raladi. Olib tashlansa — darhol bajariladi.</p>
+            ${[['open','Smena ochish'],['close','Smena yopish'],['accept','Qabul qilish'],['cancel','Bekor qilish'],['edit','Tahrirlash'],['payment','To\'lov qo\'shish'],['delete','Yozuvni o\'chirish'],['copy_cancelled','Bekor qilingan smenani nusxalash'],['entity_delete','Xodim yoki xonadon o\'chirish']]
+              .map(([k, t]) => `<label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="cfm_${k}" ${(st.confirms || {})[k] !== false ? 'checked' : ''}> ${t}</label>`).join('')}
+          </div>
+          <div style="margin-top:10px"><b>Smenani tahrirlash</b>
+            <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="editClosed" ${st.editClosed ? 'checked' : ''}> Qabul qilinmagan smenani tahrirlashga ruxsat</label>
+          </div>
           <button>Saqlash</button>
         </form>
         <div class="row" style="align-items:center;margin-top:12px">
@@ -1007,6 +1023,8 @@ const views = {
           locationEnabled: f.locationEnabled.checked, cancelEnabled: f.cancelEnabled.checked,
           listFields: { name: f.lf_name.checked, address: f.lf_address.checked, phone: f.lf_phone.checked },
           copyFields: { product: f.cf_product.checked, household: f.cf_household.checked, qty: f.cf_qty.checked, price: f.cf_price.checked },
+          confirms: Object.fromEntries(['open','close','accept','cancel','edit','payment','delete','copy_cancelled','entity_delete'].map((k) => [k, f['cfm_' + k].checked])),
+          editClosed: f.editClosed.checked,
         });
         await loadBrand();
         flash('Saqlandi');

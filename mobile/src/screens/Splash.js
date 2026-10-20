@@ -1,49 +1,59 @@
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Platform, Pressable, View } from 'react-native';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { getBrand, refreshBrand } from '../api';
+import { getBrand, getCachedIntro, getIntroSrc, refreshBrand } from '../api';
 import { Logo } from '../components';
 
 // The admin-set entry animation, shown once right after signing in.
 //
-// Two phases, so the player's own blank placeholder can NEVER be seen:
-//  1. Resolve whether there is an intro at all (from cache, else ask the server),
-//     showing a plain logo screen meanwhile.
-//  2. Play it behind an OPAQUE logo cover that only lifts once a real frame is
-//     ready; on error/slowness we just hand off with the logo still covering.
+// The video is played from a CACHED data URI (downloaded like the logo), not by
+// streaming the remote URL — remote streaming never played reliably on the phone.
+// While the source is being resolved a plain logo screen is shown, and the video
+// itself sits behind an opaque logo cover that only lifts once a real frame is
+// ready, so the player's blank placeholder can never appear.
 const NATIVE = Platform.OS !== 'web';
 const LogoScreen = () => (
   <View style={{ flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' }}><Logo size={120} /></View>
 );
 
 export default function Splash({ onDone }) {
-  const [state, setState] = useState(() => {
-    const i = getBrand().intro;
-    return i ? { phase: 'play', intro: i } : { phase: 'resolving' };
-  });
-  useEffect(() => {
-    if (state.phase !== 'resolving') return undefined;
-    let alive = true;
-    const t = setTimeout(() => { if (alive) onDone(); }, 2500); // never hang resolving
-    refreshBrand()
-      .then((b) => { if (!alive) return; clearTimeout(t); if (b?.intro) setState({ phase: 'play', intro: b.intro }); else onDone(); })
-      .catch(() => { if (alive) { clearTimeout(t); onDone(); } });
-    return () => { alive = false; clearTimeout(t); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.phase]);
+  const [src, setSrc] = useState(() => getCachedIntro());
+  const done = useRef(false);
+  const finish = () => { if (!done.current) { done.current = true; onDone(); } };
 
-  if (state.phase === 'resolving') return <LogoScreen />;
-  return <SplashVideo intro={state.intro} onDone={onDone} />;
+  useEffect(() => {
+    if (src) return undefined; // cached data URI already in hand
+    let alive = true;
+    const cap = setTimeout(finish, 8000); // never hang on the logo
+    (async () => {
+      await refreshBrand().catch(() => {});
+      if (!alive) return;
+      if (!getBrand().intro) { finish(); return; } // no video configured
+      for (let i = 0; i < 12 && alive; i++) { // wait up to ~3s for the download
+        const c = getCachedIntro();
+        if (c) { setSrc(c); return; }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      if (!alive) return;
+      const remote = getIntroSrc();
+      if (remote) setSrc(remote); else finish();
+    })();
+    return () => { alive = false; clearTimeout(cap); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (!src) return <LogoScreen />;
+  return <SplashVideo src={src} onDone={finish} />;
 }
 
-function SplashVideo({ intro, onDone }) {
+function SplashVideo({ src, onDone }) {
   const done = useRef(false);
   const readyRef = useRef(false);
-  const cover = useRef(new Animated.Value(1)).current; // opaque cover over the video
+  const cover = useRef(new Animated.Value(1)).current;
   const [coverGone, setCoverGone] = useState(false);
   const finish = () => { if (!done.current) { done.current = true; onDone(); } };
 
-  const player = useVideoPlayer({ uri: intro }, (p) => { if (p) { p.muted = true; p.play(); } });
+  const player = useVideoPlayer({ uri: src }, (p) => { if (p) { p.muted = true; p.play(); } });
 
   useEffect(() => {
     const reveal = () => {
@@ -53,13 +63,13 @@ function SplashVideo({ intro, onDone }) {
       Animated.timing(cover, { toValue: 0, duration: 250, useNativeDriver: NATIVE }).start(() => setCoverGone(true));
     };
     const subStatus = player.addListener?.('statusChange', (e) => {
-      const st = e?.status ?? e; // event shape varies across versions
+      const st = e?.status ?? e;
       if (st === 'readyToPlay') reveal();
       else if (st === 'error') finish();
     });
     const subEnd = player.addListener?.('playToEnd', finish);
-    const notReady = setTimeout(() => { if (!readyRef.current) finish(); }, 3000);
-    const maxPlay = setTimeout(finish, 7000);
+    const notReady = setTimeout(() => { if (!readyRef.current) finish(); }, 3500);
+    const maxPlay = setTimeout(finish, 8000);
     return () => { subStatus?.remove?.(); subEnd?.remove?.(); clearTimeout(notReady); clearTimeout(maxPlay); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

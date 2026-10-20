@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, FlatList, Modal, PanResponder, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import * as api from '../api';
 import * as store from '../db';
 import SyncBar from '../SyncBar';
 import { useBack } from '../back';
 import { distanceM, openRoute, startLocation, stopLocation, useMyLocation } from '../geo';
-import { ask, notify } from '../dialog';
+import { ask, confirmAction, notify } from '../dialog';
 import { Btn, Header, Keypad, Logo, SearchBar, ShiftBadge, digitsOf, fmtDT, matches, textMatch, toNumber } from '../components';
 import { NewSupplier, PaymentForm, SupplierCard } from './Supplier';
 import { C, fmtQty, fmtTime, s } from '../ui';
@@ -123,6 +124,25 @@ export default function Collector({ tick, refresh, setFull, histReq = 0 }) {
 
 const shiftName = (uuid) => api.shiftInfo(uuid)?.label ?? 'Yangi smena';
 
+// Tapping the shift total copies just the overall figures (for a group chat):
+//   #5
+//   Barkamol - 371.5 kg
+//   Yog'li sut - 359 kg
+//   Yog'siz sut - 12.5 kg
+function totalsText(uuid, collections) {
+  const grand = collections.reduce((a, r) => a + r.quantity, 0);
+  const byP = {};
+  for (const r of collections) byP[r.product_name] = (byP[r.product_name] || 0) + r.quantity;
+  const me = api.me();
+  const lines = [shiftName(uuid), `${me?.name || me?.login || ''} - ${fmtQty(grand)} kg`];
+  for (const [name, v] of Object.entries(byP)) lines.push(`${name} - ${fmtQty(v)} kg`);
+  return lines.join('\n');
+}
+async function copyTotals(uuid, collections) {
+  if (!collections.length) return;
+  try { await Clipboard.setStringAsync(totalsText(uuid, collections)); notify('Nusxalandi', 'Jami miqdor klaviaturaga nusxalandi.'); } catch { /* ignore */ }
+}
+
 // Wraps a row so a left→right swipe fires onSwipe, while taps still reach the
 // Pressable inside. The row slides with the finger and springs back, and a map
 // pin is revealed behind it as a hint. Reads current props via a ref (the
@@ -162,10 +182,15 @@ function StartShift({ tick, refresh, onOpen, onNav }) {
   void refresh;
   void tick;
   const tryOpen = () => {
-    if (!block) { onOpen(); return; }
-    notify('Smena ochib bo\'lmaydi', block.kind === 'cancelled'
-      ? 'Sizda Bekor qilingan smena bor. Avval uni to\'g\'rilab, keyin urinib ko\'ring.'
-      : 'Sizda Qabul qilinmagan smena bor. Avval omborchi uni qabul qilishi kerak.');
+    if (block) {
+      notify('Smena ochib bo\'lmaydi', block.kind === 'cancelled'
+        ? 'Sizda Bekor qilingan smena bor. Avval uni to\'g\'rilab, keyin urinib ko\'ring.'
+        : block.kind === 'editing'
+          ? 'Sizda tahrirdagi smena bor. Avval uni qayta yoping.'
+          : 'Sizda Qabul qilinmagan smena bor. Avval omborchi uni qabul qilishi kerak.');
+      return;
+    }
+    confirmAction('open', 'Smena ochish', 'Yangi smena ochilsinmi?', 'Ha', onOpen);
   };
   return (
     <View style={{ flex: 1 }}>
@@ -229,10 +254,13 @@ function ShiftView({ shift, tick, q, setQ, onPick, onNav }) {
     <View style={{ flex: 1 }}>
       <SyncBar tick={tick} />
       <View style={{ padding: 12, gap: 8 }}>
-        <Text style={s.muted}>
-          <Text style={{ fontWeight: '700', color: C.text }}>{shiftName(shift.uuid)}</Text> · ochiq · {fmtTime(shift.opened_at)} · {rows.length} ta ·{' '}
-          {Object.entries(totalByProduct).map(([k, v]) => `${k} ${fmtQty(v)}`).join(', ') || '0'}
-        </Text>
+        {/* Tap the totals to copy just the overall figures (for a group chat). */}
+        <Pressable onPress={() => copyTotals(shift.uuid, rows)}>
+          <Text style={s.muted}>
+            <Text style={{ fontWeight: '700', color: C.text }}>{shiftName(shift.uuid)}</Text> · ochiq · {fmtTime(shift.opened_at)} · {rows.length} ta ·{' '}
+            {Object.entries(totalByProduct).map(([k, v]) => `${k} ${fmtQty(v)}`).join(', ') || '0'}  📋
+          </Text>
+        </Pressable>
         <SearchBar value={q} onChange={setQ}
           right={api.can('suppliers.create')
             ? <Pressable onPress={() => onNav('new')} style={[s.btn, { paddingHorizontal: 18, paddingVertical: 0, justifyContent: 'center' }]} accessibilityLabel="Yangi xonadon"><Text style={s.btnText}>＋</Text></Pressable>
@@ -403,7 +431,7 @@ function Entries({ shift, tick, onBack, onEdit, refresh }) {
                 {canEdit && <Btn title="Tahrirlash" kind="ghost" style={{ flex: 1 }} onPress={() => onEdit(r)} />}
                 {canDelete && (
                   <Btn title="O'chirish" kind="warn" style={{ flex: 1 }}
-                    onPress={() => ask('O\'chirish', `${r.supplier_name}: ${fmtQty(r.quantity)} ${r.unit} — o'chirilsinmi?`, 'Ha, o\'chirish', () => {
+                    onPress={() => confirmAction('delete', 'O\'chirish', `${r.supplier_name}: ${fmtQty(r.quantity)} ${r.unit} — o'chirilsinmi?`, 'Ha, o\'chirish', () => {
                       store.deleteCollection(r.uuid);
                       refresh();
                       api.syncNow();
@@ -479,7 +507,7 @@ function History({ onBack, onCopied }) {
   const load = useCallback(() => { setErr(''); api.history().then(setRows).catch((e) => setErr(e.message)); }, []);
   useEffect(load, [load]);
   const canCopy = api.can('collect.copy_cancelled');
-  const copy = (r) => ask('Nusxa olish', `${r.label} smenaning nusxasi yangi ochiq smena sifatida ochiladi. Qatorlarni tuzatib, qayta yopasiz.`, 'Ha', async () => {
+  const copy = (r) => confirmAction('copy_cancelled', 'Nusxa olish', `${r.label} smenaning nusxasi yangi ochiq smena sifatida ochiladi. Qatorlarni tuzatib, qayta yopasiz.`, 'Ha', async () => {
     try {
       await api.mobile('POST', `/shifts/${r.id}/copy`);
       await api.refreshBootstrap();
@@ -520,13 +548,15 @@ function CloseShift({ shift, onBack, onClosed }) {
       <ScrollView contentContainerStyle={[s.pad, { gap: 12 }]}>
         <Text style={s.h1}>{shiftName(shift.uuid)} smenani yopish</Text>
         <Text style={s.muted}>Ochilgan: {fmtTime(shift.opened_at)} · {rows.length} ta qabul</Text>
-        <View style={[s.card, { gap: 6 }]}>
+        {/* Tap the totals to copy just the overall figures to send in a group chat. */}
+        <Pressable style={[s.card, { gap: 6 }]} onPress={() => copyTotals(shift.uuid, rows)}>
           {Object.entries(byProduct).map(([k, v]) => {
             const [name, unit] = k.split('|');
             return <Text key={k} style={[s.text, { fontSize: 22, fontWeight: '700' }]}>{name}: {fmtQty(v)} {unit}</Text>;
           })}
           {!rows.length && <Text style={s.muted}>Bu smenada yozuv yo'q</Text>}
-        </View>
+          {!!rows.length && <Text style={[s.muted, { marginTop: 4 }]}>Jami miqdorni nusxalash uchun bosing 📋</Text>}
+        </Pressable>
         {rows.map((r) => (
           <View key={r.uuid} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6,
             borderBottomWidth: 1, borderColor: C.line }}>
@@ -539,7 +569,7 @@ function CloseShift({ shift, onBack, onClosed }) {
         ))}
       </ScrollView>
       <View style={[s.pad, { gap: 10 }]}>
-        <Pressable style={s.btn} onPress={() => { store.closeShift(shift.uuid); onClosed(); }}>
+        <Pressable style={s.btn} onPress={() => confirmAction('close', 'Smenani yopish', 'Smena yopilib, qabulga yuborilsinmi?', 'Ha', () => { store.closeShift(shift.uuid); onClosed(); })}>
           <Text style={s.btnText}>Ha, smenani yopish</Text>
         </Pressable>
         <Btn title="Orqaga" kind="ghost" onPress={onBack} />

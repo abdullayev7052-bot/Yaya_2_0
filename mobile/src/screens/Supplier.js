@@ -5,7 +5,7 @@ import * as api from '../api';
 import * as store from '../db';
 import { useBack } from '../back';
 import { getOnce, mapPickerUrl } from '../geo';
-import { ask, notify } from '../dialog';
+import { confirmAction, notify } from '../dialog';
 import { Btn, Chip, Err, Header, Keypad, METHOD, Tile, fmtDT, fmtMoney, useLoad } from '../components';
 import { C, fmtQty, s } from '../ui';
 
@@ -163,7 +163,7 @@ export function PaymentForm({ supplier, onBack, onDone }) {
   const value = Number(amount);
   const save = () => {
     if (!(value > 0)) return;
-    ask('To\'lovni tasdiqlang', `${supplier.name}\n${fmtMoney(value)} so'm (${METHOD[method]})`, 'Ha, saqlash', () => {
+    confirmAction('payment', 'To\'lovni tasdiqlang', `${supplier.name}\n${fmtMoney(value)} so'm (${METHOD[method]})`, 'Ha, saqlash', () => {
       store.addPayment({ supplier, amount: value, method });
       api.syncNow();
       onDone(`To'lov saqlandi: ${supplier.name} — ${fmtMoney(value)} so'm ✓`);
