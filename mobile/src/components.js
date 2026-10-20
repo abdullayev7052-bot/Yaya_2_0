@@ -58,6 +58,42 @@ export function Chip({ label, on, onPress }) {
   );
 }
 
+// A row of filter tabs the user can reorder on their own device: long-press any
+// tab (~0.6s) to enter arrange mode, then nudge each left/right with ‹ ›. The
+// order is the caller's to persist (locally, per device); the first tab is what
+// opens by default. `items` is [[key,label],...]; `order` an array of keys.
+export function ReorderTabs({ items, order, active, onPick, onReorder }) {
+  const [edit, setEdit] = useState(false);
+  const ordered = order.filter((k) => items.some((i) => i[0] === k))
+    .concat(items.filter((i) => !order.includes(i[0])).map((i) => i[0]));
+  const labelOf = (k) => (items.find((i) => i[0] === k) || [k, k])[1];
+  const move = (k, dir) => {
+    const arr = [...ordered];
+    const i = arr.indexOf(k); const j = i + dir;
+    if (j < 0 || j >= arr.length) return;
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+    onReorder(arr);
+  };
+  return (
+    <View style={{ gap: 6 }}>
+      <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+        {ordered.map((k) => (
+          <View key={k} style={{ flexGrow: 1, flexDirection: 'row', alignItems: 'center' }}>
+            {edit && <Pressable onPress={() => move(k, -1)} hitSlop={8} style={{ paddingHorizontal: 4 }}><Text style={{ color: C.accent, fontSize: 20, fontWeight: '700' }}>‹</Text></Pressable>}
+            <Pressable onPress={() => (edit ? setEdit(false) : onPick(k))} onLongPress={() => setEdit(true)} delayLongPress={600}
+              style={[s.btnGhost, { flex: 1, paddingHorizontal: 12, paddingVertical: 10 },
+                active === k && !edit && { backgroundColor: C.accent, borderColor: C.accent }, edit && { borderStyle: 'dashed', borderColor: C.accent }]}>
+              <Text style={[s.btnGhostText, active === k && !edit && { color: C.accentText }]} numberOfLines={1}>{labelOf(k)}</Text>
+            </Pressable>
+            {edit && <Pressable onPress={() => move(k, 1)} hitSlop={8} style={{ paddingHorizontal: 4 }}><Text style={{ color: C.accent, fontSize: 20, fontWeight: '700' }}>›</Text></Pressable>}
+          </View>
+        ))}
+      </View>
+      {edit && <Pressable onPress={() => setEdit(false)} style={{ alignSelf: 'center', padding: 6 }}><Text style={{ color: C.accent, fontWeight: '700' }}>✓ Tayyor</Text></Pressable>}
+    </View>
+  );
+}
+
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '0', '⌫'];
 
 /**

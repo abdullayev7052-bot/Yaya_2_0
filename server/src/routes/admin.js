@@ -426,8 +426,10 @@ export default async function adminRoutes(app, { db }) {
   app.get('/shifts/:id', need('shifts.view_all'), async (req, reply) => {
     const d = shiftDetail(db, req.params.id);
     if (!d) return reply.code(404).send({ error: 'Topilmadi' });
-    // The accepted-quantity difference is only for those allowed to see it.
+    // The accepted-quantity difference is only for those allowed to see it; the
+    // acceptor also gets the feature flag and limits so the app can enforce them.
     if (!has(req, 'diff.view')) delete d.diff;
+    else d.diff = { ...d.diff, ...diffFlags(db) };
     return d;
   });
 

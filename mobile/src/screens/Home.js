@@ -4,7 +4,7 @@ import * as api from '../api';
 import { Logo } from '../components';
 import Collector from './Collector';
 import Profile from './Profile';
-import { Debts, ShiftDetail, Shifts, Today } from './Office';
+import { Debts, Payments, ShiftDetail, Shifts, Today } from './Office';
 import { PaymentForm, SupplierCard } from './Supplier';
 import { C, s } from '../ui';
 
@@ -16,6 +16,7 @@ const TABS = [
   ['today', 'Kun', () => api.can('reports.view')],
   ['shifts', 'Smenalar', () => api.can('shifts.view_all')],
   ['debts', 'Qarzlar', () => api.can('debts.view')],
+  ['pays', 'To\'lovlar', () => api.can('debts.view')],
   ['me', 'Profil', () => true],
 ];
 
@@ -41,11 +42,12 @@ export default function Home({ tick, refresh, onLogout }) {
   } else if (cardId) {
     body = <SupplierCard id={cardId} onBack={() => setCardId(null)} onPay={setPayFor} />;
   } else if (shiftId) {
-    body = <ShiftDetail id={shiftId} onBack={() => setShiftId(null)} onChanged={refresh} />;
+    body = <ShiftDetail id={shiftId} onBack={() => setShiftId(null)} onChanged={refresh} onCard={setCardId} />;
   } else if (current === 'collect') body = <Collector tick={tick} refresh={refresh} setFull={setFull} histReq={histReq} />;
   else if (current === 'today') body = <Today onShift={setShiftId} />;
   else if (current === 'shifts') body = <Shifts onShift={setShiftId} tick={tick} />;
   else if (current === 'debts') body = <Debts onOpen={setCardId} onPay={setPayFor} tick={tick} />;
+  else if (current === 'pays') body = <Payments onOpen={setCardId} />;
   else body = <Profile tick={tick} onLogout={onLogout} setFull={setFull} />;
 
   const detail = !!(payFor || cardId || shiftId);
