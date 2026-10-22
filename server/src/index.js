@@ -3,6 +3,7 @@ import { audit, ensureDeviceSlots, openDb, roleIdByCode } from './db/index.js';
 import { buildApp } from './app.js';
 import { jwtSecret } from './settings.js';
 import { pruneSafety } from './backup.js';
+import { startBots } from './integrations.js';
 
 const {
   PORT = '3000',
@@ -37,6 +38,8 @@ if (RESET_DEVICES_FOR) {
 
 const app = buildApp({ db, jwtSecret: jwtSecret(db, JWT_SECRET), logger: true });
 setInterval(() => pruneSafety(db), 6 * 3600e3).unref();
+// Start the Telegram bots (household + backup). No-op until tokens are configured.
+startBots(db);
 
 // Close the database cleanly so the WAL is checkpointed on redeploys.
 for (const sig of ['SIGTERM', 'SIGINT']) {

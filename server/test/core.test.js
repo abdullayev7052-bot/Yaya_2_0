@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setup, call, login, ali, boss, now, runShift } from './helpers.js';
+import { tryLink, _buildPurchase, notifyHousehold } from '../src/integrations.js';
 
 test('smart login: one form for everyone; phone formats; panel only for admin', async () => {
   const { app } = setup();
@@ -260,6 +261,53 @@ test('laboratory: fields, flagging over a limit, review, and no price/household 
   const lab = await login(app, 'lab1', 'lab12345');
   await call(app, 'PUT', `/api/admin/lab/${sh}`, lab, { values: { [voda]: 5.0 } });
   assert.equal((await call(app, 'POST', `/api/admin/lab/${sh}/accept`, lab)).status, 403, 'lab may not accept a flag');
+});
+
+test('purchases: numbered per shift (24-2), with the difference as a final row', async () => {
+  const { app, db } = setup();
+  const h = await ali(app); const b = await boss(app);
+  await runShift(app, h, 'pp1', [{ supplierId: 1, quantity: 10 }, { supplierId: 2, quantity: 20 }], { close: true });
+  const sh = db.prepare("SELECT id, number FROM shifts WHERE client_uuid = 'pp1'").get();
+  await call(app, 'POST', `/api/admin/shifts/${sh.id}/accept`, b, { real: { 1: 33 } }); // written 30, real 33 -> +3
+  const pl = (await call(app, 'GET', '/api/admin/purchases', b)).body;
+  const byNum = Object.fromEntries(pl.rows.map((r) => [r.number, r]));
+  assert.ok(byNum[`${sh.number}-1`] && byNum[`${sh.number}-2`], 'two households numbered');
+  const diff = byNum[`${sh.number}-3`];
+  assert.ok(diff && diff.isDiff, 'the difference is the last purchase');
+  assert.equal(diff.quantity, 3);
+  assert.equal(diff.amount, 0);
+  // totals: quantity is the real accepted (33), amount excludes the free diff
+  assert.equal(pl.totals.quantity, 33);
+  assert.equal(pl.totals.amount, 10 * 5000 + 20 * 6000);
+  // drill-in breakdown of household 2
+  const bd = (await call(app, 'GET', `/api/admin/purchases/breakdown?shift=${sh.id}&supplier=2`, b)).body;
+  assert.equal(bd[0].quantity, 20);
+});
+
+test('payments are numbered sequentially; household bot links only known phones', async () => {
+  const { app, db } = setup();
+  const b = await boss(app);
+  await call(app, 'POST', '/api/admin/payments', b, { supplierId: 1, amount: 5000 });
+  await call(app, 'POST', '/api/admin/payments', b, { supplierId: 2, amount: 7000 });
+  assert.deepEqual(db.prepare('SELECT number FROM payments ORDER BY id').all().map((p) => p.number), [1, 2]);
+
+  // phone 901234567 belongs to supplier 1; a country code in front still matches
+  assert.equal(tryLink(db, 'chatA', '998901234567', 'Ali')?.id, 1);
+  assert.equal(db.prepare("SELECT supplier_id FROM tg_households WHERE chat_id = 'chatA'").get().supplier_id, 1);
+  // an unknown phone never registers
+  assert.equal(tryLink(db, 'chatB', '900000000', 'Noone'), null);
+  assert.equal(db.prepare("SELECT 1 FROM tg_households WHERE chat_id = 'chatB'").get(), undefined);
+
+  // notifications never throw when the bot is not configured
+  assert.doesNotThrow(() => notifyHousehold(db, 'payment', { paymentId: 1 }));
+  // the purchase text carries this household's products + balance only
+  const h = await ali(app);
+  await runShift(app, h, 'bt1', [{ supplierId: 1, quantity: 4 }], { close: true });
+  const sh = db.prepare("SELECT id FROM shifts WHERE client_uuid = 'bt1'").get().id;
+  await call(app, 'POST', `/api/admin/shifts/${sh}/accept`, b);
+  const txt = _buildPurchase(db, sh, 1);
+  assert.match(txt, /Xarid: #\d+-\d+/);
+  assert.match(txt, /Hozirgi balans:/);
 });
 
 test('payments from the field are offline-safe and need permission', async () => {

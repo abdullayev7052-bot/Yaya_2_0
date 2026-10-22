@@ -322,13 +322,25 @@ export function Payments({ onOpen }) {
   const goDay = (n) => { const x = addDays(to, n); setFrom(x); setTo(x); };
   const single = from === to;
   const header = single ? (from === today ? `Bugun, ${fmtDay(from)}` : fmtDay(from)) : `${fmtDay(from)} — ${fmtDay(to)}`;
-  const total = (data ?? []).filter((p) => p.kind === 'payment' && !p.voided_at).reduce((a, p) => a + p.amount, 0);
+  const paidRows = (data ?? []).filter((p) => p.kind === 'payment' && !p.voided_at);
+  const total = paidRows.reduce((a, p) => a + p.amount, 0);
+  // Copy: the total plus each household's sum for the chosen day/range.
+  const copyPayments = async () => {
+    if (!paidRows.length) { notify('Nusxalash', 'To\'lov yo\'q.'); return; }
+    const byHouse = {};
+    for (const p of paidRows) byHouse[p.supplier_name] = (byHouse[p.supplier_name] || 0) + p.amount;
+    const head = single ? fmtDay(from) : `${fmtDay(from)} — ${fmtDay(to)}`;
+    const lines = [`To'lovlar — ${head}`, `Jami: ${fmtMoney(total)} so'm`, ''];
+    for (const [name, amt] of Object.entries(byHouse)) lines.push(`${name} - ${fmtMoney(amt)}`);
+    try { await Clipboard.setStringAsync(lines.join('\n')); notify('Nusxalandi', 'To\'lovlar klaviaturaga nusxalandi.'); } catch { /* ignore */ }
+  };
   return (
     <View style={{ flex: 1 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12 }}>
         <Pressable style={[s.btnGhost, { paddingHorizontal: 16, opacity: single ? 1 : 0.3 }]} disabled={!single} onPress={() => goDay(-1)}><Text style={s.btnGhostText}>‹</Text></Pressable>
         <Pressable style={{ flex: 1 }} onPress={() => setCal(true)}><Text style={[s.h2, { textAlign: 'center' }]}>{header}</Text></Pressable>
         <Pressable style={[s.btnGhost, { paddingHorizontal: 16 }, (!single || to >= today) && { opacity: 0.3 }]} disabled={!single || to >= today} onPress={() => goDay(1)}><Text style={s.btnGhostText}>›</Text></Pressable>
+        <Pressable onPress={copyPayments} hitSlop={10} style={{ padding: 6 }}><Text style={{ fontSize: 22 }}>📋</Text></Pressable>
       </View>
       <CalendarModal visible={cal} from={from} to={to} onClose={() => setCal(false)} onApply={({ from: f, to: t }) => { setFrom(f); setTo(t); }} />
       {m && <Text style={[s.text, { paddingHorizontal: 12, fontWeight: '700' }]}>Jami to'lovlar: {fmtMoney(total)} so'm</Text>}

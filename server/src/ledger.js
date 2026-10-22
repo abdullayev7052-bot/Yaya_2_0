@@ -64,7 +64,7 @@ export function statement(db, supplierId, { limit = 500 } = {}) {
     JOIN users u ON u.id = c.employee_id
     WHERE c.supplier_id = ? AND sh.status = 'accepted' AND u.is_test = 0`).all(supplierId);
   const pays = db.prepare(`
-    SELECT 'payment' AS kind, id, paid_at AS at, amount, method, note, voided_at, void_reason,
+    SELECT 'payment' AS kind, id, number, paid_at AS at, amount, method, note, voided_at, void_reason,
       COALESCE((SELECT COALESCE(u.name, u.login) FROM users u WHERE 'user:' || u.login = p.created_by), created_by) AS by_name
     FROM payments p WHERE supplier_id = ? AND ${NOT_TEST}`).all(supplierId);
   const adjusts = db.prepare(`

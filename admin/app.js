@@ -211,10 +211,12 @@ async function loadBrand() {
 }
 
 const PAGES = [
-  ['dashboard', 'Bugun', 'reports.view'], ['shifts', 'Smenalar', 'shifts.view_all'], ['reports', 'Hisobotlar', 'reports.view'],
+  ['dashboard', 'Bugun', 'reports.view'], ['shifts', 'Smenalar', 'shifts.view_all'], ['purchases', 'Xaridlar', 'reports.view'],
+  ['reports', 'Hisobotlar', 'reports.view'],
   ['debts', 'Qarzlar va to\'lovlar', 'debts.view'], ['suppliers', 'Xonadonlar', 'suppliers.view'],
   ['staff', 'Xodimlar', 'staff.manage'], ['roles', 'Rollar va ruxsatlar', 'staff.manage'], ['devices', 'Qurilmalar', 'staff.manage'],
-  ['catalog', 'Mahsulotlar', 'catalog.manage'], ['lab', 'Laboratoriya', 'lab.fields'], ['tester', 'Ilovani sinash', 'tester.use'], ['settings', 'Sozlamalar', null],
+  ['catalog', 'Mahsulotlar', 'catalog.manage'], ['lab', 'Laboratoriya', 'lab.fields'], ['integrations', 'Integratsiya', 'integrations.manage'],
+  ['tester', 'Ilovani sinash', 'tester.use'], ['settings', 'Sozlamalar', null],
 ];
 
 async function show() {
@@ -482,6 +484,61 @@ const views = {
     });
   },
 
+  // ------------------------------------------------------------------ purchases
+  async purchases(v) {
+    const q = hashParams();
+    const today = todayLocal();
+    const from = q.get('from') || addDays(today, -6);
+    const to = q.get('to') || today;
+    const filt = { employee: q.get('employee') || '', supplier: q.get('supplier') || '', shift: q.get('shift') || '' };
+    const qs = new URLSearchParams({ from, to, ...filt }).toString();
+    const [d, emps, sups] = await Promise.all([api('GET', '/purchases?' + qs), api('GET', '/staff/names'), can('suppliers.view') ? api('GET', '/suppliers') : []]);
+    const presets = [['Bugun', today, today], ['Kecha', addDays(today, -1), addDays(today, -1)], ['7 kun', addDays(today, -6), today], ['30 kun', addDays(today, -29), today]];
+    v.innerHTML = `
+      <div class="card"><div class="row" style="flex-wrap:wrap">
+        <div class="presets">${presets.map(([t, f, tt]) => `<button class="ghost small ${f === from && tt === to ? 'on' : ''}" data-f="${f}" data-t="${tt}">${t}</button>`).join('')}</div>
+        <label>Dan <input type="date" id="from" value="${from}"></label>
+        <label>Gacha <input type="date" id="to" value="${to}"></label>
+        <label>Sut yig'uvchi <select id="emp"><option value="">Hammasi</option>${emps.filter((e) => !e.is_test).map((e) => `<option value="${e.id}" ${String(e.id) === filt.employee ? 'selected' : ''}>${esc(e.name || e.login)}</option>`).join('')}</select></label>
+        ${sups.length ? `<label>Xonadon <select id="sup"><option value="">Hammasi</option>${sups.map((x) => `<option value="${x.id}" ${String(x.id) === filt.supplier ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>` : ''}
+        <label>Smena № <input id="shift" type="number" min="1" value="${esc(filt.shift)}" style="width:90px"></label>
+        ${can('reports.export') ? '<button type="button" class="ghost" id="csv">⬇ Excel (CSV)</button>' : ''}
+      </div><p class="muted">Faqat qabul qilingan smenalar. Har smenadagi "Farq" alohida xarid sifatida (narxsiz) ko'rsatiladi.</p></div>
+      <div class="tiles">
+        <div class="tile"><div class="k">Xaridlar soni</div><div class="v">${d.totals.count}</div><div class="s">ta</div></div>
+        <div class="tile"><div class="k">Jami miqdor (farq bilan)</div><div class="v">${fmtNum(d.totals.quantity)}</div><div class="s">kg</div></div>
+        ${money() ? `<div class="tile"><div class="k">Jami summa</div><div class="v">${fmtMoney(d.totals.amount)}</div><div class="s">so'm</div></div>` : ''}
+      </div>
+      <div class="card"><div class="table-wrap"><table>
+        <tr><th>Xarid</th><th>Smena</th><th>Vaqt</th><th>Sut yig'uvchi</th><th>Xonadon</th><th class="num">Miqdor</th>${money() ? '<th class="num">Summa</th>' : ''}<th></th></tr>
+        ${d.rows.map((r) => `<tr class="${r.isDiff ? 'voided' : ''}">
+          <td><b>${esc(r.number)}</b></td>
+          <td><a href="#shift?id=${r.shift_id}">${esc(r.shift)}</a></td>
+          <td>${esc(fmtDate(r.at))}</td><td>${esc(r.collector)}</td>
+          <td>${r.isDiff ? '<i>Farq (smena)</i>' : `<a href="#supplier?id=${r.supplier_id}">${esc(r.supplier)}</a>`}</td>
+          <td class="num"><b style="${r.quantity < 0 ? 'color:var(--err)' : ''}">${fmtNum(r.quantity)}</b></td>
+          ${money() ? `<td class="num">${r.isDiff ? '—' : fmtMoney(r.amount)}</td>` : ''}
+          <td>${r.isDiff ? '' : `<button class="small ghost" data-det="${r.shift_id}:${r.supplier_id}:${esc(r.number)}">Ko'rish</button>`}</td></tr>`).join('')
+          || `<tr><td colspan="${money() ? 8 : 7}" class="muted">Bu davrda xarid yo'q</td></tr>`}
+      </table></div></div>`;
+    const go = (patch) => setHash('purchases', { from, to, ...filt, ...patch });
+    $$('.presets button', v).forEach((b) => { b.onclick = () => go({ from: b.dataset.f, to: b.dataset.t }); });
+    $('#from', v).onchange = (e) => go({ from: e.target.value });
+    $('#to', v).onchange = (e) => go({ to: e.target.value });
+    $('#emp', v).onchange = (e) => go({ employee: e.target.value });
+    $('#sup', v) && ($('#sup', v).onchange = (e) => go({ supplier: e.target.value }));
+    $('#shift', v).onchange = (e) => go({ shift: e.target.value });
+    $('#csv', v) && ($('#csv', v).onclick = act(() => download('GET', `/purchases/export.csv?${qs}`, `yaya_xaridlar_${from}_${to}.csv`)));
+    $$('[data-det]', v).forEach((b) => { b.onclick = act(async () => {
+      const [shiftId, supplierId, number] = b.dataset.det.split(':');
+      const rows = await api('GET', `/purchases/breakdown?shift=${shiftId}&supplier=${supplierId}`);
+      openForm({ title: `Xarid ${number}`, submit: 'Yopish', fields: [], intro: `<div class="table-wrap"><table>
+        <tr><th>Mahsulot</th><th class="num">Miqdor</th>${money() ? '<th class="num">Narx</th><th class="num">Summa</th>' : ''}</tr>
+        ${rows.map((p) => `<tr><td>${esc(p.product)}</td><td class="num">${fmtNum(p.quantity)} ${esc(p.unit)}</td>${money() ? `<td class="num">${fmtMoney(p.price)}</td><td class="num">${fmtMoney(p.amount)}</td>` : ''}</tr>`).join('')}
+      </table></div>`, onSubmit: async () => {} });
+    }); });
+  },
+
   // ------------------------------------------------------------------ analytics
   async reports(v) {
     const q = hashParams();
@@ -572,7 +629,7 @@ const views = {
             ? `<tr><td>${esc(fmtDate(p.at))}</td><td><a href="#supplier?id=${p.supplier_id}">${esc(p.supplier_name)}</a></td>
               <td class="num">${fmtMoney(p.amount)}</td><td colspan="2"><b>Balans tahrirlandi</b>${p.note ? ` — ${esc(p.note)}` : ''}</td><td class="muted">${esc(p.by_name || '')}</td><td></td></tr>`
             : `<tr class="${p.voided_at ? 'voided' : ''}"><td>${esc(fmtDate(p.at))}</td><td><a href="#supplier?id=${p.supplier_id}">${esc(p.supplier_name)}</a></td>
-            <td class="num">${fmtMoney(p.amount)}</td><td>${METHOD[p.method]}</td><td>${esc(p.note)}</td><td class="muted">${esc(p.by_name || '')}</td>
+            <td class="num">${fmtMoney(p.amount)}</td><td>${p.number ? `<span class="muted">#${p.number}</span> ` : ''}${METHOD[p.method]}</td><td>${esc(p.note)}</td><td class="muted">${esc(p.by_name || '')}</td>
             <td>${p.voided_at ? `<span class="muted">Bekor: ${esc(p.void_reason)}</span>` : can('payments.void') ? `<button class="small ghost" data-void="${p.id}">Bekor qilish</button>` : ''}</td></tr>`).join('')
             || '<tr><td colspan="7" class="muted">Bu davrda yozuv yo\'q</td></tr>'}
         </table></div></div>`;
@@ -656,7 +713,7 @@ const views = {
         <tr><th>Sana</th><th>Amal</th><th class="num">Miqdor</th>${money() ? '<th class="num">Narx</th>' : ''}<th class="num">Olindi (+)</th><th class="num">To'landi (−)</th><th class="num">Qarz qoldig'i</th><th>Kim</th></tr>
         ${st.entries.map((e) => `<tr class="${e.voided_at ? 'voided' : ''}">
           <td>${esc(fmtDate(e.at))}</td>
-          <td>${e.kind === 'pickup' ? `${esc(e.product_name)} <a href="#shift?id=${e.shift_id}" class="muted" title="${esc(e.by_name || '')} · smenani ochish">#${e.shift_number}${e.copy_no ? '-copy' : ''}${e.by_name ? ` · ${esc(e.by_name)}` : ''}</a>` : `To'lov (${METHOD[e.method]})${e.note ? ` — ${esc(e.note)}` : ''}`}${e.voided_at ? ` <span class="muted">bekor: ${esc(e.void_reason)}</span>` : ''}</td>
+          <td>${e.kind === 'pickup' ? `${esc(e.product_name)} <a href="#shift?id=${e.shift_id}" class="muted" title="${esc(e.by_name || '')} · smenani ochish">#${e.shift_number}${e.copy_no ? '-copy' : ''}${e.by_name ? ` · ${esc(e.by_name)}` : ''}</a>` : `To'lov${e.number ? ` #${e.number}` : ''} (${METHOD[e.method]})${e.note ? ` — ${esc(e.note)}` : ''}`}${e.voided_at ? ` <span class="muted">bekor: ${esc(e.void_reason)}</span>` : ''}</td>
           <td class="num">${e.kind === 'pickup' ? `${fmtNum(e.quantity)} ${esc(e.unit)}` : ''}</td>${money() ? `<td class="num">${e.kind === 'pickup' ? fmtMoney(e.price) : ''}</td>` : ''}
           <td class="num">${e.kind === 'pickup' ? fmtMoney(e.amount) : ''}</td><td class="num">${e.kind === 'payment' ? fmtMoney(e.amount) : ''}</td>
           <td class="num"><b>${fmtMoney(e.balance)}</b></td><td class="muted">${esc(String(e.by_name).replace(/^\w+:/, ''))}</td></tr>`).join('')}
@@ -1017,6 +1074,75 @@ const views = {
   },
 
   // ------------------------------------------------------------------ settings, data, audit
+  // ------------------------------------------------------------------ integrations (Telegram bots)
+  async integrations(v) {
+    const s = await api('GET', '/integrations');
+    const ck = (name, label, checked) => `<label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="${name}" ${checked ? 'checked' : ''}> ${label}</label>`;
+    const on = (x) => x !== '0' && x !== '' && x != null;
+    v.innerHTML = `
+      <div class="card" style="max-width:820px"><h2>📨 Xonadon boti</h2>
+        <p class="muted">Xonadonlar o'z xaridlari, to'lovlari va balansini Telegram orqali kuzatadi. Faqat tizimda telefon raqami kiritilgan xonadonlar ro'yxatdan o'ta oladi. Ulangan xonadonlar: <b>${s.hh_linked}</b>.</p>
+        <form id="hhForm">
+          ${ck('hh_enabled', 'Bot yoqilgan', on(s.hh_enabled))}
+          <label>Bot tokeni <input name="hh_token" value="${esc(s.hh_token)}" placeholder="123456:ABC..." autocomplete="off"></label>
+          <div class="row"><button type="button" class="ghost small" id="hhCheck">Tokenni tekshirish</button><span id="hhCheckRes" class="muted"></span></div>
+          <label>Tashkilot nomi (botda ko'rinadi) <input name="hh_org" value="${esc(s.hh_org)}" placeholder="${esc(brand.companyName || 'Yaya')}"></label>
+          <div style="margin-top:8px"><b>Qaysi xabarlar yuborilsin</b>
+            ${ck('hh_m_purchase', 'Xaridlar', on(s.hh_m_purchase))}${ck('hh_m_payment', "To'lovlar", on(s.hh_m_payment))}
+            ${ck('hh_m_void', 'Bekor qilingan to\'lovlar', on(s.hh_m_void))}${ck('hh_m_balance', 'Balans tahrirlanishi', on(s.hh_m_balance))}</div>
+          <div style="margin-top:8px"><b>Xarid xabari tarkibi</b>
+            ${ck('hh_f_number', 'Xarid raqami (#24-1)', on(s.hh_f_number))}${ck('hh_f_time', 'Vaqt', on(s.hh_f_time))}${ck('hh_f_collector', 'Sut yig\'uvchi', on(s.hh_f_collector))}
+            ${ck('hh_f_unitprice', 'Mahsulot narxi (4 500)', on(s.hh_f_unitprice))}${ck('hh_f_linetotal', 'Mahsulot umumiy narxi (11 250)', on(s.hh_f_linetotal))}
+            ${ck('hh_f_qty', 'Jami miqdor', on(s.hh_f_qty))}${ck('hh_f_sum', 'Jami summa', on(s.hh_f_sum))}${ck('hh_f_balance', 'Hozirgi balans', on(s.hh_f_balance))}</div>
+          <div style="margin-top:8px"><b>To'lov xabari tarkibi</b>
+            ${ck('hh_p_number', 'To\'lov raqami (#36)', on(s.hh_p_number))}${ck('hh_p_time', 'Vaqt', on(s.hh_p_time))}${ck('hh_p_who', 'To\'lov qildi', on(s.hh_p_who))}</div>
+          <label style="margin-top:8px">Kirish (xush kelibsiz) xabari <textarea name="hh_welcome" rows="2">${esc(s.hh_welcome)}</textarea></label>
+          <p class="muted"><code>{org}</code> — tashkilot nomiga almashtiriladi.</p>
+          <label>Ro'yxatdan o'tgani xabari <textarea name="hh_registered" rows="2">${esc(s.hh_registered)}</textarea></label>
+          <label>Ro'yxatdan o'tishda xatolik (raqam topilmadi) <textarea name="hh_regerror" rows="2">${esc(s.hh_regerror)}</textarea></label>
+          <button>Saqlash</button>
+        </form>
+      </div>
+      <div class="card" style="max-width:820px"><h2>🔐 Backup (zaxira) boti</h2>
+        <p class="muted">Har kuni belgilangan vaqtda butun tizim shifrlangan (.yaya) fayl sifatida belgilangan Telegram foydalanuvchiga va (ixtiyoriy) kanalga yuboriladi. Faqat belgilangan Admin ID ishlaydi.</p>
+        <form id="bkForm">
+          ${ck('bk_enabled', 'Bot yoqilgan (har kuni avtomatik yuborish)', on(s.bk_enabled))}
+          <label>Bot tokeni <input name="bk_token" value="${esc(s.bk_token)}" placeholder="123456:ABC..." autocomplete="off"></label>
+          <div class="row"><button type="button" class="ghost small" id="bkCheck">Tokenni tekshirish</button><span id="bkCheckRes" class="muted"></span></div>
+          <label>Admin ID (Telegram foydalanuvchi IDsi) <input name="bk_admin_id" value="${esc(s.bk_admin_id)}" placeholder="masalan: 123456789"></label>
+          <label>Kanal ID (ixtiyoriy, masalan: -1001234567890) <input name="bk_channel_id" value="${esc(s.bk_channel_id)}"></label>
+          <label>Zaxira paroli (import qilishda shu kiritiladi) <input name="bk_password" value="${esc(s.bk_password)}" autocomplete="off"></label>
+          <label>Yuborish vaqti (soat:daqiqa) <input name="bk_time" value="${esc(s.bk_time)}" placeholder="00:00" style="width:120px"></label>
+          <div class="row"><button>Saqlash</button><button type="button" class="ghost" id="bkNow">Hozir yuborish</button><span id="bkNowRes" class="muted"></span></div>
+        </form>
+      </div>`;
+    const collect = (form) => {
+      const data = {};
+      for (const el of form.elements) {
+        if (!el.name) continue;
+        data[el.name] = el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value;
+      }
+      return data;
+    };
+    $('#hhForm', v).onsubmit = act(async (e) => { e.preventDefault(); await api('PUT', '/integrations', collect(e.target)); flash('Saqlandi'); });
+    $('#bkForm', v).onsubmit = act(async (e) => { e.preventDefault(); await api('PUT', '/integrations', collect(e.target)); flash('Saqlandi'); });
+    const check = (tokenInput, resEl) => act(async () => {
+      resEl.textContent = 'Tekshirilmoqda...';
+      const r = await api('POST', '/integrations/check', { token: tokenInput.value });
+      resEl.textContent = r.ok ? `✓ @${r.username}` : `✗ ${r.error}`;
+      resEl.style.color = r.ok ? 'var(--ok)' : 'var(--err)';
+    });
+    $('#hhCheck', v).onclick = check($('[name=hh_token]', v), $('#hhCheckRes', v));
+    $('#bkCheck', v).onclick = check($('[name=bk_token]', v), $('#bkCheckRes', v));
+    $('#bkNow', v).onclick = act(async () => {
+      const res = $('#bkNowRes', v); res.textContent = 'Yuborilmoqda...';
+      await api('PUT', '/integrations', collect($('#bkForm', v))); // save first so token/password are current
+      const r = await api('POST', '/integrations/backup/now');
+      res.textContent = r.ok ? `✓ ${r.targets} manzilga yuborildi` : `✗ ${r.error || 'xatolik'}`;
+      res.style.color = r.ok ? 'var(--ok)' : 'var(--err)';
+    });
+  },
+
   // ------------------------------------------------------------------ laboratory fields
   async lab(v) {
     const fields = await api('GET', '/lab/fields');

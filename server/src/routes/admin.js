@@ -10,6 +10,8 @@ import { templateXlsx, importSuppliers, exportSuppliersXlsx } from '../importer.
 import { CONFIRM_KEYS, confirmFlags, diffFlags, getSetting, setSetting } from '../settings.js';
 import { ShiftError, acceptShift, cancelShift, copyShift, listShifts, shiftCopyText, shiftDetail, shiftLabel } from '../shifts.js';
 import { labFields, labList, labDetail, saveLab, acceptLab } from '../lab.js';
+import { purchaseList, purchaseBreakdown, purchaseRows } from '../purchases.js';
+import { intg, setIntg, reloadBots, sendBackup, checkToken, notifyHousehold } from '../integrations.js';
 import { decrypt, encrypt, listSafety, loadSafety, restore, saveSafety, snapshot, wipeHistory } from '../backup.js';
 import { actorName, describe } from '../auditText.js';
 
@@ -464,6 +466,7 @@ export default async function adminRoutes(app, { db }) {
       const s = acceptShift(db, Number(req.params.id), req.actor, { real });
       const u = db.prepare('SELECT name FROM users WHERE id = ?').get(s.employee_id);
       log(req, 'shift.accept', { shift: shiftLabel(s), employee: u?.name });
+      notifyHousehold(db, 'purchase', { shiftId: s.id });
       return { ok: true };
     } catch (e) { return shiftErr(reply, e); }
   });
@@ -574,7 +577,31 @@ export default async function adminRoutes(app, { db }) {
       return out;
     })();
     log(req, 'balance.edit', { count: done.length, note });
+    for (const d of done) notifyHousehold(db, 'balance', { supplierId: d.supplierId, note });
     return { ok: true, changed: done.length };
+  });
+
+  // ---------------------------------------------------------------- integrations (Telegram bots)
+  app.get('/integrations', need('integrations.manage'), async () => {
+    const s = intg(db);
+    const hh = db.prepare('SELECT COUNT(*) AS n FROM tg_households').get().n;
+    return { ...s, hh_linked: hh };
+  });
+  app.put('/integrations', need('integrations.manage'), async (req) => {
+    setIntg(db, req.body ?? {});
+    reloadBots(db);
+    log(req, 'integrations.update', { keys: Object.keys(req.body ?? {}) });
+    return { ok: true };
+  });
+  // Validate a token with Telegram's getMe, so the admin sees it works.
+  app.post('/integrations/check', need('integrations.manage'), async (req) => {
+    const r = await checkToken(str(req.body?.token, 100));
+    return r?.ok ? { ok: true, username: r.result?.username } : { ok: false, error: r?.description || r?.error || 'Token noto\'g\'ri' };
+  });
+  app.post('/integrations/backup/now', need('integrations.manage'), async (req) => {
+    const r = await sendBackup(db, { manual: true });
+    log(req, 'integrations.backup.manual', { ok: r.ok });
+    return r;
   });
 
   app.get('/balances-export.xlsx', need('debts.view'), async (req, reply) => {
@@ -601,7 +628,7 @@ export default async function adminRoutes(app, { db }) {
   app.get('/payments', need('debts.view'), async (req) => {
     const { from, to } = parseRange(req.query);
     const p = { from, to, supplier: num(req.query.supplier), voided: req.query.voided === '1' ? 1 : 0 };
-    const pays = db.prepare(`SELECT p.id, 'payment' AS kind, p.supplier_id, s.name AS supplier_name, p.amount, p.method, p.note,
+    const pays = db.prepare(`SELECT p.id, p.number, 'payment' AS kind, p.supplier_id, s.name AS supplier_name, p.amount, p.method, p.note,
         p.paid_at AS at, p.voided_at, p.void_reason,
         (SELECT COALESCE(u.name, u.login) FROM users u WHERE 'user:' || u.login = p.created_by) AS by_name
       FROM payments p JOIN suppliers s ON s.id = p.supplier_id
@@ -625,10 +652,11 @@ export default async function adminRoutes(app, { db }) {
     if (!assigned(req, supplierId)) return reply.code(403).send({ error: 'Bu xonadon sizga biriktirilmagan' });
     if (!(amount > 0) || amount > 1e11) return bad(reply, 'Summa noto\'g\'ri');
     const paidAt = req.body?.paidAt && !Number.isNaN(Date.parse(req.body.paidAt)) ? new Date(req.body.paidAt).toISOString() : new Date().toISOString();
-    const id = db.prepare(`INSERT INTO payments (client_uuid, supplier_id, amount, method, note, paid_at, created_by, employee_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(req.body?.uuid ? String(req.body.uuid) : randomUUID(), supplierId, amount, method,
+    const id = db.prepare(`INSERT INTO payments (client_uuid, supplier_id, amount, method, note, paid_at, created_by, employee_id, number)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(number), 0) + 1 FROM payments))`).run(req.body?.uuid ? String(req.body.uuid) : randomUUID(), supplierId, amount, method,
       str(req.body?.note, 300), paidAt, req.actor, req.me.is_test ? req.me.id : null).lastInsertRowid;
     log(req, 'payment.create', { id, supplierId, supplier: s.name, amount, method });
+    notifyHousehold(db, 'payment', { paymentId: id });
     // The new balance is money: only return it to callers allowed to see debts.
     return { id, ...(has(req, 'debts.view') ? { balance: supplierBalance(db, supplierId) } : {}) };
   });
@@ -640,10 +668,30 @@ export default async function adminRoutes(app, { db }) {
     if (!p) return reply.code(404).send({ error: 'Topilmadi yoki allaqachon bekor qilingan' });
     db.prepare("UPDATE payments SET voided_at = datetime('now'), void_reason = ?, voided_by = ? WHERE id = ?").run(reason, req.actor, p.id);
     log(req, 'payment.void', { id: p.id, amount: p.amount, reason });
+    notifyHousehold(db, 'void', { paymentId: p.id });
     return { ok: true };
   });
 
   // ---------------------------------------------------------------- reports
+  // ---------------------------------------------------------------- purchases
+  // Numbered purchases (24-2 = 2nd household in shift 24), accepted shifts only,
+  // plus each shift's difference as a final row. Filters: date, collector, household, shift.
+  app.get('/purchases', need('reports.view'), async (req) => purchaseList(db, req.query));
+  app.get('/purchases/breakdown', need('reports.view'), async (req, reply) => {
+    const shiftId = num(req.query.shift); const supplierId = num(req.query.supplier);
+    if (!shiftId || !supplierId) return bad(reply, 'shift va supplier shart');
+    return purchaseBreakdown(db, shiftId, supplierId);
+  });
+  app.get('/purchases/export.csv', need('reports.export'), async (req, reply) => {
+    const cols = [['number', 'Xarid'], ['shift', 'Smena'], ['local_time', 'Vaqt'], ['collector', 'Sut yig\'uvchi'], ['supplier', 'Xonadon'], ['quantity', 'Miqdor (kg)']];
+    if (has(req, 'prices.view')) cols.push(['amount', 'Summa']);
+    const csv = toCsv(purchaseRows(db, req.query), cols);
+    const r = parseRange(req.query);
+    reply.header('Content-Type', 'text/csv; charset=utf-8');
+    reply.header('Content-Disposition', `attachment; filename="yaya_xaridlar_${r.from}_${r.to}.csv"`);
+    return csv;
+  });
+
   app.get('/reports/summary', need('reports.view'), async (req) => summary(db, req.query));
   // Accepted-quantity difference report: real vs. written, real cost, and how much
   // the company gained/lost from the gaps — by product, collector and shift.

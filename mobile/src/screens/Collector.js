@@ -7,7 +7,7 @@ import SyncBar from '../SyncBar';
 import { useBack } from '../back';
 import { distanceM, openRoute, startLocation, stopLocation, useMyLocation } from '../geo';
 import { ask, confirmAction, notify } from '../dialog';
-import { Btn, Header, Keypad, Logo, SearchBar, ShiftBadge, digitsOf, fmtDT, matches, textMatch, toNumber } from '../components';
+import { Btn, Header, Keypad, Logo, SearchBar, ShiftBadge, Tile, digitsOf, fmtDT, matches, textMatch, toNumber } from '../components';
 import { NewSupplier, PaymentForm, SupplierCard } from './Supplier';
 import { C, fmtQty, fmtTime, s } from '../ui';
 
@@ -520,14 +520,54 @@ export function PickSupplier({ title, onBack, onPick }) {
   );
 }
 
+// A collector's own shift detail (read-only) with a clipboard copy.
+function OwnShiftDetail({ id, onBack }) {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState('');
+  useEffect(() => { setErr(''); api.mobile('GET', `/shifts/${id}`).then(setD).catch((e) => setErr(e.message)); }, [id]);
+  const m = api.can('prices.view');
+  const copy = async () => { try { await Clipboard.setStringAsync(d?.copytext || ''); notify('Nusxalandi', 'Smena ma\'lumotlari klaviaturaga nusxalandi.'); } catch { /* ignore */ } };
+  return (
+    <View style={{ flex: 1 }}>
+      <Header title={d?.shift ? `${d.shift.label}` : '...'} onBack={onBack}
+        right={d?.copytext ? <Pressable onPress={copy} hitSlop={10} style={{ padding: 6 }}><Text style={{ fontSize: 22 }}>📋</Text></Pressable> : null} />
+      {!!err && <Text style={[s.err, { padding: 12 }]}>{err}</Text>}
+      {d && (
+        <FlatList
+          data={d.rows}
+          keyExtractor={(r) => String(r.id)}
+          contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 16, gap: 6 }}
+          ListHeaderComponent={(
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+              {d.byProduct.map((p) => <Tile key={p.name} label={p.name} value={fmtQty(p.quantity)} sub={`${p.unit} · ${p.pickups} ta`} />)}
+            </View>
+          )}
+          renderItem={({ item: r }) => (
+            <View style={[s.card, { padding: 10, flexDirection: 'row', alignItems: 'center', gap: 8 }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={[s.text, { fontWeight: '600' }]}>{r.supplier_name}</Text>
+                <Text style={s.muted}>{fmtTime(r.collected_at)} · {r.product_name}{m && r.price != null ? ` · ${fmtQty(r.price)}` : ''}</Text>
+              </View>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: C.text }}>{fmtQty(r.quantity)} {r.unit}</Text>
+            </View>
+          )}
+        />
+      )}
+    </View>
+  );
+}
+
 // ---------------------------------------------------------------- History (online)
 function History({ onBack, onCopied, onReopened }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState('');
+  const [detailId, setDetailId] = useState(null);
   const load = useCallback(() => { setErr(''); api.history().then(setRows).catch((e) => setErr(e.message)); }, []);
   useEffect(load, [load]);
   const canCopy = api.can('collect.copy_cancelled');
+  const canDetail = api.can('collect.detail_own');
   const canEdit = api.editClosedEnabled() && api.can('collect.edit_own');
+  if (detailId) return <OwnShiftDetail id={detailId} onBack={() => setDetailId(null)} />;
   const copy = (r) => confirmAction('copy_cancelled', 'Nusxa olish', `${r.label} smenaning nusxasi yangi ochiq smena sifatida ochiladi. Qatorlarni tuzatib, qayta yopasiz.`, 'Ha', async () => {
     try {
       await api.mobile('POST', `/shifts/${r.id}/copy`);
@@ -558,6 +598,7 @@ function History({ onBack, onCopied, onReopened }) {
             </View>
             <Text style={s.text}>{r.pickups} ta qabul · {fmtQty(r.quantity)} kg</Text>
             {!!r.cancel_reason && <Text style={{ color: C.err }}>Sabab: {r.cancel_reason}</Text>}
+            {r.status === 'accepted' && canDetail && <Btn title="Tafsilot va nusxalash" kind="ghost" onPress={() => setDetailId(r.id)} />}
             {r.status === 'cancelled' && canCopy && <Btn title="Nusxa olib tuzatish" kind="ghost" onPress={() => copy(r)} />}
             {r.status === 'closed' && canEdit && <Btn title="Tahrirlash" kind="ghost" onPress={() => edit(r)} />}
           </View>

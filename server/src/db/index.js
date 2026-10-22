@@ -209,6 +209,18 @@ CREATE TABLE IF NOT EXISTS payments (
   voided_by TEXT
 );
 
+-- Links a Telegram chat to a household (by its phone). A phone that is not in
+-- the suppliers table can never register. chat_id is unique so one chat maps to
+-- one household; a household's phone change re-links on next registration.
+CREATE TABLE IF NOT EXISTS tg_households (
+  chat_id TEXT PRIMARY KEY,
+  supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+  phone TEXT,
+  tg_name TEXT,
+  linked_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_tg_households_supplier ON tg_households(supplier_id);
+
 -- Manual balance corrections. delta is signed so'm added to the balance
 -- (positive increases our debt). Grouped by batch_id when several are saved together.
 CREATE TABLE IF NOT EXISTS adjustments (
@@ -269,7 +281,7 @@ function seedRoles(db) {
 // should have them by default, on an already-upgraded database. Only brand-new
 // permission keys are added, so an admin's own edits are never overwritten.
 const NEW_ROLE_PERMS = {
-  collector: ['suppliers.location', 'collect.view_own_shifts'],
+  collector: ['suppliers.location', 'collect.view_own_shifts', 'collect.detail_own'],
   // Accountants set prices and edit household data from the app now.
   viewer: ['suppliers.edit', 'suppliers.location', 'prices.manage', 'diff.view', 'lab.view', 'lab.accept'],
   // Whoever accepts shifts may see the accepted-quantity difference and the lab.
@@ -392,6 +404,14 @@ export function openDb(file) {
   addColumn('suppliers', 'address2', 'TEXT');
   addColumn('suppliers', 'lat2', 'REAL');
   addColumn('suppliers', 'lng2', 'REAL');
+  // Sequential, stable payment number (independent of shifts). Backfilled once by paid_at order.
+  addColumn('payments', 'number', 'INTEGER');
+  if (db.prepare('SELECT 1 FROM payments WHERE number IS NULL LIMIT 1').get()) {
+    let n = db.prepare('SELECT COALESCE(MAX(number), 0) AS m FROM payments').get().m;
+    for (const p of db.prepare('SELECT id FROM payments WHERE number IS NULL ORDER BY paid_at, id').all()) {
+      db.prepare('UPDATE payments SET number = ? WHERE id = ?').run(++n, p.id);
+    }
+  }
   seedRoles(db);
   backfillNewPermissions(db);
   db.pragma(`user_version = ${SCHEMA_VERSION}`);

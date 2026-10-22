@@ -10,6 +10,7 @@ export const PERMISSIONS = [
   { key: 'collect.delete_own', group: 'Sut qabul qilish (smena)', label: 'Ochiq smenadagi o\'z yozuvini o\'chirish' },
   { key: 'collect.copy_cancelled', group: 'Sut qabul qilish (smena)', label: 'O\'zining bekor qilingan smenasini nusxalash' },
   { key: 'collect.view_own_shifts', group: 'Sut qabul qilish (smena)', label: 'O\'zining avvalgi smenalarini ko\'rish' },
+  { key: 'collect.detail_own', group: 'Sut qabul qilish (smena)', label: 'O\'zining qabul qilingan smenasi tafsilotini ko\'rish va nusxalash' },
 
   // --- suppliers
   { key: 'suppliers.card_own', group: 'Xonadonlar', label: 'O\'ziga biriktirilganlarning kartochkasi: kg tarixi va qarz qoldig\'i (narxsiz)' },
@@ -48,6 +49,7 @@ export const PERMISSIONS = [
   { key: 'staff.manage', group: 'Boshqaruv', label: 'Xodimlar, rollar, ruxsatlar va qurilmalarni boshqarish' },
   { key: 'catalog.manage', group: 'Boshqaruv', label: 'Mahsulotlarni boshqarish' },
   { key: 'settings.manage', group: 'Boshqaruv', label: 'Sozlamalar (logo, kompaniya nomi)' },
+  { key: 'integrations.manage', group: 'Boshqaruv', label: 'Integratsiya: Telegram botlar (xonadon boti, zaxira boti)' },
   { key: 'audit.view', group: 'Boshqaruv', label: 'Harakatlar jurnalini ko\'rish' },
   { key: 'data.backup', group: 'Boshqaruv', label: 'Zaxira nusxa: eksport, import, tarixni tozalash' },
   { key: 'tester.use', group: 'Boshqaruv', label: 'Ilovani brauzerda sinash' },
@@ -58,7 +60,7 @@ const ALL = PERMISSIONS.map((p) => p.key);
 
 // Collecting milk is a specific field job. Admins and office staff manage and
 // pay but never open a shift, so these are kept out of the admin role too.
-export const COLLECT_PERMS = ['collect.shift', 'collect.edit_own', 'collect.delete_own', 'collect.copy_cancelled', 'collect.view_own_shifts'];
+export const COLLECT_PERMS = ['collect.shift', 'collect.edit_own', 'collect.delete_own', 'collect.copy_cancelled', 'collect.view_own_shifts', 'collect.detail_own'];
 // The admin has every permission except the collector ones, so the mobile app
 // never offers an admin a shift to open. Losing collect.* cannot lock anyone out.
 const ADMIN_PERMS = ALL.filter((k) => !COLLECT_PERMS.includes(k));
@@ -68,7 +70,7 @@ const ADMIN_PERMS = ALL.filter((k) => !COLLECT_PERMS.includes(k));
 export const BUILTIN_ROLES = [
   { code: 'admin', name: 'Admin', locked: 1, perms: ADMIN_PERMS },
   { code: 'manager', name: 'Menejer', locked: 0,
-    perms: ALL.filter((k) => !['panel.access', 'staff.manage', 'settings.manage', 'audit.view', 'data.backup', 'tester.use',
+    perms: ALL.filter((k) => !['panel.access', 'staff.manage', 'settings.manage', 'integrations.manage', 'audit.view', 'data.backup', 'tester.use',
       ...COLLECT_PERMS].includes(k)) },
   { code: 'storekeeper', name: 'Omborchi', locked: 0,
     perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'shifts.copy', 'diff.view', 'suppliers.view', 'debts.view', 'payments.create', 'reports.view',

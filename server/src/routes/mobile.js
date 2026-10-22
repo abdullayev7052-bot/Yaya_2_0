@@ -2,7 +2,8 @@ import { audit } from '../db/index.js';
 import { makeGuard } from '../auth.js';
 import { getSetting } from '../settings.js';
 import { supplierBalance } from '../ledger.js';
-import { ShiftError, blockingShift, closeShift, copyShift, displayStatus, ensureShift, reopenShift, shiftLabel, shiftTotals } from '../shifts.js';
+import { ShiftError, blockingShift, closeShift, copyShift, displayStatus, ensureShift, reopenShift, shiftDetail, shiftCopyText, shiftLabel, shiftTotals } from '../shifts.js';
+import { notifyHousehold } from '../integrations.js';
 
 // API for the field part of the mobile app (collecting milk). Everything a
 // collector does offline is uploaded through /sync and is idempotent by
@@ -66,6 +67,27 @@ export default async function mobileRoutes(app, { db }) {
   });
 
   app.get('/history', need('collect.view_own_shifts'), async (req) => myShifts(req.me.id, 60));
+
+  // A collector's own shift detail + a clipboard text. Own shifts only; prices and
+  // the accepted-quantity difference are dropped unless the collector may see them.
+  app.get('/shifts/:id', need('collect.detail_own'), async (req, reply) => {
+    const id = Number(req.params.id);
+    const sh = db.prepare('SELECT employee_id FROM shifts WHERE id = ?').get(id);
+    if (!sh) return reply.code(404).send({ error: 'Smena topilmadi' });
+    if (sh.employee_id !== req.me.id) return reply.code(403).send({ error: 'Bu smena sizniki emas' });
+    const d = shiftDetail(db, id);
+    if (!req.me.perms.has('diff.view')) delete d.diff;
+    const seePrices = req.me.perms.has('prices.view');
+    if (!seePrices) for (const r of d.rows) { delete r.price; delete r.amount; delete r.current_price; }
+    d.copytext = shiftCopyText(db, id, {
+      prices: seePrices,
+      showProduct: getSetting(db, 'copy_show_product') !== '0',
+      showHousehold: getSetting(db, 'copy_show_household') !== '0',
+      showPrice: getSetting(db, 'copy_show_price') !== '0',
+      showQty: getSetting(db, 'copy_show_qty') !== '0',
+    });
+    return d;
+  });
 
   // Copy one of my own cancelled shifts into a new open draft.
   app.post('/shifts/:id/copy', need('collect.copy_cancelled'), async (req, reply) => {
@@ -198,6 +220,7 @@ export default async function mobileRoutes(app, { db }) {
     const can = (p) => me.perms.has(p);
     const actor = req.actor;
     const out = { accepted: [], rejected: [], shifts: { accepted: [], rejected: [] }, ops: { accepted: [], rejected: [] }, payments: { accepted: [], rejected: [] } };
+    const newPayments = []; // ids to notify households about, after the transaction commits
     const shiftOf = db.prepare('SELECT * FROM shifts WHERE client_uuid = ?');
     // A household is usable unless it is hidden from this employee.
     const visible = (sid) => can('suppliers.view') || !isHidden(me.id, sid);
@@ -277,13 +300,16 @@ export default async function mobileRoutes(app, { db }) {
         if (db.prepare('SELECT 1 FROM payments WHERE client_uuid = ?').get(p.uuid)) { out.payments.accepted.push(p.uuid); continue; }
         if (!can('payments.create')) { out.payments.rejected.push({ uuid: p.uuid, error: 'To\'lov qilishga ruxsat yo\'q' }); continue; }
         if (!visible(p.supplierId)) { out.payments.rejected.push({ uuid: p.uuid, error: 'Bu xonadon sizga ko\'rinmaydi' }); continue; }
-        db.prepare(`INSERT INTO payments (client_uuid, supplier_id, amount, method, note, paid_at, created_by, employee_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(p.uuid, p.supplierId, Math.round(p.amount), p.method ?? 'cash',
-          p.note ? String(p.note).slice(0, 300) : null, p.paidAt, actor, me.id);
+        const pid = db.prepare(`INSERT INTO payments (client_uuid, supplier_id, amount, method, note, paid_at, created_by, employee_id, number)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(number), 0) + 1 FROM payments))`).run(p.uuid, p.supplierId, Math.round(p.amount), p.method ?? 'cash',
+          p.note ? String(p.note).slice(0, 300) : null, p.paidAt, actor, me.id).lastInsertRowid;
         audit(db, actor, 'payment.create', { supplierId: p.supplierId, amount: Math.round(p.amount), method: p.method ?? 'cash', fromApp: true });
+        newPayments.push(pid);
         out.payments.accepted.push(p.uuid);
       }
     })();
+    // Household Telegram notifications after commit (never blocks or fails the sync).
+    for (const id of newPayments) notifyHousehold(db, 'payment', { paymentId: id });
     return out;
   });
 }
