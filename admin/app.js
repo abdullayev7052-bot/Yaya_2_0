@@ -1091,11 +1091,11 @@ const views = {
             ${ck('hh_m_purchase', 'Xaridlar', on(s.hh_m_purchase))}${ck('hh_m_payment', "To'lovlar", on(s.hh_m_payment))}
             ${ck('hh_m_void', 'Bekor qilingan to\'lovlar', on(s.hh_m_void))}${ck('hh_m_balance', 'Balans tahrirlanishi', on(s.hh_m_balance))}</div>
           <div style="margin-top:8px"><b>Xarid xabari tarkibi</b>
-            ${ck('hh_f_number', 'Xarid raqami (#24-1)', on(s.hh_f_number))}${ck('hh_f_time', 'Vaqt', on(s.hh_f_time))}${ck('hh_f_collector', 'Sut yig\'uvchi', on(s.hh_f_collector))}
-            ${ck('hh_f_unitprice', 'Mahsulot narxi (4 500)', on(s.hh_f_unitprice))}${ck('hh_f_linetotal', 'Mahsulot umumiy narxi (11 250)', on(s.hh_f_linetotal))}
+            ${ck('hh_f_number', 'Xarid raqami', on(s.hh_f_number))}${ck('hh_f_time', 'Vaqt', on(s.hh_f_time))}${ck('hh_f_collector', 'Sut yig\'uvchi', on(s.hh_f_collector))}
+            ${ck('hh_f_unitprice', 'Mahsulot narxi', on(s.hh_f_unitprice))}${ck('hh_f_linetotal', 'Mahsulot umumiy narxi', on(s.hh_f_linetotal))}
             ${ck('hh_f_qty', 'Jami miqdor', on(s.hh_f_qty))}${ck('hh_f_sum', 'Jami summa', on(s.hh_f_sum))}${ck('hh_f_balance', 'Hozirgi balans', on(s.hh_f_balance))}</div>
           <div style="margin-top:8px"><b>To'lov xabari tarkibi</b>
-            ${ck('hh_p_number', 'To\'lov raqami (#36)', on(s.hh_p_number))}${ck('hh_p_time', 'Vaqt', on(s.hh_p_time))}${ck('hh_p_who', 'To\'lov qildi', on(s.hh_p_who))}</div>
+            ${ck('hh_p_number', 'To\'lov raqami', on(s.hh_p_number))}${ck('hh_p_time', 'Vaqt', on(s.hh_p_time))}${ck('hh_p_who', 'To\'lov qildi', on(s.hh_p_who))}</div>
           <label style="margin-top:8px">Kirish (xush kelibsiz) xabari <textarea name="hh_welcome" rows="2">${esc(s.hh_welcome)}</textarea></label>
           <p class="muted"><code>{org}</code> — tashkilot nomiga almashtiriladi.</p>
           <label>Ro'yxatdan o'tgani xabari <textarea name="hh_registered" rows="2">${esc(s.hh_registered)}</textarea></label>
@@ -1113,7 +1113,6 @@ const views = {
           <label>Zaxira paroli <input name="bk_password" value="${esc(s.bk_password)}" autocomplete="off"></label>
           <label>Yuborish vaqti (soat:daqiqa) <input name="bk_time" value="${esc(s.bk_time)}" placeholder="00:00" style="width:120px"></label>
           <div class="row"><button>Saqlash</button><button type="button" class="ghost" id="bkNow">Hozir yuborish</button><span id="bkNowRes" class="muted"></span></div>
-          <p class="muted">Kanalga yuborilishi uchun: botni kanalga <b>admin</b> qiling (xabar yuborish huquqi bilan) va Kanal ID <code>-100</code> bilan boshlansin.</p>
         </form>
       </div>`;
     const collect = (form) => {
@@ -1205,13 +1204,12 @@ const views = {
           <div style="margin-top:10px"><b>Smenani tahrirlash</b>
             <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="editClosed" ${st.editClosed ? 'checked' : ''}> Qabul qilinmagan smenani tahrirlashga ruxsat</label>
           </div>
-          <div style="margin-top:10px"><b>Farqlar bilan ishlash</b><p class="muted" style="margin:2px 0 6px">Qabul qilishda real miqdor kiritiladi; smena bilan farqi kompaniya foyda/ziyoni bo'ladi (xonadon balansiga tegmaydi). O'chirilsa — to'g'ridan to'g'ri qabul qilinadi.</p>
+          <div style="margin-top:10px"><b>Farqlar bilan ishlash</b>
             <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="diffEnabled" ${st.diff?.enabled ? 'checked' : ''}> Yoqilgan</label>
             <div class="row" style="gap:12px;margin-top:6px">
               <label>Farq limiti — Ko'p (+ kg) <input name="diffOver" type="number" min="0" step="0.1" value="${st.diff?.over ?? ''}" placeholder="cheksiz" style="width:120px"></label>
               <label>Kam (− kg) <input name="diffUnder" type="number" min="0" step="0.1" value="${st.diff?.under ?? ''}" placeholder="cheksiz" style="width:120px"></label>
             </div>
-            <p class="muted">Bo'sh = cheklovsiz. Farq limitdan oshsa, smena qabul qilinmaydi.</p>
           </div>
           <button>Saqlash</button>
         </form>

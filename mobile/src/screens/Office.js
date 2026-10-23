@@ -81,8 +81,13 @@ export function Today({ onShift }) {
           <View style={[s.card, { gap: 6 }]}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
               <Text style={[s.text, { fontWeight: '700' }]}>Mahsulotlar{m ? ' va tannarx' : ''}</Text>
-              {/* Real (accepted) cost by default; toggle to the nominal price. */}
-              {m && dr && <Chip label={nominal ? 'Nominal narx' : 'Real tannarx'} on onPress={() => setNominal((x) => !x)} />}
+              {/* Real (accepted) cost by default; toggle to the nominal price. A plain
+                  compact button sitting beside the heading — not a full-width chip. */}
+              {m && dr && (
+                <Pressable onPress={() => setNominal((x) => !x)} style={[s.btnGhost, { paddingHorizontal: 12, paddingVertical: 6 }]}>
+                  <Text style={[s.btnGhostText, { fontSize: 14 }]}>{nominal ? 'Nominal narx' : 'Real narx'}</Text>
+                </Pressable>
+              )}
             </View>
             {d.summary.byProduct.map((p) => {
               const c = costByProduct[p.id];
