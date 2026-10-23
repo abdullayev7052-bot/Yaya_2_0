@@ -245,7 +245,7 @@ export function ShiftDetail({ id, onBack, onChanged, onCard }) {
               {/* Accepted shift: real total and the company's surplus/shortfall. */}
               {diff?.hasReal && (
                 <View style={[s.card, { gap: 4 }]}>
-                  <Text style={[s.text, { fontWeight: '700' }]}>Qabul qilingan (real) va farq</Text>
+                  <Text style={[s.text, { fontWeight: '700' }]}>Qabul qilingan va farq</Text>
                   {diff.products.map((p) => (
                     <Text key={p.product_id} style={s.text}>{p.name}: {fmtQty(p.real)} {p.unit} · Farq: <Diff kg={p.diff} unit={p.unit} /></Text>
                   ))}
@@ -255,7 +255,7 @@ export function ShiftDetail({ id, onBack, onChanged, onCard }) {
               {/* Closed shift awaiting acceptance: record the real quantity per product. */}
               {diffOn && (
                 <View style={[s.card, { gap: 8 }]}>
-                  <Text style={[s.text, { fontWeight: '700' }]}>Qabul qilingan real miqdor</Text>
+                  <Text style={[s.text, { fontWeight: '700' }]}>Qabul qilingan miqdor</Text>
                   {checks.map((c) => (
                     <View key={c.product_id} style={{ gap: 4 }}>
                       <Text style={s.muted}>{c.name} — yozilgan {fmtQty(c.written)} {c.unit}</Text>
@@ -445,7 +445,6 @@ export function Lab({ onOpen }) {
         keyExtractor={(x) => String(x.id)}
         refreshControl={<RefreshControl refreshing={busy} onRefresh={load} />}
         contentContainerStyle={{ padding: 12, gap: 8 }}
-        ListHeaderComponent={<Text style={[s.muted, { marginBottom: 2 }]}>Qabul qilingan smenalar. Faqat umumiy real miqdor — narx va xonadonlar ko'rinmaydi.</Text>}
         ListEmptyComponent={<Text style={[s.muted, { padding: 16 }]}>{data ? 'Qabul qilingan smena yo\'q' : 'Yuklanmoqda...'}</Text>}
         renderItem={({ item: x }) => (
           <Pressable onPress={() => onOpen(x.id)} style={({ pressed }) => [s.card, { borderWidth: 2, borderColor: LAB_FRAME[x.labStatus] || C.line, gap: 4 }, pressed && { opacity: 0.6 }]}>
@@ -497,8 +496,7 @@ export function LabDetail({ id, onBack, onChanged }) {
             const over = labOver(f, raw);
             return (
               <View key={f.id} style={{ gap: 4 }}>
-                <Text style={[s.text, { fontWeight: '600' }, over && { color: C.err }]}>{f.name}
-                  {f.type === 'number' && (f.limit_min != null || f.limit_max != null) ? <Text style={s.muted}>  (ruxsat {f.limit_min != null ? `${f.limit_min}` : '∞'}–{f.limit_max != null ? `${f.limit_max}` : '∞'})</Text> : null}</Text>
+                <Text style={[s.text, { fontWeight: '600' }, over && { color: C.err }]}>{f.name}</Text>
                 {f.type === 'variant' ? (
                   <View style={{ flexDirection: 'row', gap: 8 }}>
                     {[['bor', 'Bor'], ['yoq', 'Yo\'q']].map(([val, lbl]) => {
@@ -518,7 +516,12 @@ export function LabDetail({ id, onBack, onChanged }) {
           })}
           {canEdit && !!d.fields.length && <Btn title="Saqlash" onPress={save} />}
           {d.labStatus === 'flagged' && api.can('lab.accept') && <Btn title="Qabul qilish (limitdan o'tgan)" kind="warn" onPress={accept} />}
-          {d.report?.accepted_at && <Text style={s.muted}>Qabul qildi: {String(d.report.accepted_by ?? '').replace(/^user:/, '')} · {fmtDT(d.report.accepted_at)}</Text>}
+          {d.report && (
+            <Text style={[s.muted, { fontSize: 11, marginTop: 4 }]}>
+              Kiritdi: {d.report.created_by || '—'} · {fmtDT(d.report.updated_at || d.report.created_at)}
+              {d.report.accepted_at ? `\nQabul qildi: ${d.report.accepted_by || '—'} · ${fmtDT(d.report.accepted_at)}` : ''}
+            </Text>
+          )}
         </ScrollView>
       )}
     </View>
@@ -537,7 +540,7 @@ export function Debts({ onOpen, onPay, tick }) {
         {data && (
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <Tile label="Qarzdorlik" value={fmtMoney(data.totals.weOwe)} sub="so'm" />
-            <Tile label="Haqdorlik" value={fmtMoney(data.totals.theyOwe)} sub="so'm (avans)" />
+            <Tile label="Haqdorlik" value={fmtMoney(data.totals.theyOwe)} sub="so'm" />
           </View>
         )}
         <TextInput style={s.input} value={q} onChangeText={setQ} placeholder="🔍  Ism yoki telefon raqam" autoCorrect={false} />

@@ -166,7 +166,7 @@ export function SupplierCard({ id, onBack, onPay }) {
               </View>
             )}
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-              <Tile label={bal > 0 ? 'Qarzdorlik' : bal < 0 ? 'Haqdorlik (avans)' : 'Qarz yo\'q'} value={fmtMoney(Math.abs(bal ?? 0))} sub="so'm" />
+              <Tile label={bal > 0 ? 'Qarzdorlik' : bal < 0 ? 'Haqdorlik' : 'Qarz yo\'q'} value={fmtMoney(Math.abs(bal ?? 0))} sub="so'm" />
               <Tile label="Oxirgi marta" value={c.lastPickup ? `${fmtQty(c.lastPickup.quantity)} ${c.lastPickup.unit}` : '—'}
                 sub={c.lastPickup ? `${fmtDT(c.lastPickup.collected_at)} · ${c.lastPickup.product_name}` : ''} />
             </View>
@@ -219,7 +219,7 @@ export function PaymentForm({ supplier, onBack, onDone }) {
     <View style={{ flex: 1, padding: 12, gap: 10 }}>
       <Header title={`To'lov: ${supplier.name}`} onBack={onBack} />
       {supplier.balance != null && (
-        <Text style={s.muted}>{supplier.balance >= 0 ? `Qarzdorlik: ${fmtMoney(supplier.balance)} so'm` : `Haqdorlik (avans): ${fmtMoney(-supplier.balance)} so'm`}</Text>
+        <Text style={s.muted}>{supplier.balance >= 0 ? `Qarzdorlik: ${fmtMoney(supplier.balance)} so'm` : `Haqdorlik: ${fmtMoney(-supplier.balance)} so'm`}</Text>
       )}
       <View style={{ flexDirection: 'row', gap: 8 }}>
         {Object.entries(METHOD).map(([k, t]) => <Chip key={k} label={t} on={method === k} onPress={() => setMethod(k)} />)}

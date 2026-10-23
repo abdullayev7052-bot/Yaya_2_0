@@ -57,11 +57,18 @@ export function labDetail(db, shiftId) {
   const rep = db.prepare('SELECT vals, over_limit, created_by, created_at, updated_at, accepted_by, accepted_at FROM lab_reports WHERE shift_id = ?').get(shiftId);
   const vals = rep ? JSON.parse(rep.vals) : {};
   const { over, overLimit } = evalReport(fields, vals);
+  // Resolve a 'user:login' actor to a display name.
+  const nameOf = (actor) => (actor
+    ? (db.prepare("SELECT COALESCE(u.name, u.login) AS n FROM users u WHERE 'user:' || u.login = ?").get(actor)?.n ?? String(actor).replace(/^user:/, ''))
+    : null);
   return {
     shift: { ...sh, label: labelOf(sh) },
     fields, values: vals, over, overLimit,
     labStatus: statusOf(rep),
-    report: rep ? { created_by: rep.created_by, created_at: rep.created_at, updated_at: rep.updated_at, accepted_by: rep.accepted_by, accepted_at: rep.accepted_at } : null,
+    report: rep ? {
+      created_by: nameOf(rep.created_by), created_at: rep.created_at, updated_at: rep.updated_at,
+      accepted_by: nameOf(rep.accepted_by), accepted_at: rep.accepted_at,
+    } : null,
   };
 }
 

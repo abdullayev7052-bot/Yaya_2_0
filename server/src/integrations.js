@@ -276,10 +276,17 @@ export async function sendBackup(db, { manual = false } = {}) {
   const buf = encrypt(snapshot(db), f.bk_password);
   const name = `yaya_${new Date().toISOString().slice(0, 10)}.yaya`;
   const caption = `Yaya zaxira — ${new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 16).replace('T', ' ')}${manual ? ' (qo\'lda)' : ''}`;
-  const targets = [f.bk_admin_id, f.bk_channel_id].filter(Boolean);
-  let okAny = false;
-  for (const t of targets) { const r = await sendDocument(f.bk_token, t, buf, name, caption); okAny = okAny || r.ok; }
-  return { ok: okAny, targets: targets.length };
+  const targets = [['Admin', f.bk_admin_id], ['Kanal', f.bk_channel_id]].filter(([, v]) => v);
+  if (!targets.length) return { ok: false, error: 'Admin ID yoki Kanal ID kiriting' };
+  // Send to each target separately and report each result, so the admin can see
+  // exactly why a channel failed (usually: the bot is not an admin of the channel,
+  // or the Channel ID is not the -100… form). Telegram's own description is passed through.
+  const results = [];
+  for (const [label, id] of targets) {
+    const r = await sendDocument(f.bk_token, id, buf, name, caption);
+    results.push({ label, id, ok: !!r.ok, error: r.ok ? null : (r.description || r.error || 'xatolik') });
+  }
+  return { ok: results.some((x) => x.ok), results };
 }
 
 async function handleBKUpdate(db, update) {

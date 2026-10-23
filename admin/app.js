@@ -1081,7 +1081,7 @@ const views = {
     const on = (x) => x !== '0' && x !== '' && x != null;
     v.innerHTML = `
       <div class="card" style="max-width:820px"><h2>📨 Xonadon boti</h2>
-        <p class="muted">Xonadonlar o'z xaridlari, to'lovlari va balansini Telegram orqali kuzatadi. Faqat tizimda telefon raqami kiritilgan xonadonlar ro'yxatdan o'ta oladi. Ulangan xonadonlar: <b>${s.hh_linked}</b>.</p>
+        <p class="muted">Ulangan xonadonlar: <b>${s.hh_linked}</b>.</p>
         <form id="hhForm">
           ${ck('hh_enabled', 'Bot yoqilgan', on(s.hh_enabled))}
           <label>Bot tokeni <input name="hh_token" value="${esc(s.hh_token)}" placeholder="123456:ABC..." autocomplete="off"></label>
@@ -1104,16 +1104,16 @@ const views = {
         </form>
       </div>
       <div class="card" style="max-width:820px"><h2>🔐 Backup (zaxira) boti</h2>
-        <p class="muted">Har kuni belgilangan vaqtda butun tizim shifrlangan (.yaya) fayl sifatida belgilangan Telegram foydalanuvchiga va (ixtiyoriy) kanalga yuboriladi. Faqat belgilangan Admin ID ishlaydi.</p>
         <form id="bkForm">
           ${ck('bk_enabled', 'Bot yoqilgan (har kuni avtomatik yuborish)', on(s.bk_enabled))}
           <label>Bot tokeni <input name="bk_token" value="${esc(s.bk_token)}" placeholder="123456:ABC..." autocomplete="off"></label>
           <div class="row"><button type="button" class="ghost small" id="bkCheck">Tokenni tekshirish</button><span id="bkCheckRes" class="muted"></span></div>
-          <label>Admin ID (Telegram foydalanuvchi IDsi) <input name="bk_admin_id" value="${esc(s.bk_admin_id)}" placeholder="masalan: 123456789"></label>
-          <label>Kanal ID (ixtiyoriy, masalan: -1001234567890) <input name="bk_channel_id" value="${esc(s.bk_channel_id)}"></label>
-          <label>Zaxira paroli (import qilishda shu kiritiladi) <input name="bk_password" value="${esc(s.bk_password)}" autocomplete="off"></label>
+          <label>Admin ID <input name="bk_admin_id" value="${esc(s.bk_admin_id)}" placeholder="masalan: 123456789"></label>
+          <label>Kanal ID <input name="bk_channel_id" value="${esc(s.bk_channel_id)}" placeholder="masalan: -1001234567890"></label>
+          <label>Zaxira paroli <input name="bk_password" value="${esc(s.bk_password)}" autocomplete="off"></label>
           <label>Yuborish vaqti (soat:daqiqa) <input name="bk_time" value="${esc(s.bk_time)}" placeholder="00:00" style="width:120px"></label>
           <div class="row"><button>Saqlash</button><button type="button" class="ghost" id="bkNow">Hozir yuborish</button><span id="bkNowRes" class="muted"></span></div>
+          <p class="muted">Kanalga yuborilishi uchun: botni kanalga <b>admin</b> qiling (xabar yuborish huquqi bilan) va Kanal ID <code>-100</code> bilan boshlansin.</p>
         </form>
       </div>`;
     const collect = (form) => {
@@ -1138,8 +1138,8 @@ const views = {
       const res = $('#bkNowRes', v); res.textContent = 'Yuborilmoqda...';
       await api('PUT', '/integrations', collect($('#bkForm', v))); // save first so token/password are current
       const r = await api('POST', '/integrations/backup/now');
-      res.textContent = r.ok ? `✓ ${r.targets} manzilga yuborildi` : `✗ ${r.error || 'xatolik'}`;
-      res.style.color = r.ok ? 'var(--ok)' : 'var(--err)';
+      if (r.results) res.innerHTML = r.results.map((x) => `<span style="color:${x.ok ? 'var(--ok)' : 'var(--err)'}">${x.label}: ${x.ok ? '✓' : '✗ ' + esc(x.error || '')}</span>`).join(' · ');
+      else { res.textContent = r.ok ? '✓ yuborildi' : `✗ ${r.error || 'xatolik'}`; res.style.color = r.ok ? 'var(--ok)' : 'var(--err)'; }
     });
   },
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import * as api from '../api';
 import { Logo } from '../components';
 import Collector from './Collector';
@@ -82,19 +82,21 @@ export default function Home({ tick, refresh, onLogout }) {
       {!!toast && <View style={{ backgroundColor: C.ok, padding: 12 }}><Text style={{ color: '#fff', fontSize: 17, fontWeight: '700' }}>{toast}</Text></View>}
       <View style={{ flex: 1 }}>{body}</View>
       {chrome && tabs.length > 1 && (
-        <View style={{ flexDirection: 'row', borderTopWidth: 1, borderColor: C.line, backgroundColor: C.card }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} bounces={false}
+          style={{ flexGrow: 0, borderTopWidth: 1, borderColor: C.line, backgroundColor: C.card }}
+          contentContainerStyle={{ flexGrow: 1 }}>
           {tabs.map(([k, t]) => (
             <Pressable key={k} onPress={() => setTab(k)}
               onLongPress={k === 'collect' && api.can('collect.view_own_shifts') ? () => { setTab('collect'); setHistReq((n) => n + 1); } : undefined}
               delayLongPress={2000}
-              style={{ flex: 1, paddingVertical: 14, alignItems: 'center' }}>
+              style={{ flexGrow: 1, minWidth: 68, paddingVertical: 13, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' }}>
               <View>
-                <Text style={{ fontSize: 15, fontWeight: current === k ? '700' : '500', color: current === k ? C.accent : C.muted }}>{t}</Text>
+                <Text numberOfLines={1} style={{ fontSize: 13.5, fontWeight: current === k ? '700' : '500', color: current === k ? C.accent : C.muted }}>{t}</Text>
                 {k === 'lab' && labFlag && <View style={{ position: 'absolute', top: -2, right: -10, width: 9, height: 9, borderRadius: 5, backgroundColor: C.err }} />}
               </View>
             </Pressable>
           ))}
-        </View>
+        </ScrollView>
       )}
     </View>
   );

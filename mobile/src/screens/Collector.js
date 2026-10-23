@@ -598,7 +598,7 @@ function History({ onBack, onCopied, onReopened }) {
             </View>
             <Text style={s.text}>{r.pickups} ta qabul · {fmtQty(r.quantity)} kg</Text>
             {!!r.cancel_reason && <Text style={{ color: C.err }}>Sabab: {r.cancel_reason}</Text>}
-            {r.status === 'accepted' && canDetail && <Btn title="Tafsilot va nusxalash" kind="ghost" onPress={() => setDetailId(r.id)} />}
+            {r.status === 'accepted' && canDetail && <Btn title="Tafsilot" kind="ghost" onPress={() => setDetailId(r.id)} />}
             {r.status === 'cancelled' && canCopy && <Btn title="Nusxa olib tuzatish" kind="ghost" onPress={() => copy(r)} />}
             {r.status === 'closed' && canEdit && <Btn title="Tahrirlash" kind="ghost" onPress={() => edit(r)} />}
           </View>
