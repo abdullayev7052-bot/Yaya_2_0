@@ -4,7 +4,7 @@ import * as api from '../api';
 import { Logo } from '../components';
 import Collector from './Collector';
 import Profile from './Profile';
-import { Debts, Lab, LabDetail, Payments, ShiftDetail, Shifts, Today } from './Office';
+import { Debts, Lab, LabDetail, MyPayments, Payments, ShiftDetail, Shifts, Today } from './Office';
 import { PaymentForm, SupplierCard } from './Supplier';
 import { C, s } from '../ui';
 
@@ -18,6 +18,8 @@ const TABS = [
   ['lab', 'Laborant', () => api.can('lab.view')],
   ['debts', 'Qarzlar', () => api.can('debts.view')],
   ['pays', 'To\'lovlar', () => api.can('debts.view')],
+  // Collector's own payments only — shown when they lack the broad debts.view.
+  ['mypays', 'To\'lovlarim', () => api.can('payments.view_own') && !api.can('debts.view')],
   ['me', 'Profil', () => true],
 ];
 
@@ -63,6 +65,7 @@ export default function Home({ tick, refresh, onLogout }) {
   else if (current === 'lab') body = <Lab onOpen={setLabId} />;
   else if (current === 'debts') body = <Debts onOpen={setCardId} onPay={setPayFor} tick={tick} />;
   else if (current === 'pays') body = <Payments onOpen={setCardId} />;
+  else if (current === 'mypays') body = <MyPayments />;
   else body = <Profile tick={tick} onLogout={onLogout} setFull={setFull} />;
 
   const detail = !!(payFor || cardId || shiftId || labId);

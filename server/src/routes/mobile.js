@@ -68,6 +68,18 @@ export default async function mobileRoutes(app, { db }) {
 
   app.get('/history', need('collect.view_own_shifts'), async (req) => myShifts(req.me.id, 60));
 
+  // A collector's OWN payment history only (the ones they made). No balances and
+  // no other households' debts are ever exposed here.
+  app.get('/my-payments', need('payments.view_own'), async (req) => {
+    const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s ?? '');
+    const to = isDay(req.query.to) ? req.query.to : new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10);
+    const from = isDay(req.query.from) ? req.query.from : to;
+    return db.prepare(`SELECT p.id, p.number, p.amount, p.method, p.note, p.paid_at, p.voided_at, s.name AS supplier_name
+      FROM payments p JOIN suppliers s ON s.id = p.supplier_id
+      WHERE p.created_by = ? AND date(p.paid_at, '+5 hours') BETWEEN ? AND ?
+      ORDER BY p.paid_at DESC LIMIT 1000`).all(req.actor, from <= to ? from : to, from <= to ? to : from);
+  });
+
   // A collector's own shift detail + a clipboard text. Own shifts only; prices and
   // the accepted-quantity difference are dropped unless the collector may see them.
   app.get('/shifts/:id', need('collect.detail_own'), async (req, reply) => {

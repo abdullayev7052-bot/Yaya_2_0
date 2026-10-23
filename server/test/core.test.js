@@ -310,6 +310,28 @@ test('payments are numbered sequentially; household bot links only known phones'
   assert.match(txt, /Hozirgi balans:/);
 });
 
+test('collector own-payments view: only their payments, no balances or others\' debts', async () => {
+  const { app, db } = setup();
+  const b = await boss(app);
+  const h = await ali(app);
+  // ali pays supplier 1 from the field; boss pays supplier 2
+  await call(app, 'POST', '/api/mobile/sync', h, { payments: [{ uuid: 'mp1', supplierId: 1, amount: 5000, paidAt: now() }] });
+  await call(app, 'POST', '/api/admin/payments', b, { supplierId: 2, amount: 9000 });
+  // without the permission the endpoint is refused
+  assert.equal((await call(app, 'GET', '/api/mobile/my-payments', h)).status, 403);
+  // grant payments.view_own to the collector role (perms are re-read per request)
+  const role = db.prepare("SELECT id, permissions FROM roles WHERE code = 'collector'").get();
+  const perms = new Set(JSON.parse(role.permissions)); perms.add('payments.view_own');
+  db.prepare('UPDATE roles SET permissions = ? WHERE id = ?').run(JSON.stringify([...perms]), role.id);
+  const mine = (await call(app, 'GET', '/api/mobile/my-payments', h)).body;
+  assert.equal(mine.length, 1, 'only my own payment');
+  assert.equal(mine[0].supplier_name, 'Karimova Oydin');
+  assert.equal(mine[0].amount, 5000);
+  // the broad balances / all-payments endpoints stay refused (no debts.view)
+  assert.equal((await call(app, 'GET', '/api/admin/balances', h)).status, 403);
+  assert.equal((await call(app, 'GET', '/api/admin/payments', h)).status, 403);
+});
+
 test('payments from the field are offline-safe and need permission', async () => {
   const { app, db } = setup();
   const h = await ali(app);

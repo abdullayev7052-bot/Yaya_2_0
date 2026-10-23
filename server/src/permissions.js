@@ -30,7 +30,8 @@ export const PERMISSIONS = [
   { key: 'diff.view', group: 'Smenalar', label: 'Qabul farqini ko\'rish (real miqdor, yutuq/yo\'qotish)', hint: 'Smena yopilgani bilan qabul qilingan real miqdor orasidagi farq' },
 
   // --- money
-  { key: 'debts.view', group: 'Qarzlar va to\'lovlar', label: 'Qarzlar va to\'lovlar tarixini ko\'rish' },
+  { key: 'debts.view', group: 'Qarzlar va to\'lovlar', label: 'Barcha qarzlar va to\'lovlar tarixini ko\'rish', hint: 'Butun kompaniya balanslari — faqat buxgalter/omborchi uchun' },
+  { key: 'payments.view_own', group: 'Qarzlar va to\'lovlar', label: 'Faqat o\'zi qilgan to\'lovlar tarixini ko\'rish', hint: 'Umumiy balanslar yoki boshqa xonadonlar qarzi ko\'rinmaydi' },
   { key: 'payments.create', group: 'Qarzlar va to\'lovlar', label: 'Xonadonga to\'lov qilish' },
   { key: 'payments.void', group: 'Qarzlar va to\'lovlar', label: 'To\'lovni bekor qilish' },
 

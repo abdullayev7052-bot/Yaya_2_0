@@ -366,6 +366,59 @@ export function Payments({ onOpen }) {
   );
 }
 
+// ---------------------------------------------------------------- my own payments (collector)
+// Only the payments this user made — no balances, no other households' debts.
+export function MyPayments() {
+  const today = todayLocal();
+  const [from, setFrom] = useState(today);
+  const [to, setTo] = useState(today);
+  const [cal, setCal] = useState(false);
+  const { data, err, busy, load } = useLoad(() => api.mobile('GET', `/my-payments?from=${from}&to=${to}`), [from, to]);
+  const goDay = (n) => { const x = addDays(to, n); setFrom(x); setTo(x); };
+  const single = from === to;
+  const header = single ? (from === today ? `Bugun, ${fmtDay(from)}` : fmtDay(from)) : `${fmtDay(from)} — ${fmtDay(to)}`;
+  const rows = (data ?? []).filter((p) => !p.voided_at);
+  const total = rows.reduce((a, p) => a + p.amount, 0);
+  const copyMine = async () => {
+    if (!rows.length) { notify('Nusxalash', 'To\'lov yo\'q.'); return; }
+    const byHouse = {};
+    for (const p of rows) byHouse[p.supplier_name] = (byHouse[p.supplier_name] || 0) + p.amount;
+    const lines = [`Mening to'lovlarim — ${single ? fmtDay(from) : `${fmtDay(from)} — ${fmtDay(to)}`}`, `Jami: ${fmtMoney(total)} so'm`, ''];
+    for (const [name, amt] of Object.entries(byHouse)) lines.push(`${name} - ${fmtMoney(amt)}`);
+    try { await Clipboard.setStringAsync(lines.join('\n')); notify('Nusxalandi', 'To\'lovlar klaviaturaga nusxalandi.'); } catch { /* ignore */ }
+  };
+  return (
+    <View style={{ flex: 1 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12 }}>
+        <Pressable style={[s.btnGhost, { paddingHorizontal: 16, opacity: single ? 1 : 0.3 }]} disabled={!single} onPress={() => goDay(-1)}><Text style={s.btnGhostText}>‹</Text></Pressable>
+        <Pressable style={{ flex: 1 }} onPress={() => setCal(true)}><Text style={[s.h2, { textAlign: 'center' }]}>{header}</Text></Pressable>
+        <Pressable style={[s.btnGhost, { paddingHorizontal: 16 }, (!single || to >= today) && { opacity: 0.3 }]} disabled={!single || to >= today} onPress={() => goDay(1)}><Text style={s.btnGhostText}>›</Text></Pressable>
+        <Pressable onPress={copyMine} hitSlop={10} style={{ padding: 6 }}><Text style={{ fontSize: 22 }}>📋</Text></Pressable>
+      </View>
+      <CalendarModal visible={cal} from={from} to={to} onClose={() => setCal(false)} onApply={({ from: f, to: t }) => { setFrom(f); setTo(t); }} />
+      <Text style={[s.text, { paddingHorizontal: 12, fontWeight: '700' }]}>Jami: {fmtMoney(total)} so'm</Text>
+      <Err err={err} />
+      <FlatList
+        data={data ?? []}
+        keyExtractor={(p) => String(p.id)}
+        refreshControl={<RefreshControl refreshing={busy} onRefresh={load} />}
+        contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 12, gap: 8 }}
+        ListEmptyComponent={<Text style={[s.muted, { padding: 16 }]}>{data ? 'To\'lov yo\'q' : 'Yuklanmoqda...'}</Text>}
+        renderItem={({ item: p }) => (
+          <View style={[s.card, { gap: 2 }, p.voided_at && { opacity: 0.5 }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
+              <Text style={[s.text, { fontWeight: '700', flex: 1 }]} numberOfLines={1}>{p.supplier_name}</Text>
+              <Text style={{ fontWeight: '700', color: C.text }}>{fmtMoney(p.amount)} so'm</Text>
+            </View>
+            <Text style={s.muted}>{p.number ? `#${p.number} · ` : ''}{fmtDT(p.paid_at)} · {METHOD[p.method] || 'To\'lov'}
+              {p.note ? ` · ${p.note}` : ''}{p.voided_at ? ' · BEKOR QILINGAN' : ''}</Text>
+          </View>
+        )}
+      />
+    </View>
+  );
+}
+
 // ---------------------------------------------------------------- laboratory
 // Frame colour by lab status: yellow = not entered, red = over a limit (awaiting
 // review), green = normal or reviewed.
