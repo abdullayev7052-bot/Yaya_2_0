@@ -2,7 +2,7 @@
   "expo": {
     "name": "Yaya",
     "slug": "yaya",
-    "version": "2.9.1",
+    "version": "2.9.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -16,9 +16,9 @@
     },
     "android": {
       "package": "uz.yaya.collector",
-      "versionCode": 18,
+      "versionCode": 19,
       "adaptiveIcon": {
-        "backgroundColor": "#1F7A5A",
+        "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"

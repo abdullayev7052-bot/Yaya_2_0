@@ -33,19 +33,30 @@ jobs:
 
       - run: npm ci
 
-      # The logo uploaded in the admin panel becomes the launcher icon.
-      # Adaptive icons crop the edges, so the foreground gets a safe-zone margin.
+      # The logo uploaded in the admin panel becomes the app's face: the launcher
+      # icon, the adaptive-icon foreground, the splash logo and the favicon. We
+      # OVERWRITE the exact files app.json points at (icon.png, android-icon-*.png,
+      # splash-icon.png, favicon.png) — writing to any other name has no effect.
+      # Adaptive icons crop the edges, so the foreground keeps a safe-zone margin.
       - name: Use company logo as app icon
         env:
           API_URL: ${{ vars.YAYA_API_URL || 'https://yaya-production-8d61.up.railway.app' }}
         run: |
           command -v convert >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick)
           if curl -fsSL "$API_URL/api/public/logo.png" -o logo.png && file logo.png | grep -q 'PNG image'; then
-            convert logo.png -resize 1024x1024 -gravity center -background white -extent 1024x1024 -flatten assets/brand-icon.png
-            convert logo.png -resize 640x640 -gravity center -background none -extent 1024x1024 assets/brand-foreground.png
-            echo "Company logo applied"
+            # Launcher icon + splash + favicon: logo centred on white (no transparency,
+            # so it looks right on every Android launcher).
+            convert logo.png -resize 896x896 -gravity center -background white -extent 1024x1024 -flatten assets/icon.png
+            cp assets/icon.png assets/splash-icon.png
+            convert assets/icon.png -resize 48x48 assets/favicon.png
+            # Adaptive icon: logo on a transparent square with a safe margin, over a
+            # plain white background tile.
+            convert logo.png -resize 620x620 -gravity center -background none -extent 1024x1024 assets/android-icon-foreground.png
+            convert -size 1024x1024 xc:white assets/android-icon-background.png
+            cp assets/android-icon-foreground.png assets/android-icon-monochrome.png
+            echo "Company logo applied as the app icon"
           else
-            echo "No company logo on the server; using the default icon"
+            echo "::warning::No company logo on the server; using the default icon"
           fi
 
       - name: Generate native Android project
