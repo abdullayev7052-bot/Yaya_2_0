@@ -190,6 +190,38 @@ export function errors() {
   ];
 }
 
+// Human-readable list of what the server refused, so the person can see exactly
+// which entry failed and why, and clear it themselves.
+export function errorDetails() {
+  const out = [];
+  for (const x of db.getAllSync('SELECT * FROM shifts WHERE error IS NOT NULL')) {
+    const n = db.getFirstSync('SELECT COUNT(*) AS n FROM collections WHERE shift_uuid = ?', x.uuid).n;
+    out.push({ kind: 'shift', uuid: x.uuid, title: 'Smena ochish', detail: `${n} ta yozuv bilan`, when: x.opened_at, error: x.error });
+  }
+  for (const x of db.getAllSync('SELECT * FROM collections WHERE error IS NOT NULL')) {
+    out.push({ kind: 'pickup', uuid: x.uuid, title: x.supplier_name, detail: `${x.product_name}: ${x.quantity} ${x.unit ?? 'kg'}`, when: x.collected_at, error: x.error });
+  }
+  for (const x of db.getAllSync('SELECT * FROM ops WHERE error IS NOT NULL')) {
+    const c = db.getFirstSync('SELECT supplier_name, product_name FROM collections WHERE uuid = ?', x.target);
+    out.push({ kind: 'fix', uuid: x.uuid, title: c ? c.supplier_name : 'Tuzatish',
+      detail: x.type === 'delete' ? 'Yozuvni o\'chirish' : `Yozuvni tuzatish: ${x.quantity} ${c?.product_name ?? ''}`.trim(), when: x.created_at, error: x.error });
+  }
+  for (const x of db.getAllSync('SELECT * FROM payments WHERE error IS NOT NULL')) {
+    out.push({ kind: 'payment', uuid: x.uuid, title: x.supplier_name, detail: `To'lov: ${x.amount} so'm`, when: x.paid_at, error: x.error });
+  }
+  return out;
+}
+// Drop one refused entry from the phone (it never reached the office).
+export function discardError(kind, uuid) {
+  if (kind === 'shift') discardShift(uuid);
+  else if (kind === 'pickup') db.runSync('DELETE FROM collections WHERE uuid = ?', uuid);
+  else if (kind === 'fix') db.runSync('DELETE FROM ops WHERE uuid = ?', uuid);
+  else if (kind === 'payment') db.runSync('DELETE FROM payments WHERE uuid = ?', uuid);
+}
+export function discardAllErrors() {
+  for (const e of errorDetails()) discardError(e.kind, e.uuid);
+}
+
 export function pendingUpload() {
   return {
     shifts: db.getAllSync('SELECT uuid, opened_at, closed_at FROM shifts WHERE dirty = 1 AND error IS NULL'),

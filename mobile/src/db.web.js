@@ -92,6 +92,32 @@ export const errors = () => [
   ...payments().filter((x) => x.error).map((x) => ({ kind: 'payment', uuid: x.uuid, name: x.supplier_name, error: x.error })),
 ];
 
+export function errorDetails() {
+  const cols = collections();
+  return [
+    ...shifts().filter((x) => x.error).map((x) => ({ kind: 'shift', uuid: x.uuid, title: 'Smena ochish',
+      detail: `${cols.filter((c) => c.shift_uuid === x.uuid).length} ta yozuv bilan`, when: x.opened_at, error: x.error })),
+    ...cols.filter((x) => x.error).map((x) => ({ kind: 'pickup', uuid: x.uuid, title: x.supplier_name,
+      detail: `${x.product_name}: ${x.quantity} ${x.unit ?? 'kg'}`, when: x.collected_at, error: x.error })),
+    ...ops().filter((x) => x.error).map((x) => {
+      const c = cols.find((y) => y.uuid === x.target);
+      return { kind: 'fix', uuid: x.uuid, title: c ? c.supplier_name : 'Tuzatish',
+        detail: x.type === 'delete' ? 'Yozuvni o\'chirish' : `Yozuvni tuzatish: ${x.quantity} ${c?.product_name ?? ''}`.trim(), when: x.created_at, error: x.error };
+    }),
+    ...payments().filter((x) => x.error).map((x) => ({ kind: 'payment', uuid: x.uuid, title: x.supplier_name,
+      detail: `To'lov: ${x.amount} so'm`, when: x.paid_at, error: x.error })),
+  ];
+}
+export function discardError(kind, id) {
+  if (kind === 'shift') discardShift(id);
+  else if (kind === 'pickup') save('collections', collections().filter((x) => x.uuid !== id));
+  else if (kind === 'fix') save('ops', ops().filter((x) => x.uuid !== id));
+  else if (kind === 'payment') save('payments', payments().filter((x) => x.uuid !== id));
+}
+export function discardAllErrors() {
+  for (const e of errorDetails()) discardError(e.kind, e.uuid);
+}
+
 export function pendingUpload() {
   return {
     shifts: shifts().filter((s) => s.dirty && !s.error).map(({ uuid: u, opened_at, closed_at }) => ({ uuid: u, opened_at, closed_at })),

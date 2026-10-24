@@ -43,7 +43,11 @@ async function call(method, path, body, { timeoutMs = 15000 } = {}) {
       headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(session ? { Authorization: `Bearer ${session.token}` } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
-    const data = await res.json().catch(() => ({}));
+    const raw = await res.json().then((d) => ({ d }), () => null);
+    // A successful reply that is not JSON (a proxy / maintenance page, a cut-off body)
+    // is a failed call — never treat it as an empty answer and overwrite good data.
+    if (res.ok && !raw) { const bad = new Error('Server javobi noto\'g\'ri'); bad.offline = true; throw bad; }
+    const data = raw?.d ?? {};
     if (!res.ok) {
       const err = new Error(data.error || `Server xatosi (${res.status})`);
       err.status = res.status;
@@ -248,6 +252,11 @@ export function shiftBlock() {
 
 export async function refreshBootstrap() {
   const r = await call('GET', '/api/mobile/bootstrap');
+  // Keep the last good copy unless this answer is complete: an empty/partial reply
+  // must never wipe the households list (the collector would see nobody).
+  if (!r?.user?.permissions || !Array.isArray(r.suppliers) || !Array.isArray(r.products)) {
+    const bad = new Error('Server javobi to\'liq emas'); bad.offline = true; throw bad;
+  }
   store.setKv('bootstrap', r);
   const s = getSession();
   if (s) store.setKv('session', { ...s, user: { ...s.user, ...r.user } });

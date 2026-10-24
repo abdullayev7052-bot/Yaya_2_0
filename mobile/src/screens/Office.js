@@ -428,11 +428,18 @@ export function MyPayments() {
 // Frame colour by lab status: yellow = not entered, red = over a limit (awaiting
 // review), green = normal or reviewed.
 const LAB_FRAME = { pending: C.warn, flagged: C.err, ok: C.ok, accepted: C.ok };
-const LAB_LABEL = { pending: 'Kiritilmagan', flagged: 'Limitdan o\'tgan!', ok: 'Normada', accepted: 'Qabul qilingan' };
-// Client-side mirror of the server's over-limit check, for live colouring.
-const labOver = (f, raw) => {
+const LAB_LABEL = { pending: 'Kiritilmagan', flagged: 'Normada emas!', ok: 'Normada', accepted: 'Qabul qilingan' };
+// Client-side mirror of the server's over-limit check, for live colouring. For a
+// variant with an amount limit, "bor" is fine up to that many kg.
+const labOver = (f, raw, amount) => {
   if (raw == null || raw === '') return false;
-  if (f.type === 'variant') return f.bad_option != null && String(raw) === f.bad_option;
+  if (f.type === 'variant') {
+    if (String(raw) === 'bor' && f.amount_on && f.amount_max != null) {
+      const a = toNumber(amount);
+      return amount !== '' && amount != null && Number.isFinite(a) && a > f.amount_max;
+    }
+    return f.bad_option != null && String(raw) === f.bad_option;
+  }
   const n = toNumber(raw);
   if (!Number.isFinite(n)) return false;
   return (f.limit_max != null && n > f.limit_max) || (f.limit_min != null && n < f.limit_min);
@@ -476,9 +483,14 @@ export function LabDetail({ id, onBack, onChanged }) {
   const save = async () => {
     try {
       const payload = {};
-      for (const f of d.fields) { const raw = vals[f.id]; if (raw == null || raw === '') continue; payload[f.id] = f.type === 'variant' ? raw : toNumber(raw); }
+      for (const f of d.fields) {
+        const raw = vals[f.id]; if (raw == null || raw === '') continue;
+        payload[f.id] = f.type === 'variant' ? raw : toNumber(raw);
+        const q = vals[`${f.id}_q`];
+        if (f.type === 'variant' && f.amount_on && raw === 'bor' && q != null && q !== '') payload[`${f.id}_q`] = toNumber(q);
+      }
       const r = await api.admin('PUT', `/lab/${id}`, { values: payload });
-      notify('Saqlandi', r.overLimit ? 'Diqqat: ba\'zi qiymatlar limitdan o\'tgan. Admin ko\'rib qabul qiladi.' : 'Laboratoriya ma\'lumoti saqlandi.');
+      notify('Saqlandi', r.overLimit ? 'Diqqat: ba\'zi qiymatlar normada emas. Admin ko\'rib qabul qiladi.' : 'Laboratoriya ma\'lumoti saqlandi.');
       await load(); onChanged?.();
     } catch (e) { notify('Bo\'lmadi', e.message); }
   };
@@ -498,14 +510,16 @@ export function LabDetail({ id, onBack, onChanged }) {
           {!d.fields.length && <Text style={s.muted}>Laboratoriya maydonlari sozlanmagan. Admin panelda "Laboratoriya" bo'limida qo'shiladi.</Text>}
           {d.fields.map((f) => {
             const raw = vals[f.id] ?? '';
-            const over = labOver(f, raw);
+            const amt = vals[`${f.id}_q`] ?? '';
+            const over = labOver(f, raw, amt);
             return (
               <View key={f.id} style={{ gap: 4 }}>
                 <Text style={[s.text, { fontWeight: '600' }, over && { color: C.err }]}>{f.name}</Text>
                 {f.type === 'variant' ? (
                   <View style={{ flexDirection: 'row', gap: 8 }}>
                     {[['bor', 'Bor'], ['yoq', 'Yo\'q']].map(([val, lbl]) => {
-                      const on = raw === val; const bad = f.bad_option === val;
+                      // With an amount limit, "bor" turns red only once the kg passes it.
+                      const on = raw === val; const bad = val === 'bor' && f.amount_on && f.amount_max != null ? over : f.bad_option === val;
                       return (
                         <Btn key={val} title={lbl} kind={on ? (bad ? 'danger' : 'main') : 'ghost'} style={{ flex: 1 }}
                           disabled={!canEdit} onPress={() => setVals((x) => ({ ...x, [f.id]: val }))} />
@@ -516,11 +530,19 @@ export function LabDetail({ id, onBack, onChanged }) {
                   <TextInput style={[s.input, over && { borderColor: C.err }]} keyboardType="decimal-pad" editable={canEdit}
                     value={raw} onChangeText={(t) => setVals((x) => ({ ...x, [f.id]: t }))} placeholder="qiymat" placeholderTextColor={C.placeholder} />
                 )}
+                {f.type === 'variant' && f.amount_on && raw === 'bor' && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <TextInput style={[s.input, { flex: 1 }, over && { borderColor: C.err }]} keyboardType="decimal-pad" editable={canEdit}
+                      value={amt} onChangeText={(t) => setVals((x) => ({ ...x, [`${f.id}_q`]: t }))} placeholder="necha kg" placeholderTextColor={C.placeholder} />
+                    <Text style={s.text}>kg</Text>
+                  </View>
+                )}
+                {over && <Text style={{ color: C.err, fontSize: 14, fontWeight: '600' }}>Normada emas{f.type === 'variant' && f.amount_max != null ? ` (eng ko'p ${f.amount_max} kg)` : f.limit_max != null || f.limit_min != null ? ` (${[f.limit_min != null ? `min ${f.limit_min}` : '', f.limit_max != null ? `max ${f.limit_max}` : ''].filter(Boolean).join(' · ')})` : ''}</Text>}
               </View>
             );
           })}
           {canEdit && !!d.fields.length && <Btn title="Saqlash" onPress={save} />}
-          {d.labStatus === 'flagged' && api.can('lab.accept') && <Btn title="Qabul qilish (limitdan o'tgan)" kind="warn" onPress={accept} />}
+          {d.labStatus === 'flagged' && api.can('lab.accept') && <Btn title="Qabul qilish (normada emas)" kind="warn" onPress={accept} />}
           {d.report && (
             <Text style={[s.muted, { fontSize: 11, marginTop: 4 }]}>
               Kiritdi: {d.report.created_by || '—'} · {fmtDT(d.report.updated_at || d.report.created_at)}

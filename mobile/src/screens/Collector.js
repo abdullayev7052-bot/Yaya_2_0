@@ -274,7 +274,12 @@ function ShiftView({ shift, tick, q, setQ, onPick, onNav }) {
         keyExtractor={(x) => String(x.id)}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 12, gap: 8 }}
-        ListEmptyComponent={<Text style={[s.muted, { padding: 16 }]}>{suppliers.length ? 'Topilmadi' : 'Sizga xonadon biriktirilmagan. Adminga murojaat qiling.'}</Text>}
+        ListEmptyComponent={suppliers.length ? <Text style={[s.muted, { padding: 16 }]}>Topilmadi</Text> : (
+          <View style={{ padding: 16, gap: 10 }}>
+            <Text style={s.muted}>Xonadonlar ro'yxati hozircha bo'sh. Yangilab ko'ring; yana bo'sh bo'lsa, adminga murojaat qiling.</Text>
+            <Btn title="Ro'yxatni yangilash" kind="ghost" onPress={() => api.syncNow()} />
+          </View>
+        )}
         renderItem={({ item }) => {
           const got = done[item.id];
           const noProduct = !item.products?.length;

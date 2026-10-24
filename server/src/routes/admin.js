@@ -501,8 +501,10 @@ export default async function adminRoutes(app, { db }) {
     const numOrNull = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
     const bad_option = type === 'variant' && (b.badOption === 'bor' || b.badOption === 'yoq') ? b.badOption : null;
     const sort = Number(b.sort) || (db.prepare('SELECT COALESCE(MAX(sort), 0) + 1 AS n FROM lab_fields').get().n);
-    const id = db.prepare('INSERT INTO lab_fields (name, type, limit_min, limit_max, bad_option, sort) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(name, type, type === 'number' ? numOrNull(b.limitMin) : null, type === 'number' ? numOrNull(b.limitMax) : null, bad_option, sort).lastInsertRowid;
+    const amountOn = type === 'variant' && (b.amountOn === true || b.amountOn === 1 || b.amountOn === '1') ? 1 : 0;
+    const amountMax = amountOn ? numOrNull(b.amountMax) : null;
+    const id = db.prepare('INSERT INTO lab_fields (name, type, limit_min, limit_max, bad_option, amount_on, amount_max, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(name, type, type === 'number' ? numOrNull(b.limitMin) : null, type === 'number' ? numOrNull(b.limitMax) : null, bad_option, amountOn, amountMax, sort).lastInsertRowid;
     log(req, 'lab.field.create', { id: Number(id), name });
     return { id: Number(id) };
   });
@@ -513,13 +515,19 @@ export default async function adminRoutes(app, { db }) {
     const b = req.body ?? {};
     const numOrNull = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
     const type = b.type === 'variant' || b.type === 'number' ? b.type : f.type;
+    const wantOn = b.amountOn !== undefined ? (b.amountOn === true || b.amountOn === 1 || b.amountOn === '1') : !!f.amount_on;
+    const amOn = type === 'variant' && wantOn ? 1 : 0;
     db.prepare(`UPDATE lab_fields SET name = COALESCE(?, name), type = ?,
       limit_min = CASE WHEN ? THEN ? ELSE limit_min END, limit_max = CASE WHEN ? THEN ? ELSE limit_max END,
-      bad_option = CASE WHEN ? THEN ? ELSE bad_option END, sort = COALESCE(?, sort) WHERE id = ?`)
+      bad_option = CASE WHEN ? THEN ? ELSE bad_option END,
+      amount_on = CASE WHEN ? THEN ? ELSE amount_on END, amount_max = CASE WHEN ? THEN ? ELSE amount_max END,
+      sort = COALESCE(?, sort) WHERE id = ?`)
       .run(b.name !== undefined ? str(b.name, 60) : null, type,
         Number(b.limitMin !== undefined), type === 'number' ? numOrNull(b.limitMin) : null,
         Number(b.limitMax !== undefined), type === 'number' ? numOrNull(b.limitMax) : null,
         Number(b.badOption !== undefined), type === 'variant' && (b.badOption === 'bor' || b.badOption === 'yoq') ? b.badOption : null,
+        Number(b.amountOn !== undefined || type === 'number'), amOn,
+        Number(b.amountOn !== undefined || b.amountMax !== undefined || type === 'number'), amOn ? numOrNull(b.amountMax !== undefined ? b.amountMax : f.amount_max) : null,
         b.sort !== undefined ? Number(b.sort) : null, id);
     log(req, 'lab.field.update', { id, name: b.name ?? f.name });
     return { ok: true };

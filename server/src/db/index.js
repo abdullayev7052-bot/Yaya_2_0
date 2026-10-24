@@ -404,6 +404,9 @@ export function openDb(file) {
   addColumn('suppliers', 'address2', 'TEXT');
   addColumn('suppliers', 'lat2', 'REAL');
   addColumn('suppliers', 'lng2', 'REAL');
+  // Variant lab fields can ask "how many kg?" when the answer is "bor", with an optional max.
+  addColumn('lab_fields', 'amount_on', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('lab_fields', 'amount_max', 'REAL');
   // Sequential, stable payment number (independent of shifts). Backfilled once by paid_at order.
   addColumn('payments', 'number', 'INTEGER');
   if (db.prepare('SELECT 1 FROM payments WHERE number IS NULL LIMIT 1').get()) {

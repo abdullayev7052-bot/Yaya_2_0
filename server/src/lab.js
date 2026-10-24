@@ -8,13 +8,23 @@
 const labelOf = (s) => `#${s.number}${s.copy_no ? `-copy${s.copy_no > 1 ? s.copy_no : ''}` : ''}`;
 
 export const labFields = (db, { all = false } = {}) =>
-  db.prepare(`SELECT id, name, type, limit_min, limit_max, bad_option, sort, active
+  db.prepare(`SELECT id, name, type, limit_min, limit_max, bad_option, amount_on, amount_max, sort, active
     FROM lab_fields ${all ? '' : 'WHERE active = 1'} ORDER BY sort, id`).all();
 
-// Is one recorded value outside its field's limit?
-export function fieldOver(field, value) {
+// A variant field with "amount" on stores the kg next to its answer, under "<id>_q".
+export const amountKey = (id) => `${id}_q`;
+
+// Is one recorded value outside its field's limit? For a variant with an amount
+// limit, "bor" is fine up to that many kg and flagged above it (no limit = free).
+export function fieldOver(field, value, amount) {
   if (value == null || value === '') return false;
-  if (field.type === 'variant') return field.bad_option != null && String(value) === field.bad_option;
+  if (field.type === 'variant') {
+    if (String(value) === 'bor' && field.amount_on && field.amount_max != null) {
+      const a = Number(amount);
+      return Number.isFinite(a) && a > field.amount_max;
+    }
+    return field.bad_option != null && String(value) === field.bad_option;
+  }
   const n = Number(value);
   if (!Number.isFinite(n)) return false;
   if (field.limit_max != null && n > field.limit_max) return true;
@@ -26,7 +36,7 @@ export function fieldOver(field, value) {
 export function evalReport(fields, vals) {
   const over = {};
   let any = false;
-  for (const f of fields) { const o = fieldOver(f, vals[f.id]); over[f.id] = o; if (o) any = true; }
+  for (const f of fields) { const o = fieldOver(f, vals[f.id], vals[amountKey(f.id)]); over[f.id] = o; if (o) any = true; }
   return { over, overLimit: any };
 }
 
@@ -80,8 +90,14 @@ export function saveLab(db, shiftId, vals, actor) {
   for (const f of fields) {
     const v = vals?.[f.id] ?? vals?.[String(f.id)];
     if (v == null || v === '') continue;
-    if (f.type === 'variant') { if (v === 'bor' || v === 'yoq') clean[f.id] = v; }
-    else { const n = Number(v); if (Number.isFinite(n)) clean[f.id] = Math.round(n * 1000) / 1000; }
+    if (f.type === 'variant') {
+      if (v === 'bor' || v === 'yoq') clean[f.id] = v;
+      // The kg only makes sense for "bor".
+      const q = Number(vals?.[amountKey(f.id)]);
+      if (v === 'bor' && f.amount_on && Number.isFinite(q) && q >= 0 && vals?.[amountKey(f.id)] !== '' && vals?.[amountKey(f.id)] != null) {
+        clean[amountKey(f.id)] = Math.round(q * 1000) / 1000;
+      }
+    } else { const n = Number(v); if (Number.isFinite(n)) clean[f.id] = Math.round(n * 1000) / 1000; }
   }
   const { overLimit } = evalReport(fields, clean);
   const exists = db.prepare('SELECT shift_id FROM lab_reports WHERE shift_id = ?').get(shiftId);

@@ -1147,7 +1147,11 @@ const views = {
     const fields = await api('GET', '/lab/fields');
     const typeLabel = (f) => (f.type === 'variant' ? 'Variant (Bor/Yo\'q)' : 'Raqam');
     const limitText = (f) => {
-      if (f.type === 'variant') return f.bad_option ? `"${f.bad_option === 'bor' ? 'Bor' : 'Yo\'q'}" bo'lsa limitdan o'tgan` : 'erkin';
+      if (f.type === 'variant') {
+        const a = f.amount_on ? `Bor: ${f.amount_max != null ? `max ${f.amount_max} kg` : 'miqdor erkin'}` : '';
+        if (a) return a;
+        return f.bad_option ? `"${f.bad_option === 'bor' ? 'Bor' : 'Yo\'q'}" bo'lsa limitdan o'tgan` : 'erkin';
+      }
       const p = [];
       if (f.limit_min != null) p.push(`min ${f.limit_min}`);
       if (f.limit_max != null) p.push(`max ${f.limit_max}`);
@@ -1168,6 +1172,8 @@ const views = {
       { name: 'limitMin', label: 'Limit — eng kam (ixtiyoriy, faqat raqam uchun)', type: 'number', step: 'any', value: f.limit_min },
       { name: 'limitMax', label: 'Limit — eng ko\'p (ixtiyoriy, faqat raqam uchun)', type: 'number', step: 'any', value: f.limit_max },
       { name: 'badOption', label: 'Variant uchun: qaysi javob "limitdan o\'tgan" hisoblansin', type: 'select', value: f.bad_option || '', options: [['', 'Erkin (limit yo\'q)'], ['bor', '"Bor" bo\'lsa'], ['yoq', '"Yo\'q" bo\'lsa']] },
+      { name: 'amountOn', label: 'Variant uchun: "Bor" tanlanganda miqdor (kg) kiritilsinmi', type: 'select', value: f.amount_on ? '1' : '0', options: [['0', 'Yo\'q'], ['1', 'Ha — miqdor maydoni ochilsin']] },
+      { name: 'amountMax', label: 'Miqdor limiti — eng ko\'p kg (bo\'sh = cheklovsiz)', type: 'number', step: 'any', value: f.amount_max },
     ];
     $('#add', v).onclick = () => openForm({ title: 'Yangi laboratoriya maydoni', fields: form(), onSubmit: async (d) => { await api('POST', '/lab/fields', d); flash('Qo\'shildi'); } });
     $$('[data-edit]', v).forEach((b) => { b.onclick = () => { const f = fields.find((x) => String(x.id) === b.dataset.edit); openForm({ title: 'Maydonni tahrirlash', fields: form(f), onSubmit: async (d) => { await api('PATCH', `/lab/fields/${f.id}`, d); flash('Saqlandi'); } }); }; });
