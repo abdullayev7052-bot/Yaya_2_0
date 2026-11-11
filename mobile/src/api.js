@@ -32,7 +32,11 @@ const deviceLabel = () => {
   return `${name} (${Platform.OS === 'ios' ? 'iOS' : Platform.OS === 'android' ? 'Android' : 'Web'})`.slice(0, 100);
 };
 
-async function call(method, path, body, { timeoutMs = 15000 } = {}) {
+// One attempt at an HTTP call. Throws an err with `.status` for a real HTTP
+// response (4xx/5xx), or an err with `.offline = true` for a dropped / timed-out
+// connection (the field conditions that show up server-side as "499 — client
+// closed the request before the server could respond").
+async function callOnce(method, path, body, timeoutMs) {
   const session = getSession();
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -66,6 +70,28 @@ async function call(method, path, body, { timeoutMs = 15000 } = {}) {
   } finally {
     clearTimeout(t);
   }
+}
+
+// Collectors work on patchy mobile networks that drop a connection mid-request
+// even where coverage looks fine; the server then logs a 499 and answers in a
+// millisecond, but the phone saw nothing. So a request that failed only because
+// the connection dropped (`.offline`) is retried a few times with a short
+// back-off. Only safe-to-repeat calls retry: every GET, and any call the caller
+// marks `idempotent` (the sync endpoint keys off client-generated UUIDs, so a
+// re-send can never double-count). A real HTTP error (4xx/5xx) never retries.
+async function call(method, path, body, { timeoutMs = 15000, idempotent = false } = {}) {
+  const retries = method === 'GET' || idempotent ? 2 : 0;
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 700 * attempt)); // 0.7s, 1.4s
+    try {
+      return await callOnce(method, path, body, timeoutMs);
+    } catch (e) {
+      if (!e.offline) throw e; // a real server answer (4xx/5xx/401) — do not retry
+      lastErr = e;
+    }
+  }
+  throw lastErr;
 }
 
 // ---------------------------------------------------------------- branding
@@ -306,7 +332,7 @@ export function syncNow() {
             ...(o.product_id != null ? { productId: o.product_id } : {}) })),
           payments: p.payments.map((x) => ({ uuid: x.uuid, supplierId: x.supplier_id, amount: x.amount, method: x.method,
             ...(x.note ? { note: x.note } : {}), paidAt: x.paid_at })),
-        }, { timeoutMs: 30000 });
+        }, { timeoutMs: 30000, idempotent: true });
         store.markUploaded(p.shifts, r);
       }
       await refreshBootstrap();
