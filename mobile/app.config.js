@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 
 // Server the app talks to. Can be overridden at build time (YAYA_API_URL) or on
 // the phone itself (tap the logo/name 5 times on the login screen).
-const DEFAULT_API_URL = 'https://yaya-production-8d61.up.railway.app';
+const DEFAULT_API_URL = 'https://yaya2-production.up.railway.app';
 
 // If the company logo was fetched before the build (see .github/workflows/android.yml),
 // it becomes the launcher icon. Otherwise the default Yaya icon is used.

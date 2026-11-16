@@ -1,21 +1,21 @@
 {
   "expo": {
-    "name": "Yaya",
-    "slug": "yaya",
+    "name": "Yaya 2.0",
+    "slug": "yaya2",
     "version": "2.9.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "uz.yaya.collector",
+      "bundleIdentifier": "uz.yaya2.collector",
       "infoPlist": {
         "NSFaceIDUsageDescription": "Yaya ilovasini Face ID bilan ochish uchun",
         "NSLocationWhenInUseUsageDescription": "Smena ochiq paytda eng yaqin yetkazib beruvchini ko’rsatish va manzilni belgilash uchun joylashuv kerak."
       }
     },
     "android": {
-      "package": "uz.yaya.collector",
+      "package": "uz.yaya2.collector",
       "versionCode": 20,
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF",

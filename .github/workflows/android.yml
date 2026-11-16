@@ -40,7 +40,7 @@ jobs:
       # Adaptive icons crop the edges, so the foreground keeps a safe-zone margin.
       - name: Use company logo as app icon
         env:
-          API_URL: ${{ vars.YAYA_API_URL || 'https://yaya-production-8d61.up.railway.app' }}
+          API_URL: ${{ vars.YAYA_API_URL || 'https://yaya2-production.up.railway.app' }}
         run: |
           command -v convert >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick)
           if curl -fsSL "$API_URL/api/public/logo.png" -o logo.png && file logo.png | grep -q 'PNG image'; then
