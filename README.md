@@ -1,7 +1,9 @@
-# Yaya
+# Yaya 2.0
 
 Sut xaridi uchun korporativ tizim: barcha xodimlar uchun oflayn ishlaydigan mobil ilova + admin uchun veb panel. To'liq mustaqil tizim.
-Reja: [docs/PLAN.md](docs/PLAN.md) · Deploy va o'rnatish: [docs/DEPLOY.md](docs/DEPLOY.md) · Keyingi bosqichlar: [docs/NEXT.md](docs/NEXT.md)
+Bu — asl Yaya loyihasining mustaqil nusxasi; server: https://yaya2-production.up.railway.app (`main` branchdan deploy bo'ladi).
+
+Reja: [docs/PLAN.md](docs/PLAN.md) · Deploy va o'rnatish: [docs/DEPLOY.md](docs/DEPLOY.md) · O'zgarishlar: [docs/CHANGELOG.md](docs/CHANGELOG.md) · Keyingi bosqichlar: [docs/NEXT.md](docs/NEXT.md)
 
 ## Tuzilma
 - `server/` — Node.js API (mobil sinxron, panel, hisobotlar), SQLite

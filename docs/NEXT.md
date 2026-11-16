@@ -1,16 +1,22 @@
-# Keyingi yangilanishlar — tayyorgarlik
+# Keyingi yangilanishlar
 
-Quyidagilar hali **boshlanmagan**. Tizim ularga tayyorlab qo'yilgan, ish siz "boshla" deganingizda boshlanadi.
+Bu yerda faqat **hali qilinmagan** ishlar turadi. Qilingan ishlar: [CHANGELOG.md](CHANGELOG.md).
 
-## 1. Telegram: kunlik hisobot, bot va guruh
+## Allaqachon tayyor (avval shu faylda reja edi)
+- **Telegram botlar** — 2.8.0 da yozilgan: xonadon boti va backup (zaxira) boti. Kod: `server/src/integrations.js`
+  va `server/src/telegram.js`; sozlash: panel → **Integratsiya**. Ulash tartibi: [DEPLOY.md](DEPLOY.md), 5-bo'lim.
+- **Manzil va geolokatsiya** — 2.1 da qilingan: [PLAN.md](PLAN.md).
+
+## 1. Telegram: rahbarlar guruhiga xabarlar va kunlik hisobot
+**Boshlanmagan.** Hozirgi botlar xonadonlarga va zaxira uchun; xodimlar/rahbarlar guruhiga hech narsa yuborilmaydi.
 
 ### Nima bo'ladi
-- **Har bir hodisada darhol xabar** yuboriladi:
+- **Har bir hodisada darhol xabar:**
   - smena yopildi (kim, nechta uy, necha kg);
   - smena qabul qilindi;
-  - smena bekor qilindi (sababi bilan; agar qabul qilingan smena bekor qilingan bo'lsa — alohida ogohlantirish);
+  - smena bekor qilindi (sababi bilan; qabul qilingan smena bekor qilingan bo'lsa — alohida ogohlantirish);
   - nusxa ochildi.
-- **Kunlik hisobot** belgilangan soatda (masalan 20:00) yuboriladi:
+- **Kunlik hisobot** belgilangan soatda (masalan 20:00):
   - qabul qilingan kg (mahsulot bo'yicha);
   - o'rtacha tannarx;
   - kim qancha yig'di;
@@ -19,32 +25,28 @@ Quyidagilar hali **boshlanmagan**. Tizim ularga tayyorlab qo'yilgan, ish siz "bo
 - AI ishlatilmaydi: server oddiy matn yuboradi.
 
 ### Tayyor
-- Serverda **`events` jadvali** (outbox) bor. Smena yopilganda, qabul qilinganda, bekor qilinganda va nusxa olinganda yozuv tushadi: `shift.closed`, `shift.accepted`, `shift.cancelled`, `shift.copied`. `delivered_at` — yuborilgan vaqt.
-- Telegram ulanganda shu navbatdagi xabarlar tartib bilan, bittadan, yo'qolmasdan yuboriladi.
-- Internet uzilsa, xabarlar navbatda kutib turadi.
+- Serverda **`events` jadvali** (outbox) bor va to'ldirib boriladi: `shift.closed`, `shift.accepted`,
+  `shift.cancelled`, `shift.copied`. `delivered_at` — yuborilgan vaqt. Hozircha ularni **hech narsa yubormaydi**.
+- Telegram bilan ishlash qismi tayyor (`server/src/telegram.js`), panelda Integratsiya sahifasi bor —
+  yangi bo'lim shu yerga qo'shiladi.
 - Kunlik raqamlar tayyor: `/api/admin/dashboard?day=`.
 
-### Bot va guruh — ulash tartibi
-Bu ishni siz qilasiz, taxminan 5 daqiqa.
-1. Telegram'da **@BotFather** ga `/newbot` yozing. Nom bering va **token** oling. Tokenni hech kimga bermang.
-2. Rahbarlar uchun Telegram **guruh** oching (masalan "Yaya hisobot").
-3. Botni guruhga qo'shing va guruhda `/start` yozing.
-4. Panelda "Sozlamalar → Telegram" bo'limi qo'shiladi:
-   - token kiritiladi;
-   - "Guruhni topish" tugmasi bosiladi (server botga kelgan oxirgi xabardan guruh ID'sini oladi);
-   - "Sinov xabari" yuboriladi.
-5. Har bir xabar turi alohida yoqiladi yoki o'chiriladi. Kunlik hisobot soati tanlanadi. Kerak bo'lsa, ikkinchi guruh qo'shiladi (masalan, omborchilar uchun faqat "smena yopildi").
+### Qilinadigan ish
+- `events` navbatini tartib bilan, bittadan, yo'qotmasdan yuboruvchi qism (internet uzilsa, navbatda kutadi).
+- Panel → Integratsiya: guruh(lar) ID'si, har bir xabar turini yoqish/o'chirish, kunlik hisobot soati,
+  "Sinov xabari" tugmasi.
+- Qaysi bot yuborishini hal qilish: alohida uchinchi bot yoki mavjud backup boti.
 
 ### Himoya
-- Token serverda saqlanadi va panelga qaytib ko'rsatilmaydi.
+- Token serverda saqlanadi.
 - Bot faqat ro'yxatdagi guruh(lar)ga yozadi.
-- Botga kelgan buyruqlar bajarilmaydi: bot faqat xabar yuboradi.
+- Guruhdan kelgan buyruqlar bajarilmaydi: bot faqat xabar yuboradi.
 
 ## 2. iOS versiya
 
 ### Tayyor
 - Ilova React Native (Expo): **kodning o'zi iOS'da ham ishlaydi**.
-  - `app.json`da `ios.bundleIdentifier` va Face ID ruxsati matni belgilangan.
+  - `app.json`da `ios.bundleIdentifier` (`uz.yaya2.collector`), Face ID va joylashuv ruxsati matnlari belgilangan.
   - Telefon bazasi (SQLite), oflayn navbat, PIN va Face ID qulfi iOS'ga mos.
 
 ### Sizdan kerak bo'ladi
