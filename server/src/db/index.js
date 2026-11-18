@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { BUILTIN_ROLES, V3_TO_V4, PERMISSION_KEYS } from '../permissions.js';
 import { upgradeToV3 } from './legacy.js';
+import { setupErp } from '../erp/schema.js';
 
 export const SCHEMA_VERSION = 4;
 
@@ -286,8 +287,10 @@ const NEW_ROLE_PERMS = {
   viewer: ['suppliers.edit', 'suppliers.location', 'prices.manage', 'diff.view', 'lab.view', 'lab.accept'],
   // Whoever accepts shifts may see the accepted-quantity difference and the lab.
   manager: ['diff.view', 'lab.view', 'lab.accept', 'lab.fields'],
-  storekeeper: ['diff.view', 'lab.view', 'lab.accept'],
+  storekeeper: ['diff.view', 'lab.view', 'lab.accept', 'stock.transfer', 'stock.inventory', 'stock.writeoff'],
 };
+// Yaya 2.0 warehouse permissions for the manager (everything but structure and opening stock).
+NEW_ROLE_PERMS.manager.push('stock.view_all', 'stock.costs', 'stock.transfer', 'stock.inventory', 'stock.writeoff', 'stock.cancel', 'alerts.view');
 function backfillNewPermissions(db) {
   for (const [code, keys] of Object.entries(NEW_ROLE_PERMS)) {
     const row = db.prepare('SELECT id, permissions FROM roles WHERE code = ?').get(code);
@@ -415,6 +418,8 @@ export function openDb(file) {
       db.prepare('UPDATE payments SET number = ? WHERE id = ?').run(++n, p.id);
     }
   }
+  // Production / warehouse tables (Yaya 2.0).
+  setupErp(db, addColumn);
   seedRoles(db);
   backfillNewPermissions(db);
   db.pragma(`user_version = ${SCHEMA_VERSION}`);

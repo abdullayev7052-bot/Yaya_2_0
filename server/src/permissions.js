@@ -41,6 +41,17 @@ export const PERMISSIONS = [
   { key: 'lab.accept', group: 'Laboratoriya', label: 'Limitdan o\'tgan smenani qabul qilish (laborantga ko\'rinmaydi)' },
   { key: 'lab.fields', group: 'Laboratoriya', label: 'Laboratoriya maydonlari va limitlarini sozlash' },
 
+  // --- warehouse (Yaya 2.0)
+  { key: 'stock.view_all', group: 'Ombor', label: "Barcha omborlar va xodimlar zimmasidagi qoldiqlarni ko'rish", hint: "O'chirilsa, faqat o'z zimmasidagi va o'zi mas'ul omborlar ko'rinadi" },
+  { key: 'stock.costs', group: 'Ombor', label: "Tannarx va summalarni ko'rish (ombor, hujjatlar)", hint: "Oddiy xodimlarga bermang: o'chirilsa, server summalarni umuman yubormaydi" },
+  { key: 'stock.transfer', group: 'Ombor', label: "Mahsulotni topshirish va qabul qilish" },
+  { key: 'stock.inventory', group: 'Ombor', label: "Inventarizatsiya o'tkazish (mas'ul omborida)" },
+  { key: 'stock.writeoff', group: 'Ombor', label: "Hisobdan chiqarish (singan, yo'qolgan, to'kilgan)" },
+  { key: 'stock.opening', group: 'Ombor', label: "Boshlang'ich qoldiq kiritish va Excel import" },
+  { key: 'stock.cancel', group: 'Ombor', label: "O'tkazilgan ombor hujjatini bekor qilish" },
+  { key: 'stock.manage', group: 'Ombor', label: "Omborlar, mas'ullar, sabablar va ombor sozlamalari; istalgan joy nomidan ishlash" },
+  { key: 'alerts.view', group: 'Ombor', label: "Ogohlantirishlarni ko'rish (manfiy qoldiq va boshqalar)" },
+
   // --- reports
   { key: 'reports.view', group: 'Hisobotlar', label: 'Hisobotlar, o\'rtacha tannarx, kunlik ko\'rsatkichlar' },
   { key: 'reports.export', group: 'Hisobotlar', label: 'Hisobotni Excel\'ga yuklab olish' },
@@ -65,6 +76,8 @@ export const COLLECT_PERMS = ['collect.shift', 'collect.edit_own', 'collect.dele
 // The admin has every permission except the collector ones, so the mobile app
 // never offers an admin a shift to open. Losing collect.* cannot lock anyone out.
 const ADMIN_PERMS = ALL.filter((k) => !COLLECT_PERMS.includes(k));
+// What a warehouse or workshop worker needs: hand over / accept, count, write off.
+export const STOCK_WORKER_PERMS = ['stock.transfer', 'stock.inventory', 'stock.writeoff'];
 
 // Built-in roles created on first start. "admin" is locked to every management
 // permission so the owner can never lock themselves out.
@@ -75,7 +88,7 @@ export const BUILTIN_ROLES = [
       ...COLLECT_PERMS].includes(k)) },
   { code: 'storekeeper', name: 'Omborchi', locked: 0,
     perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'shifts.copy', 'diff.view', 'suppliers.view', 'debts.view', 'payments.create', 'reports.view',
-      'lab.view', 'lab.accept'] },
+      'lab.view', 'lab.accept', ...STOCK_WORKER_PERMS] },
   { code: 'viewer', name: 'Buxgalter', locked: 0,
     perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'diff.view', 'suppliers.view', 'suppliers.edit', 'suppliers.location',
       'prices.view', 'prices.manage', 'debts.view', 'payments.create', 'payments.void', 'reports.view', 'reports.export', 'lab.view', 'lab.accept'] },

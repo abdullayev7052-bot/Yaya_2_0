@@ -26,7 +26,7 @@ export async function templateXlsx(db) {
   ws.getRow(1).font = { bold: true };
   ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F3EE' } };
   ws.views = [{ state: 'frozen', ySplit: 1 }];
-  const products = db.prepare('SELECT name FROM products WHERE active = 1 ORDER BY name').all().map((p) => p.name);
+  const products = db.prepare("SELECT name FROM products WHERE active = 1 AND kind = 'milk' ORDER BY name").all().map((p) => p.name);
   const p1 = products[0] ?? 'Yog\'li sut';
   const collector = db.prepare(`SELECT u.login FROM users u JOIN roles r ON r.id = u.role_id
     WHERE u.active = 1 AND u.is_test = 0 AND (r.code = 'collector' OR r.permissions LIKE '%collect.shift%') ORDER BY u.id LIMIT 1`).get()?.login ?? '901112233';

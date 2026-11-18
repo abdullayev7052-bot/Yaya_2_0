@@ -47,7 +47,7 @@ export default async function mobileRoutes(app, { db }) {
         hasIntro: !!db.prepare("SELECT 1 FROM files WHERE key = 'intro'").get(),
         version: getSetting(db, 'brand_version') ?? '0',
       },
-      products: db.prepare('SELECT id, name, unit FROM products WHERE active = 1 ORDER BY name').all(),
+      products: db.prepare("SELECT id, name, unit FROM products WHERE active = 1 AND kind = 'milk' ORDER BY name").all(),
       suppliers: collects ? assignedSuppliers(me.id) : [],
       shifts: collects ? myShifts(me.id) : [],
       serverTime: new Date().toISOString(),

@@ -7,6 +7,7 @@ import authRoutes from './auth.js';
 import mobileRoutes from './routes/mobile.js';
 import adminRoutes from './routes/admin.js';
 import publicRoutes from './routes/public.js';
+import erpRoutes from './routes/erp.js';
 import { createRateLimiter } from './ratelimit.js';
 
 const ADMIN_DIR = fileURLToPath(new URL('../../admin', import.meta.url));
@@ -48,6 +49,7 @@ export function buildApp({ db, jwtSecret, logger = false, rateLimit = true }) {
   app.register(mobileRoutes, { prefix: '/api/mobile', db });
   app.register(adminRoutes, { prefix: '/api/admin', db });
   app.register(publicRoutes, { prefix: '/api/public', db });
+  app.register(erpRoutes, { prefix: '/api/erp', db });
   app.register(fastifyStatic, { root: ADMIN_DIR, prefix: '/admin/' });
   if (existsSync(WEBAPP_DIR)) {
     app.register(fastifyStatic, { root: WEBAPP_DIR, prefix: '/app/', decorateReply: false });

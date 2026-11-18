@@ -1,0 +1,558 @@
+// Stock engine: documents, lots (FIFO) and the stock ledger. See schema.js.
+//
+// Rules kept here (not in the routes), so every entry point behaves the same:
+// - quantities are rounded to 3 decimals (gram precision for kg), money to 2;
+// - an outgoing quantity takes the oldest lots at that holder first (FIFO), at the
+//   lot's own unit cost; a fully used lot takes its whole remaining cost, so no
+//   rounding crumbs stay behind;
+// - a holder may go below zero only if it is a warehouse with allow_negative; the
+//   shortage is booked at the product's last known unit cost and settled by the
+//   next receipt (the price gap goes to "tannarx farqi");
+// - a posted document never changes; cancelling it writes the exact opposite moves
+//   (and reverses its money entries), and is refused if that would leave a lot
+//   below zero where that is not allowed.
+import { randomUUID } from 'node:crypto';
+import { getSetting, setSetting } from '../settings.js';
+
+export class StockError extends Error {
+  constructor(message, details) {
+    super(message);
+    this.details = details;
+  }
+}
+
+export const r3 = (n) => Math.round((Number(n) + Number.EPSILON) * 1000) / 1000;
+export const r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+const EPS = 0.0005;
+const nowIso = () => new Date().toISOString();
+
+export const DOC_TYPES = {
+  opening: { label: 'Boshlang\'ich qoldiq', prefix: 'BQ' },
+  milk_in: { label: 'Sut kirimi (smena)', prefix: 'SK' },
+  transfer: { label: 'Topshirish', prefix: 'T' },
+  inventory: { label: 'Inventarizatsiya', prefix: 'INV' },
+  writeoff: { label: 'Hisobdan chiqarish', prefix: 'HC' },
+};
+export const docLabel = (d) => `${DOC_TYPES[d.type]?.prefix ?? d.type}-${d.number}`;
+
+// ---------------------------------------------------------------- holders
+// A holder is { warehouseId } or { userId }.
+export const holderKey = (h) => (h.warehouseId ? `w${h.warehouseId}` : `u${h.userId}`);
+const holderCond = (h, alias = '') => (h.warehouseId ? [`${alias}warehouse_id = ?`, h.warehouseId] : [`${alias}holder_id = ?`, h.userId]);
+export const fromOf = (d) => (d.from_wh ? { warehouseId: d.from_wh } : d.from_user ? { userId: d.from_user } : null);
+export const toOf = (d) => (d.to_wh ? { warehouseId: d.to_wh } : d.to_user ? { userId: d.to_user } : null);
+
+export function holderName(db, h) {
+  if (!h) return null;
+  if (h.warehouseId) return db.prepare('SELECT name FROM warehouses WHERE id = ?').get(h.warehouseId)?.name ?? `Ombor #${h.warehouseId}`;
+  return db.prepare('SELECT COALESCE(name, login) AS n FROM users WHERE id = ?').get(h.userId)?.n ?? `Xodim #${h.userId}`;
+}
+
+// Parse { warehouseId } / { userId } from client input; null when absent or unknown.
+export function parseHolder(db, v) {
+  if (!v || typeof v !== 'object') return null;
+  const w = Number(v.warehouseId); const u = Number(v.userId);
+  if (Number.isInteger(w) && w > 0) return db.prepare('SELECT 1 FROM warehouses WHERE id = ? AND active = 1').get(w) ? { warehouseId: w } : null;
+  if (Number.isInteger(u) && u > 0) return db.prepare('SELECT 1 FROM users WHERE id = ? AND active = 1').get(u) ? { userId: u } : null;
+  return null;
+}
+
+const allowNegative = (db, h) => !!(h.warehouseId && db.prepare('SELECT allow_negative FROM warehouses WHERE id = ?').get(h.warehouseId)?.allow_negative);
+const productName = (db, id) => db.prepare('SELECT name FROM products WHERE id = ?').get(id)?.name ?? `#${id}`;
+
+// ---------------------------------------------------------------- balances
+export function productBalance(db, h, productId) {
+  const [cond, v] = holderCond(h);
+  return r3(db.prepare(`SELECT COALESCE(SUM(qty), 0) AS q FROM stock_moves WHERE ${cond} AND product_id = ?`).get(v, productId).q);
+}
+
+// Lots at a holder, oldest first; the "no lot" (negative / unknown) row first.
+export function lotBalances(db, h, productId) {
+  const [cond, v] = holderCond(h, 'm.');
+  return db.prepare(`
+    SELECT m.lot_id, ROUND(SUM(m.qty), 3) AS qty, ROUND(SUM(m.cost), 2) AS cost, l.number, l.unit_cost, l.produced_at, l.expires_at
+    FROM stock_moves m LEFT JOIN lots l ON l.id = m.lot_id
+    WHERE ${cond} AND m.product_id = ?
+    GROUP BY m.lot_id
+    HAVING ABS(SUM(m.qty)) > ${EPS}
+    ORDER BY (m.lot_id IS NOT NULL), l.produced_at, l.id`).all(v, productId);
+}
+
+export function lastUnitCost(db, productId) {
+  return db.prepare('SELECT unit_cost FROM lots WHERE product_id = ? ORDER BY produced_at DESC, id DESC LIMIT 1').get(productId)?.unit_cost ?? 0;
+}
+
+// ---------------------------------------------------------------- low-level moves
+function insertMove(db, ctx, { lineId = null, productId, lotId = null, h, qty, cost, kind = null }) {
+  db.prepare(`INSERT INTO stock_moves (doc_id, line_id, product_id, lot_id, warehouse_id, holder_id, qty, cost, at, kind)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(ctx.doc.id, lineId, productId, lotId, h.warehouseId ?? null, h.userId ?? null, r3(qty), r2(cost), ctx.at, kind);
+  if (h.warehouseId) ctx.touched.add(`${h.warehouseId}:${productId}`);
+}
+
+function newLot(db, ctx, { productId, unitCost, expiresAt, producedAt, seq }) {
+  const p = db.prepare('SELECT shelf_life_hours FROM products WHERE id = ?').get(productId);
+  const produced = producedAt ?? ctx.at;
+  const expires = expiresAt ?? (p?.shelf_life_hours ? new Date(Date.parse(produced) + p.shelf_life_hours * 3600e3).toISOString() : null);
+  return Number(db.prepare('INSERT INTO lots (product_id, number, unit_cost, produced_at, expires_at, doc_id) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(productId, `${docLabel(ctx.doc)}/${seq}`, unitCost, produced, expires, ctx.doc.id).lastInsertRowid);
+}
+
+function pnl(db, ctx, code, amount, note = null) {
+  if (Math.abs(amount) < 0.005) return;
+  const cat = typeof code === 'number' ? code : db.prepare('SELECT id FROM pnl_categories WHERE code = ?').get(code)?.id;
+  db.prepare('INSERT INTO pnl_entries (category_id, amount, doc_id, note, at) VALUES (?, ?, ?, ?, ?)').run(cat, r2(amount), ctx.doc.id, note, ctx.at);
+}
+
+function chargeStaff(db, ctx, userId, amount, kind, note = null) {
+  if (Math.abs(amount) < 0.005) return;
+  db.prepare("INSERT INTO party_entries (party_type, party_id, amount, kind, doc_id, note, at) VALUES ('staff', ?, ?, ?, ?, ?, ?)")
+    .run(userId, r2(amount), kind, ctx.doc.id, note, ctx.at);
+}
+
+// Take qty of a product out of a holder, oldest lots first. Returns what was taken.
+export function takeOut(db, ctx, { productId, h, qty, lineId = null, kind = null }) {
+  let need = r3(qty);
+  const taken = [];
+  const lots = lotBalances(db, h, productId);
+  for (const l of lots) {
+    if (need <= EPS) break;
+    if (l.qty <= EPS) continue;
+    const q = r3(Math.min(need, l.qty));
+    const exhausted = Math.abs(q - l.qty) <= EPS;
+    const unit = l.lot_id ? l.unit_cost : l.cost / l.qty;
+    const cost = exhausted ? l.cost : r2(q * unit);
+    insertMove(db, ctx, { lineId, productId, lotId: l.lot_id, h, qty: -q, cost: -cost, kind });
+    taken.push({ lotId: l.lot_id, qty: q, cost });
+    need = r3(need - q);
+  }
+  if (need > EPS) {
+    if (!allowNegative(db, h)) {
+      const have = productBalance(db, h, productId);
+      throw new StockError(`${productName(db, productId)}: "${holderName(db, h)}" da yetarli emas (bor: ${Math.max(0, r3(have + r3(qty) - need))}, kerak: ${r3(qty)})`,
+        { productId, holder: h, available: r3(r3(qty) - need), required: r3(qty) });
+    }
+    const cost = r2(need * lastUnitCost(db, productId));
+    insertMove(db, ctx, { lineId, productId, lotId: null, h, qty: -need, cost: -cost, kind });
+    taken.push({ lotId: null, qty: need, cost });
+  }
+  return taken;
+}
+
+// Put qty into a holder: an existing lot (moved from elsewhere) or a new one.
+// A receipt into a warehouse that is below zero for this product settles that first.
+export function addIn(db, ctx, { productId, h, qty, cost, lotId, lot, lineId = null, kind = null }) {
+  let id = lotId ?? null;
+  if (lotId === undefined && lot) id = newLot(db, ctx, { productId, ...lot });
+  insertMove(db, ctx, { lineId, productId, lotId: id, h, qty, cost, kind });
+  if (id != null && h.warehouseId) settleNegative(db, ctx, h, productId, id);
+  return id;
+}
+
+function settleNegative(db, ctx, h, productId, lotId) {
+  const [cond, v] = holderCond(h);
+  const neg = db.prepare(`SELECT ROUND(SUM(qty), 3) AS q, ROUND(SUM(cost), 2) AS c FROM stock_moves WHERE ${cond} AND product_id = ? AND lot_id IS NULL`).get(v, productId);
+  if (!neg?.q || neg.q >= -EPS) return;
+  const lot = db.prepare(`SELECT ROUND(SUM(m.qty), 3) AS q, l.unit_cost FROM stock_moves m JOIN lots l ON l.id = m.lot_id
+    WHERE ${cond.replace(/^/, 'm.')} AND m.lot_id = ?`).get(v, lotId);
+  const s = r3(Math.min(-neg.q, lot?.q ?? 0));
+  if (s <= EPS) return;
+  const whole = Math.abs(s + neg.q) <= EPS;
+  const estCost = whole ? -neg.c : r2(s * (neg.c / neg.q));
+  const realCost = r2(s * lot.unit_cost);
+  insertMove(db, ctx, { productId, lotId, h, qty: -s, cost: -realCost, kind: 'settle' });
+  insertMove(db, ctx, { productId, lotId: null, h, qty: s, cost: estCost, kind: 'settle' });
+  pnl(db, ctx, 'cost_variance', realCost - estCost, `${productName(db, productId)}: manfiy qoldiq yopildi`);
+}
+
+// Move qty from one holder to another, keeping lot identity and cost.
+export function moveStock(db, ctx, { productId, from, to, qty, lineId = null, kind = null }) {
+  const taken = takeOut(db, ctx, { productId, h: from, qty, lineId, kind });
+  for (const t of taken) addIn(db, ctx, { productId, h: to, qty: t.qty, cost: t.cost, lotId: t.lotId, lineId, kind });
+  return taken;
+}
+
+// After posting: warn about warehouses that went below zero (if they ask for it).
+function negativeAlerts(db, ctx) {
+  for (const key of ctx.touched) {
+    const [wh, productId] = key.split(':').map(Number);
+    const w = db.prepare('SELECT name, warn_negative FROM warehouses WHERE id = ?').get(wh);
+    if (!w?.warn_negative) continue;
+    const q = productBalance(db, { warehouseId: wh }, productId);
+    if (q < -EPS) {
+      addAlert(db, 'stock.negative', `"${w.name}": ${productName(db, productId)} manfiy qoldiqqa tushdi (${q})`, { warehouseId: wh, productId, qty: q }, ctx.doc.id);
+    }
+  }
+}
+
+export function addAlert(db, type, text, payload, docId = null) {
+  db.prepare('INSERT INTO alerts (type, text, payload, doc_id) VALUES (?, ?, ?, ?)').run(type, text, payload == null ? null : JSON.stringify(payload), docId);
+}
+
+// ---------------------------------------------------------------- documents
+const getDoc = (db, id) => db.prepare('SELECT * FROM docs WHERE id = ?').get(id);
+const linesOf = (db, id) => db.prepare('SELECT * FROM doc_lines WHERE doc_id = ? ORDER BY sort, id').all(id);
+const meta = (v) => (v ? JSON.parse(v) : {});
+
+function cleanLines(db, lines, { needCost = false, allowZero = false } = {}) {
+  if (!Array.isArray(lines) || !lines.length) throw new StockError('Kamida bitta mahsulot kiriting');
+  if (lines.length > 2000) throw new StockError('Juda ko\'p qator');
+  return lines.map((l, i) => {
+    const productId = Number(l?.productId);
+    const p = Number.isInteger(productId) && db.prepare('SELECT id, name FROM products WHERE id = ?').get(productId);
+    if (!p) throw new StockError(`${i + 1}-qator: mahsulot topilmadi`);
+    const qty = r3(l.qty);
+    if (!Number.isFinite(qty) || qty < 0 || (!allowZero && qty <= 0)) throw new StockError(`${p.name}: miqdor noto'g'ri`);
+    let unitCost = null;
+    if (l.unitCost != null && l.unitCost !== '') {
+      unitCost = Number(l.unitCost);
+      if (!Number.isFinite(unitCost) || unitCost < 0) throw new StockError(`${p.name}: tannarx noto'g'ri`);
+    } else if (needCost) unitCost = 0;
+    const expiresAt = l.expiresAt && !Number.isNaN(Date.parse(l.expiresAt)) ? new Date(l.expiresAt).toISOString() : null;
+    return { productId, qty, unitCost, expiresAt, meta: l.meta ?? null };
+  });
+}
+
+function nextNumber(db, type) {
+  return (db.prepare('SELECT COALESCE(MAX(number), 0) AS n FROM docs WHERE type = ?').get(type).n) + 1;
+}
+
+// Create a document (and post it, unless it is a draft or a hand-over waiting to be
+// accepted). Idempotent by uuid: a re-send returns the existing document.
+export function createDoc(db, input, { actor, userId = null }) {
+  const type = String(input?.type ?? '');
+  if (!DOC_TYPES[type] || type === 'milk_in') throw new StockError('Hujjat turi noto\'g\'ri');
+  const uuid = String(input.uuid || randomUUID()).slice(0, 80);
+  const existing = db.prepare('SELECT * FROM docs WHERE uuid = ?').get(uuid);
+  if (existing) {
+    if (existing.type !== type) throw new StockError('Bu UUID boshqa hujjatda ishlatilgan');
+    return existing;
+  }
+  const from = parseHolder(db, input.from);
+  const to = parseHolder(db, input.to);
+  const date = input.date && !Number.isNaN(Date.parse(input.date)) ? new Date(input.date).toISOString() : nowIso();
+  const doc = { type, mode: null, reason_id: null, charge_user: null };
+  let lines;
+  let status = 'draft';
+  if (type === 'opening') {
+    if (!to?.warehouseId) throw new StockError('Omborni tanlang');
+    lines = cleanLines(db, input.lines, { needCost: true });
+  } else if (type === 'transfer') {
+    if (!from || !to) throw new StockError('Kimdan va kimga topshirilishini tanlang');
+    if (holderKey(from) === holderKey(to)) throw new StockError('O\'ziga topshirib bo\'lmaydi');
+    lines = cleanLines(db, input.lines);
+    status = 'sent';
+  } else if (type === 'writeoff') {
+    if (!from) throw new StockError('Qayerdan hisobdan chiqarilishini tanlang');
+    const reason = db.prepare('SELECT * FROM stock_reasons WHERE id = ? AND active = 1').get(Number(input.reasonId));
+    if (!reason) throw new StockError('Sababni tanlang');
+    doc.reason_id = reason.id;
+    const charge = Number(input.chargeUserId);
+    if (Number.isInteger(charge) && charge > 0) {
+      if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(charge)) throw new StockError('Xodim topilmadi');
+      doc.charge_user = charge;
+    } else if (reason.charge === 'staff') {
+      // "Xodim aybi bilan": the holder pays if goods were in their hands, otherwise someone must be chosen.
+      if (!from.userId) throw new StockError('Qaysi xodim hisobiga yozilishini tanlang');
+      doc.charge_user = from.userId;
+    }
+    lines = cleanLines(db, input.lines);
+  } else if (type === 'inventory') {
+    if (!to?.warehouseId) throw new StockError('Omborni tanlang');
+    doc.mode = input.mode === 'full' ? 'full' : 'partial';
+    lines = cleanLines(db, input.lines, { allowZero: true });
+    const charge = Number(input.chargeUserId);
+    if (Number.isInteger(charge) && charge > 0) doc.charge_user = charge;
+  }
+  const note = input.note == null ? null : String(input.note).slice(0, 500);
+  const run = db.transaction(() => {
+    const id = Number(db.prepare(`INSERT INTO docs (uuid, type, number, status, doc_date, from_wh, from_user, to_wh, to_user, mode, reason_id, charge_user, note, created_by, created_by_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(uuid, type, nextNumber(db, type), status, date,
+      from?.warehouseId ?? null, from?.userId ?? null, to?.warehouseId ?? null, to?.userId ?? null,
+      doc.mode, doc.reason_id, doc.charge_user, note, actor, userId).lastInsertRowid);
+    const ins = db.prepare('INSERT INTO doc_lines (doc_id, product_id, qty, unit_cost, expires_at, meta, sort) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    lines.forEach((l, i) => ins.run(id, l.productId, l.qty, l.unitCost, l.expiresAt, l.meta ? JSON.stringify(l.meta) : null, i));
+    // Inventory counts start as drafts unless asked to post; the rest post right away unless asked not to.
+    const shouldPost = status === 'draft' && (type === 'inventory' ? input.post === true : input.post !== false);
+    if (shouldPost) postDocTx(db, id, actor);
+    return id;
+  });
+  return getDoc(db, run());
+}
+
+// Replace the lines of a draft (inventory counts are typically saved several times).
+export function updateDraft(db, id, input) {
+  const d = getDoc(db, id);
+  if (!d) throw new StockError('Hujjat topilmadi');
+  if (d.status !== 'draft') throw new StockError('Faqat qoralamani o\'zgartirish mumkin');
+  const lines = cleanLines(db, input.lines, { allowZero: d.type === 'inventory', needCost: d.type === 'opening' });
+  db.transaction(() => {
+    db.prepare('DELETE FROM doc_lines WHERE doc_id = ?').run(id);
+    const ins = db.prepare('INSERT INTO doc_lines (doc_id, product_id, qty, unit_cost, expires_at, sort) VALUES (?, ?, ?, ?, ?, ?)');
+    lines.forEach((l, i) => ins.run(id, l.productId, l.qty, l.unitCost, l.expiresAt, i));
+    if (input.note !== undefined) db.prepare('UPDATE docs SET note = ? WHERE id = ?').run(input.note == null ? null : String(input.note).slice(0, 500), id);
+    if (input.mode !== undefined && d.type === 'inventory') db.prepare('UPDATE docs SET mode = ? WHERE id = ?').run(input.mode === 'full' ? 'full' : 'partial', id);
+  })();
+  return getDoc(db, id);
+}
+
+export function postDoc(db, id, actor) {
+  db.transaction(() => postDocTx(db, id, actor))();
+  return getDoc(db, id);
+}
+
+function postDocTx(db, id, actor) {
+  const d = getDoc(db, id);
+  if (!d) throw new StockError('Hujjat topilmadi');
+  const okFrom = d.type === 'transfer' ? 'sent' : 'draft';
+  if (d.status !== okFrom) throw new StockError(d.status === 'posted' ? 'Hujjat allaqachon o\'tkazilgan' : 'Bu hujjatni o\'tkazib bo\'lmaydi');
+  const at = d.type === 'opening' || d.type === 'inventory' ? d.doc_date : nowIso();
+  const ctx = { doc: d, at, touched: new Set() };
+  const lines = linesOf(db, id);
+
+  if (d.type === 'opening' || d.type === 'milk_in') {
+    const to = toOf(d);
+    lines.forEach((l, i) => {
+      const cost = l.meta && meta(l.meta).cost != null ? meta(l.meta).cost : r2(l.qty * (l.unit_cost ?? 0));
+      addIn(db, ctx, { productId: l.product_id, h: to, qty: l.qty, cost, lineId: l.id,
+        lot: { unitCost: l.qty > 0 ? cost / l.qty : 0, expiresAt: l.expires_at, producedAt: d.type === 'opening' ? d.doc_date : at, seq: i + 1 } });
+    });
+  } else if (d.type === 'transfer') {
+    const from = fromOf(d); const to = toOf(d);
+    for (const l of lines) moveStock(db, ctx, { productId: l.product_id, from, to, qty: l.qty, lineId: l.id });
+  } else if (d.type === 'writeoff') {
+    const from = fromOf(d);
+    const reason = db.prepare('SELECT * FROM stock_reasons WHERE id = ?').get(d.reason_id);
+    let total = 0;
+    for (const l of lines) total += takeOut(db, ctx, { productId: l.product_id, h: from, qty: l.qty, lineId: l.id }).reduce((a, t) => a + t.cost, 0);
+    if (d.charge_user) chargeStaff(db, ctx, d.charge_user, total, 'writeoff', reason?.name);
+    else pnl(db, ctx, reason?.category_id ?? 'writeoff', total, reason?.name);
+  } else if (d.type === 'inventory') {
+    const wh = toOf(d);
+    const counted = new Map(lines.map((l) => [l.product_id, l]));
+    if (d.mode === 'full') {
+      // Everything in the warehouse that was not counted is counted as zero.
+      const present = db.prepare(`SELECT product_id FROM stock_moves WHERE warehouse_id = ? GROUP BY product_id HAVING ABS(SUM(qty)) > ${EPS}`).all(wh.warehouseId);
+      for (const p of present) {
+        if (counted.has(p.product_id)) continue;
+        const lid = Number(db.prepare('INSERT INTO doc_lines (doc_id, product_id, qty, sort) VALUES (?, ?, 0, ?)').run(id, p.product_id, 9999).lastInsertRowid);
+        counted.set(p.product_id, { id: lid, product_id: p.product_id, qty: 0 });
+      }
+    }
+    let loss = 0; let surplus = 0; let seq = 0;
+    for (const l of counted.values()) {
+      const book = productBalance(db, wh, l.product_id);
+      const diff = r3(l.qty - book);
+      db.prepare('UPDATE doc_lines SET meta = ? WHERE id = ?').run(JSON.stringify({ book, diff }), l.id);
+      if (diff > EPS) {
+        const unit = lastUnitCost(db, l.product_id);
+        const cost = r2(diff * unit);
+        addIn(db, ctx, { productId: l.product_id, h: wh, qty: diff, cost, lineId: l.id, kind: 'surplus', lot: { unitCost: unit, seq: ++seq } });
+        surplus += cost;
+      } else if (diff < -EPS) {
+        loss += takeOut(db, ctx, { productId: l.product_id, h: wh, qty: -diff, lineId: l.id, kind: 'shortage' }).reduce((a, t) => a + t.cost, 0);
+      }
+    }
+    if (d.charge_user) chargeStaff(db, ctx, d.charge_user, loss, 'inventory', 'Inventarizatsiya kamomadi');
+    else pnl(db, ctx, 'stock_loss', loss);
+    pnl(db, ctx, 'stock_surplus', surplus);
+  }
+  db.prepare("UPDATE docs SET status = 'posted', posted_by = ?, posted_at = ? WHERE id = ?").run(actor, nowIso(), id);
+  negativeAlerts(db, ctx);
+}
+
+// Receiver declines a hand-over: nothing moves, the sender keeps the goods.
+export function rejectDoc(db, id, actor, reason) {
+  const d = getDoc(db, id);
+  if (!d) throw new StockError('Hujjat topilmadi');
+  if (d.status !== 'sent') throw new StockError('Faqat qabul kutayotgan topshirishni rad etish mumkin');
+  if (!reason) throw new StockError('Sababini yozing');
+  db.prepare("UPDATE docs SET status = 'rejected', rejected_by = ?, rejected_at = ?, reject_reason = ? WHERE id = ?").run(actor, nowIso(), String(reason).slice(0, 300), id);
+  return getDoc(db, id);
+}
+
+// Cancel: a draft or a not-yet-accepted hand-over simply closes; a posted
+// document is reversed exactly (stock, staff charges, profit and loss).
+export function cancelDoc(db, id, actor, reason) {
+  const d = getDoc(db, id);
+  if (!d) throw new StockError('Hujjat topilmadi');
+  if (d.source === 'shift') throw new StockError('Sut kirimi smenadan avtomatik yaratilgan; uni bekor qilib bo\'lmaydi');
+  if (d.status === 'cancelled' || d.status === 'rejected') throw new StockError('Hujjat allaqachon yopilgan');
+  if (!reason) throw new StockError('Bekor qilish sababini yozing');
+  db.transaction(() => {
+    if (d.status === 'posted') {
+      const ctx = { doc: d, at: nowIso(), touched: new Set() };
+      const moves = db.prepare('SELECT * FROM stock_moves WHERE doc_id = ? ORDER BY id').all(id);
+      for (const m of moves) {
+        insertMove(db, ctx, { lineId: m.line_id, productId: m.product_id, lotId: m.lot_id,
+          h: m.warehouse_id ? { warehouseId: m.warehouse_id } : { userId: m.holder_id }, qty: -m.qty, cost: -m.cost, kind: 'reversal' });
+      }
+      // No lot may end up below zero where that is not allowed (it was already used further down the chain).
+      const seen = new Set();
+      for (const m of moves) {
+        const h = m.warehouse_id ? { warehouseId: m.warehouse_id } : { userId: m.holder_id };
+        const key = `${holderKey(h)}:${m.product_id}:${m.lot_id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const [cond, v] = holderCond(h);
+        const q = db.prepare(`SELECT ROUND(COALESCE(SUM(qty), 0), 3) AS q FROM stock_moves WHERE ${cond} AND product_id = ? AND lot_id IS ?`).get(v, m.product_id, m.lot_id).q;
+        if (q < -EPS && !allowNegative(db, h)) {
+          throw new StockError(`Bekor qilib bo'lmaydi: ${productName(db, m.product_id)} "${holderName(db, h)}" dan allaqachon boshqa joyga ketgan`);
+        }
+      }
+      db.prepare(`INSERT INTO party_entries (party_type, party_id, amount, kind, doc_id, note, at)
+        SELECT party_type, party_id, -amount, 'reversal', doc_id, 'Bekor qilindi', ? FROM party_entries WHERE doc_id = ? AND kind <> 'reversal'`).run(ctx.at, id);
+      db.prepare(`INSERT INTO pnl_entries (category_id, amount, doc_id, note, at)
+        SELECT category_id, -amount, doc_id, 'Bekor qilindi', ? FROM pnl_entries WHERE doc_id = ?`).run(ctx.at, id);
+      negativeAlerts(db, ctx);
+    }
+    db.prepare("UPDATE docs SET status = 'cancelled', cancelled_by = ?, cancelled_at = ?, cancel_reason = ? WHERE id = ?").run(actor, nowIso(), String(reason).slice(0, 300), id);
+  })();
+  return getDoc(db, id);
+}
+
+// ---------------------------------------------------------------- milk from shifts
+// The warehouse accepted milk goes to: the setting, else the first raw-milk
+// warehouse, else one is created.
+export function milkWarehouse(db) {
+  const set = Number(getSetting(db, 'erp_milk_warehouse'));
+  if (set && db.prepare('SELECT 1 FROM warehouses WHERE id = ? AND active = 1').get(set)) return set;
+  let w = db.prepare("SELECT id FROM warehouses WHERE kind = 'raw_milk' AND active = 1 ORDER BY sort, id LIMIT 1").get()?.id;
+  if (!w) w = Number(db.prepare("INSERT INTO warehouses (name, kind) VALUES ('Xom sut ombori', 'raw_milk')").run().lastInsertRowid);
+  setSetting(db, 'erp_milk_warehouse', w);
+  return w;
+}
+
+// Called inside the shift-accept transaction: the accepted (real) quantity enters
+// the raw-milk warehouse at what the households are owed for it. A real quantity
+// below what was written raises the unit cost — the company paid for the full amount.
+export function receiveShiftMilk(db, shiftId, actor) {
+  const s = db.prepare('SELECT sh.*, u.is_test FROM shifts sh JOIN users u ON u.id = sh.employee_id WHERE sh.id = ?').get(shiftId);
+  if (!s || s.is_test) return null;
+  const uuid = `shift-${s.client_uuid}`;
+  if (db.prepare('SELECT 1 FROM docs WHERE uuid = ?').get(uuid)) return null;
+  const rows = db.prepare(`SELECT product_id, ROUND(SUM(quantity), 3) AS qty, SUM(ROUND(quantity * price)) AS amount
+    FROM collections WHERE shift_uuid = ? GROUP BY product_id`).all(s.client_uuid);
+  const real = new Map(db.prepare('SELECT product_id, real_quantity FROM shift_accepts WHERE shift_id = ?').all(s.id).map((r) => [r.product_id, r.real_quantity]));
+  const lines = rows.map((r) => ({ productId: r.product_id, qty: r3(real.get(r.product_id) ?? r.qty), cost: r2(r.amount ?? 0) })).filter((l) => l.qty > EPS);
+  if (!lines.length) return null;
+  const wh = milkWarehouse(db);
+  const id = Number(db.prepare(`INSERT INTO docs (uuid, type, number, status, doc_date, to_wh, source, note, created_by)
+    VALUES (?, 'milk_in', ?, 'draft', ?, ?, 'shift', ?, ?)`).run(uuid, nextNumber(db, 'milk_in'), nowIso(), wh, `Smena #${s.number}${s.copy_no ? `-${s.copy_no}` : ''}`, actor).lastInsertRowid);
+  const ins = db.prepare('INSERT INTO doc_lines (doc_id, product_id, qty, unit_cost, meta, sort) VALUES (?, ?, ?, ?, ?, ?)');
+  lines.forEach((l, i) => ins.run(id, l.productId, l.qty, l.cost / l.qty, JSON.stringify({ cost: l.cost, shiftId: s.id }), i));
+  postDocTx(db, id, actor);
+  return id;
+}
+
+// ---------------------------------------------------------------- reading
+export function docDetail(db, id) {
+  const d = getDoc(db, id);
+  if (!d) return null;
+  const lines = db.prepare(`SELECT dl.*, p.name AS product, p.unit FROM doc_lines dl JOIN products p ON p.id = dl.product_id WHERE dl.doc_id = ? ORDER BY dl.sort, dl.id`).all(id)
+    .map((l) => {
+      const m = meta(l.meta);
+      const cost = db.prepare("SELECT ROUND(SUM(ABS(cost)), 2) AS c FROM stock_moves WHERE line_id = ? AND qty < 0 AND COALESCE(kind, '') NOT IN ('reversal','settle')").get(l.id)?.c
+        ?? db.prepare("SELECT ROUND(SUM(cost), 2) AS c FROM stock_moves WHERE line_id = ? AND qty > 0 AND COALESCE(kind, '') NOT IN ('reversal','settle')").get(l.id)?.c;
+      return { id: l.id, product_id: l.product_id, product: l.product, unit: l.unit, qty: l.qty, unit_cost: l.unit_cost, expires_at: l.expires_at, book: m.book, diff: m.diff, cost: cost ?? null };
+    });
+  return {
+    ...summarize(db, d),
+    lines,
+    total_cost: r2(lines.reduce((a, l) => a + (l.cost ?? 0), 0)),
+    reason: d.reason_id ? db.prepare('SELECT name FROM stock_reasons WHERE id = ?').get(d.reason_id)?.name : null,
+    charge_user_name: d.charge_user ? holderName(db, { userId: d.charge_user }) : null,
+  };
+}
+
+function summarize(db, d) {
+  const from = fromOf(d); const to = toOf(d);
+  return {
+    id: d.id, uuid: d.uuid, type: d.type, type_label: DOC_TYPES[d.type]?.label ?? d.type, number: d.number, label: docLabel(d), status: d.status,
+    doc_date: d.doc_date, mode: d.mode, note: d.note, source: d.source,
+    from, to, from_name: holderName(db, from), to_name: holderName(db, to),
+    created_by: d.created_by, created_at: d.created_at, posted_by: d.posted_by, posted_at: d.posted_at,
+    rejected_at: d.rejected_at, reject_reason: d.reject_reason, cancelled_at: d.cancelled_at, cancel_reason: d.cancel_reason,
+  };
+}
+
+export function listDocs(db, { type, status, holder, from, to, limit = 300 } = {}) {
+  const where = []; const args = [];
+  if (type) { where.push('type = ?'); args.push(type); }
+  if (status) { where.push('status = ?'); args.push(status); }
+  if (holder?.warehouseId) { where.push('(from_wh = ? OR to_wh = ?)'); args.push(holder.warehouseId, holder.warehouseId); }
+  if (holder?.userId) { where.push('(from_user = ? OR to_user = ? OR created_by_id = ?)'); args.push(holder.userId, holder.userId, holder.userId); }
+  if (from) { where.push("date(doc_date, '+5 hours') >= ?"); args.push(from); }
+  if (to) { where.push("date(doc_date, '+5 hours') <= ?"); args.push(to); }
+  const rows = db.prepare(`SELECT * FROM docs ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY doc_date DESC, id DESC LIMIT ?`).all(...args, Math.min(limit, 1000));
+  return rows.map((d) => ({
+    ...summarize(db, d),
+    lines: db.prepare('SELECT COUNT(*) AS n FROM doc_lines WHERE doc_id = ?').get(d.id).n,
+    total_cost: r2(db.prepare("SELECT COALESCE(SUM(ABS(cost)), 0) AS c FROM stock_moves WHERE doc_id = ? AND qty < 0 AND COALESCE(kind, '') NOT IN ('reversal','settle')").get(d.id).c
+      || db.prepare("SELECT COALESCE(SUM(cost), 0) AS c FROM stock_moves WHERE doc_id = ? AND qty > 0 AND COALESCE(kind, '') NOT IN ('reversal','settle')").get(d.id).c),
+  }));
+}
+
+// Hand-overs waiting for this user: addressed to them or to a warehouse they keep.
+export function inbox(db, userId) {
+  const rows = db.prepare(`SELECT * FROM docs WHERE status = 'sent' AND (to_user = ? OR to_wh IN (SELECT warehouse_id FROM warehouse_keepers WHERE user_id = ?))
+    ORDER BY doc_date`).all(userId, userId);
+  return rows.map((d) => docDetail(db, d.id));
+}
+
+// Stock on hand: per holder and product, with value and the nearest expiry.
+export function stockReport(db, { holder = null, productId = null, kind = null, includeZero = false } = {}) {
+  const where = []; const args = [];
+  if (holder?.warehouseId) { where.push('m.warehouse_id = ?'); args.push(holder.warehouseId); }
+  if (holder?.userId) { where.push('m.holder_id = ?'); args.push(holder.userId); }
+  if (productId) { where.push('m.product_id = ?'); args.push(productId); }
+  if (kind) { where.push('p.kind = ?'); args.push(kind); }
+  const rows = db.prepare(`
+    SELECT m.warehouse_id, m.holder_id, m.product_id, p.name AS product, p.unit, p.kind, p.netto_g, p.brutto_g, p.volume, p.volume_unit,
+      ROUND(SUM(m.qty), 3) AS qty, ROUND(SUM(m.cost), 2) AS cost
+    FROM stock_moves m JOIN products p ON p.id = m.product_id
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    GROUP BY m.warehouse_id, m.holder_id, m.product_id
+    ${includeZero ? '' : `HAVING ABS(SUM(m.qty)) > ${EPS}`}
+    ORDER BY m.warehouse_id IS NULL, m.warehouse_id, m.holder_id, p.name`).all(...args);
+  return rows.map((r) => {
+    const h = r.warehouse_id ? { warehouseId: r.warehouse_id } : { userId: r.holder_id };
+    const lots = lotBalances(db, h, r.product_id).filter((l) => l.qty > EPS);
+    const expiries = lots.map((l) => l.expires_at).filter(Boolean).sort();
+    return {
+      holder: h, holder_name: holderName(db, h), product_id: r.product_id, product: r.product, unit: r.unit, kind: r.kind,
+      qty: r.qty, cost: r.cost, unit_cost: r.qty > EPS ? r2(r.cost / r.qty) : null,
+      lots: lots.length, nearest_expiry: expiries[0] ?? null,
+      weight_kg: r.netto_g ? r3((r.qty * r.netto_g) / 1000) : null,
+      volume: r.volume ? r3(r.qty * r.volume) : null, volume_unit: r.volume_unit,
+    };
+  });
+}
+
+// Lots of one product at one holder (for the detail view).
+export function lotReport(db, h, productId) {
+  return lotBalances(db, h, productId).map((l) => ({
+    lot_id: l.lot_id, number: l.number ?? '—', qty: l.qty, cost: l.cost, unit_cost: l.lot_id ? l.unit_cost : null,
+    produced_at: l.produced_at, expires_at: l.expires_at,
+  }));
+}
+
+// Moves of a product (stock card), newest first.
+export function stockCard(db, { productId, holder = null, limit = 300 }) {
+  const where = ['m.product_id = ?']; const args = [productId];
+  if (holder?.warehouseId) { where.push('m.warehouse_id = ?'); args.push(holder.warehouseId); }
+  if (holder?.userId) { where.push('m.holder_id = ?'); args.push(holder.userId); }
+  return db.prepare(`SELECT m.*, d.type, d.number, l.number AS lot_number FROM stock_moves m JOIN docs d ON d.id = m.doc_id LEFT JOIN lots l ON l.id = m.lot_id
+    WHERE ${where.join(' AND ')} ORDER BY m.at DESC, m.id DESC LIMIT ?`).all(...args, limit)
+    .map((m) => {
+      const h = m.warehouse_id ? { warehouseId: m.warehouse_id } : { userId: m.holder_id };
+      return { id: m.id, at: m.at, doc_id: m.doc_id, doc: docLabel(m), doc_type: DOC_TYPES[m.type]?.label ?? m.type, holder: h, holder_name: holderName(db, h),
+        lot: m.lot_number, qty: m.qty, cost: m.cost, kind: m.kind };
+    });
+}
+
+// Money a staff member owes the company (positive) or is owed (negative), from
+// the warehouse side (spills, shortages). Salary comes in a later stage.
+export function staffBalance(db, userId) {
+  return r2(db.prepare("SELECT COALESCE(SUM(amount), 0) AS a FROM party_entries WHERE party_type = 'staff' AND party_id = ?").get(userId).a);
+}

@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { SCHEMA_VERSION } from './db/index.js';
+import { ERP_HISTORY_TABLES } from './erp/schema.js';
 
 // Hard cap on decompressed backup size (this app's data is a few MB; 256 MB is
 // far above any legitimate backup) so a decompression bomb cannot OOM the server.
@@ -116,6 +117,7 @@ export function loadSafety(db, id) {
 export function wipeHistory(db, { resetOpening = false } = {}) {
   db.transaction(() => {
     for (const t of ['collections', 'payments', 'adjustments', 'applied_ops', 'events']) db.exec(`DELETE FROM ${t}`);
+    for (const t of ERP_HISTORY_TABLES) db.exec(`DELETE FROM ${t}`);
     db.exec('DELETE FROM shifts');
     if (resetOpening) db.exec('UPDATE suppliers SET opening_balance = 0');
   })();

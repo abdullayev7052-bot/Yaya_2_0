@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { receiveShiftMilk } from './erp/stock.js';
 import { emitEvent } from './db/index.js';
 import { diffFlags } from './settings.js';
 
@@ -217,6 +218,8 @@ export function acceptShift(db, id, actor, opts = {}) {
       const ins = db.prepare('INSERT INTO shift_accepts (shift_id, product_id, real_quantity) VALUES (?, ?, ?)');
       for (const a of accepts) ins.run(s.id, a.product_id, a.qty);
     }
+    // Yaya 2.0: the accepted milk enters the raw-milk warehouse in the same transaction.
+    receiveShiftMilk(db, s.id, actor);
   })();
   const next = db.prepare('SELECT * FROM shifts WHERE id = ?').get(s.id);
   emitEvent(db, 'shift.accepted', { ...eventPayload(db, next), by: actor });
