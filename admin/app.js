@@ -215,9 +215,12 @@ const PAGES = [
   ['reports', 'Hisobotlar', 'reports.view'],
   ['debts', 'Qarzlar va to\'lovlar', 'debts.view'], ['suppliers', 'Xonadonlar', 'suppliers.view'],
   ['staff', 'Xodimlar', 'staff.manage'], ['roles', 'Rollar va ruxsatlar', 'staff.manage'], ['devices', 'Qurilmalar', 'staff.manage'],
-  ['catalog', 'Mahsulotlar', 'catalog.manage'], ['lab', 'Laboratoriya', 'lab.fields'], ['integrations', 'Integratsiya', 'integrations.manage'],
+  ['catalog', 'Sut mahsulotlari', 'catalog.manage'], ['lab', 'Laboratoriya', 'lab.fields'], ['integrations', 'Integratsiya', 'integrations.manage'],
   ['tester', 'Ilovani sinash', 'tester.use'], ['settings', 'Sozlamalar', null],
 ];
+
+// Detail pages highlight (and are allowed by) their list page.
+const PAGE_PARENT = { supplier: 'suppliers', shift: 'shifts', 'balance-edit': 'debts' };
 
 async function show() {
   if (token && !me) {
@@ -1472,7 +1475,7 @@ function importFlow(box) {
 const route = act(async () => {
   if (!me) return;
   const name = location.hash.slice(1).split('?')[0] || 'dashboard';
-  const parent = { supplier: 'suppliers', shift: 'shifts', 'balance-edit': 'debts' }[name] ?? name;
+  const parent = PAGE_PARENT[name] ?? name;
   $$('#nav a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + parent));
   // Each navigation renders into a fresh container, so a slow, older page that
   // finishes loading late can never overwrite the page the user is now on.

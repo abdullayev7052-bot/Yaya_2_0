@@ -7,7 +7,7 @@ import { makeGuard } from '../auth.js';
 import { getSetting, setSetting } from '../settings.js';
 import { PRODUCT_KINDS, SHAPES, WAREHOUSE_KINDS } from '../erp/schema.js';
 import {
-  DOC_TYPES, StockError, cancelDoc, createDoc, docDetail, inbox, inventoryPreview, listDocs, lotReport, milkWarehouse, parseHolder, postDoc,
+  DOC_TYPES, StockError, addAlert, cancelDoc, createDoc, docDetail, inbox, inventoryPreview, listDocs, lotReport, milkWarehouse, parseHolder, postDoc,
   rejectDoc, staffBalance, stockCard, stockReport, updateDraft,
 } from '../erp/stock.js';
 import { erpImport, erpTemplate, importKinds, templateFile } from '../erp/importer.js';
@@ -319,7 +319,14 @@ export default async function erpRoutes(app, { db }) {
       postDoc(db, d.id, req.actor, charges === undefined ? {} : { charges });
       log(req, 'doc.post', { id: d.id, charges });
       return docDetail(db, d.id);
-    } catch (e) { return stockErr(reply, e); }
+    } catch (e) {
+      // A storekeeper's count with a shortage waits for a manager: tell them once.
+      if (e instanceof StockError && e.details?.needDecision
+        && !db.prepare("SELECT 1 FROM alerts WHERE doc_id = ? AND type = 'stock.shortage' AND resolved_at IS NULL").get(d.id)) {
+        addAlert(db, 'stock.shortage', `INV-${d.number}: inventarizatsiyada kamomad — kim hisobiga ekanini hal qilib o'tkazing`, { warehouseId: d.to_wh }, d.id);
+      }
+      return stockErr(reply, e);
+    }
   });
   // What posting an inventory count would change (differences; the value only with stock.costs).
   app.get('/docs/:id/preview', need('stock.inventory'), async (req, reply) => {

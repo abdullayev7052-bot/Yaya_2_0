@@ -185,6 +185,11 @@ function negativeAlerts(db, ctx) {
   }
 }
 
+// "Waiting for a manager" alerts of a document end when the document is decided.
+function closeDocAlerts(db, docId, actor) {
+  db.prepare("UPDATE alerts SET resolved_at = datetime('now'), resolved_by = ? WHERE doc_id = ? AND type = 'stock.shortage' AND resolved_at IS NULL").run(actor, docId);
+}
+
 export function addAlert(db, type, text, payload, docId = null) {
   db.prepare('INSERT INTO alerts (type, text, payload, doc_id) VALUES (?, ?, ?, ?)').run(type, text, payload == null ? null : JSON.stringify(payload), docId);
 }
@@ -406,6 +411,7 @@ function postDocTx(db, id, actor, opts = {}) {
     result = { loss, surplus };
   }
   db.prepare("UPDATE docs SET status = 'posted', posted_by = ?, posted_at = ? WHERE id = ?").run(actor, nowIso(), id);
+  closeDocAlerts(db, id, actor);
   negativeAlerts(db, ctx);
   return result;
 }
@@ -455,6 +461,7 @@ export function cancelDoc(db, id, actor, reason) {
         SELECT category_id, -amount, doc_id, 'Bekor qilindi', ? FROM pnl_entries WHERE doc_id = ?`).run(ctx.at, id);
       negativeAlerts(db, ctx);
     }
+    closeDocAlerts(db, id, actor);
     db.prepare("UPDATE docs SET status = 'cancelled', cancelled_by = ?, cancelled_at = ?, cancel_reason = ? WHERE id = ?").run(actor, nowIso(), String(reason).slice(0, 300), id);
   })();
   return getDoc(db, id);

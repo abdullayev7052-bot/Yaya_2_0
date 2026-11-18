@@ -240,6 +240,8 @@ export const applySavedTheme = () => setTheme(getThemePref());
 
 export const admin = (method, path, body) => call(method, '/api/admin' + path, body);
 export const mobile = (method, path, body) => call(method, '/api/mobile' + path, body);
+// Warehouse (Yaya 2.0). Pass { idempotent: true } for document posts that carry a uuid.
+export const erp = (method, path, body, opts) => call(method, '/api/erp' + path, body, opts);
 export const changePassword = (current, next) => call('PUT', '/api/auth/password', { current, next });
 // Change own name/login (admins). Updates the cached session so the UI follows.
 export async function changeProfile({ name, login }) {

@@ -6,6 +6,7 @@ import Collector from './Collector';
 import Profile from './Profile';
 import { Debts, Lab, LabDetail, MyPayments, Payments, ShiftDetail, Shifts, Today } from './Office';
 import { PaymentForm, SupplierCard } from './Supplier';
+import { InventoryForm, Stock, StockForm, canStock } from './Stock';
 import { C, s } from '../ui';
 
 // One app for all staff. The sections shown depend only on the person's permissions:
@@ -16,6 +17,7 @@ const TABS = [
   ['today', 'Kun', () => api.can('reports.view')],
   ['shifts', 'Smenalar', () => api.can('shifts.view_all')],
   ['lab', 'Laborant', () => api.can('lab.view')],
+  ['stock', 'Ombor', canStock],
   ['debts', 'Qarzlar', () => api.can('debts.view')],
   ['pays', 'To\'lovlar', () => api.can('debts.view')],
   // Collector's own payments only — shown when they lack the broad debts.view.
@@ -33,6 +35,8 @@ export default function Home({ tick, refresh, onLogout }) {
   const [labId, setLabId] = useState(null);
   const [payFor, setPayFor] = useState(null);
   const [labFlag, setLabFlag] = useState(false);
+  // Warehouse form: { type, docId } (hand over / write off / count).
+  const [stockForm, setStockForm] = useState(null);
   const [toast, setToast] = useState('');
   // Red dot on the Laborant tab while any accepted shift is flagged (over a limit).
   useEffect(() => {
@@ -50,7 +54,12 @@ export default function Home({ tick, refresh, onLogout }) {
   const me = api.me();
 
   let body;
-  if (payFor) {
+  const stockDone = (m) => { setStockForm(null); setToast(m); setTimeout(() => setToast(''), 4000); refresh(); };
+  if (stockForm?.type === 'inventory') {
+    body = <InventoryForm docId={stockForm.docId} onBack={() => setStockForm(null)} onDone={stockDone} />;
+  } else if (stockForm) {
+    body = <StockForm type={stockForm.type} onBack={() => setStockForm(null)} onDone={stockDone} />;
+  } else if (payFor) {
     body = <PaymentForm supplier={payFor} onBack={() => setPayFor(null)}
       onDone={(m) => { setPayFor(null); setToast(m); setTimeout(() => setToast(''), 3000); refresh(); }} />;
   } else if (cardId) {
@@ -63,12 +72,13 @@ export default function Home({ tick, refresh, onLogout }) {
   else if (current === 'today') body = <Today onShift={setShiftId} />;
   else if (current === 'shifts') body = <Shifts onShift={setShiftId} tick={tick} />;
   else if (current === 'lab') body = <Lab onOpen={setLabId} />;
+  else if (current === 'stock') body = <Stock tick={tick} onForm={(type, docId) => setStockForm({ type, docId })} />;
   else if (current === 'debts') body = <Debts onOpen={setCardId} onPay={setPayFor} tick={tick} />;
   else if (current === 'pays') body = <Payments onOpen={setCardId} />;
   else if (current === 'mypays') body = <MyPayments />;
   else body = <Profile tick={tick} onLogout={onLogout} setFull={setFull} />;
 
-  const detail = !!(payFor || cardId || shiftId || labId);
+  const detail = !!(stockForm || payFor || cardId || shiftId || labId);
   const chrome = !full && !detail;
   return (
     <View style={{ flex: 1 }}>

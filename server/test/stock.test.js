@@ -196,14 +196,19 @@ test('inventory shortage: asked every time; company, one person, or split by sum
   assert.equal(ask.status, 400);
   assert.equal(ask.body.details.needDecision, true);
   assert.equal(ask.body.details.loss, 21000);
-  // the storekeeper cannot split sums
+  // the storekeeper cannot split sums; their attempt leaves one alert for the managers
   assert.equal((await call(app, 'POST', `/api/erp/docs/${draft.id}/post`, s, { charges: [] })).status, 403);
+  assert.equal((await call(app, 'POST', `/api/erp/docs/${draft.id}/post`, s, {})).status, 400);
+  assert.equal((await call(app, 'POST', `/api/erp/docs/${draft.id}/post`, s, {})).status, 400);
+  const openAlerts = () => db.prepare("SELECT COUNT(*) n FROM alerts WHERE type = 'stock.shortage' AND resolved_at IS NULL").get().n;
+  assert.equal(openAlerts(), 1);
   // more than the shortage cannot be charged
   assert.equal((await call(app, 'POST', `/api/erp/docs/${draft.id}/post`, b, { charges: [{ userId: ids.ali, amount: 30000 }] })).status, 400);
   // split: 15 000 to Ali, 4 000 to the storekeeper, the rest (2 000) to the company
   const ok = await call(app, 'POST', `/api/erp/docs/${draft.id}/post`, b, { charges: [{ userId: ids.ali, amount: 15000 }, { userId: ids.store, amount: 4000 }] });
   assert.equal(ok.status, 200);
   assert.equal(ok.body.charges.length, 2);
+  assert.equal(openAlerts(), 0, 'the alert closes once the count is posted');
   assert.equal((await call(app, 'GET', `/api/erp/staff-balance/${ids.ali}`, b)).body.balance, 15000);
   assert.equal((await call(app, 'GET', `/api/erp/staff-balance/${ids.store}`, b)).body.balance, 4000);
   const loss = db.prepare("SELECT SUM(e.amount) a FROM pnl_entries e JOIN pnl_categories c ON c.id = e.category_id WHERE c.code = 'stock_loss'").get().a;
