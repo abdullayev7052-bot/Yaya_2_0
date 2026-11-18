@@ -243,14 +243,15 @@ Har bir bo'limning o'z sozlamalari bo'ladi, qiyin joylarda izoh bilan:
 Bitta server, bitta kod:
 - **Ish joyi ilovasi** (hozirgi Expo ilova kengayadi): Android telefon/planshet, brauzer va **Desktop** (Windows ilova
   ichida shu web versiya + oflayn baza). Monoblokda katta tugmalar va xodim almashish rejimi.
-- **Boshqaruv paneli** — brauzerda.
+- **Boshqaruv paneli** — brauzerda. Butun zanjir uchun bitta panel: yuqorida bo'limlar (Bosh panel · Sut yig'ish · Ishlab chiqarish ·
+  Ombor · Hisobotlar · Boshqaruv), ostida tanlangan bo'lim sahifalari. "Bosh panel" — barcha bo'limlarning kunlik ko'rsatkichlari.
 - Yig'ish (APK, Desktop o'rnatuvchi) **eng oxirida** — hammasi avval ichki brauzerda sinaladi.
 
 ## 12. Bosqichlar
 | # | Bosqich | Holat |
 |---|---|---|
-| 1 | **Ombor asosi:** nomenklatura (vazn, hajm, shakl, muddatlar), omborlar va mas'ullar, manfiy qoldiq sozlamasi, partiyalar va FIFO, topshirish-qabul, hisobdan chiqarish (xodim hisobiga ham), boshlang'ich qoldiq, inventarizatsiya, Excel import; qabul qilingan yog'li + yog'siz sut → bitta "Xom sut" (smena o'rtacha tannarxi); kamomadni taqsimlash; eski zaxira mosligi | ⏳ server tayyor, ekranlar qoldi |
-| 2 | **Ishlab chiqarish:** tarkiblar va alternativlar, texnolog smenasi va sut sarfi, qaynatishdagi yo'qotishni taqsimlash, separatsiya, nisbatdagi va shartli limitlar, bo'lim sabablari, ruxsat so'rash, taxminiy va haqiqiy tannarx | |
+| 1 | **Ombor asosi:** nomenklatura (vazn, hajm, shakl, muddatlar), omborlar va mas'ullar, manfiy qoldiq sozlamasi, partiyalar va FIFO, topshirish-qabul, hisobdan chiqarish (xodim hisobiga ham), boshlang'ich qoldiq, inventarizatsiya, Excel import; qabul qilingan yog'li + yog'siz sut → bitta "Xom sut" (smena o'rtacha tannarxi); kamomadni taqsimlash; eski zaxira mosligi; panelda "Ombor" bo'limi, ilovada "Ombor" tabi | ✅ |
+| 2 | **Ishlab chiqarish:** tarkiblar va alternativlar, texnolog smenasi va sut sarfi, qaynatishdagi yo'qotishni (va yutishni) taqsimlash — keyingi bosqichga o'tgan partiyalarga ham, separatsiya (qat'iy / foiz / qolgan), nisbatdagi limitlar, bo'lim sabablari va ta'siri, rahbar tasdig'i, taxminiy va haqiqiy tannarx; panelda umumiy "Bosh panel" va bo'limlar bo'yicha guruhlangan menyu | ✅ (shartli limit — "shu xomashyolar bo'lsa X–Y" — keyinroq) |
 | 3 | **Quyish zanjiri:** quyish (ko'p xodim, ishbay haq bo'linishi), idish berish/qaytarish, issiqxona va turish vaqti, qopqoq yopish, ortgan quyma | |
 | 4 | **Savdo:** mijozlar va turlari, narxlar, sotuv, chek, qaytarish turlari, qaytgan tannarx (oxirgi/o'rtacha), muddati o'tgan siyosati | |
 | 5 | **Qayta ishlash** (6-bo'lim) | |

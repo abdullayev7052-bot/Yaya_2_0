@@ -7,6 +7,7 @@ import Profile from './Profile';
 import { Debts, Lab, LabDetail, MyPayments, Payments, ShiftDetail, Shifts, Today } from './Office';
 import { PaymentForm, SupplierCard } from './Supplier';
 import { InventoryForm, Stock, StockForm, canStock } from './Stock';
+import { CloseShift, NewTask, Production, TaskScreen, canProduce } from './Production';
 import { C, s } from '../ui';
 
 // One app for all staff. The sections shown depend only on the person's permissions:
@@ -17,6 +18,7 @@ const TABS = [
   ['today', 'Kun', () => api.can('reports.view')],
   ['shifts', 'Smenalar', () => api.can('shifts.view_all')],
   ['lab', 'Laborant', () => api.can('lab.view')],
+  ['prod', 'Ishlab chiqarish', canProduce],
   ['stock', 'Ombor', canStock],
   ['debts', 'Qarzlar', () => api.can('debts.view')],
   ['pays', 'To\'lovlar', () => api.can('debts.view')],
@@ -37,6 +39,8 @@ export default function Home({ tick, refresh, onLogout }) {
   const [labFlag, setLabFlag] = useState(false);
   // Warehouse form: { type, docId } (hand over / write off / count).
   const [stockForm, setStockForm] = useState(null);
+  // Technologist screens: { screen: 'new' | 'task' | 'close', id }.
+  const [prodView, setProdView] = useState(null);
   const [toast, setToast] = useState('');
   // Red dot on the Laborant tab while any accepted shift is flagged (over a limit).
   useEffect(() => {
@@ -55,7 +59,14 @@ export default function Home({ tick, refresh, onLogout }) {
 
   let body;
   const stockDone = (m) => { setStockForm(null); setToast(m); setTimeout(() => setToast(''), 4000); refresh(); };
-  if (stockForm?.type === 'inventory') {
+  const prodDone = (m) => { setProdView(null); setToast(m); setTimeout(() => setToast(''), 4000); refresh(); };
+  if (prodView?.screen === 'new') {
+    body = <NewTask onBack={() => setProdView(null)} onDone={(id) => setProdView({ screen: 'task', id })} />;
+  } else if (prodView?.screen === 'task') {
+    body = <TaskScreen id={prodView.id} onBack={() => { setProdView(null); refresh(); }} onDone={prodDone} />;
+  } else if (prodView?.screen === 'close') {
+    body = <CloseShift onBack={() => setProdView(null)} onDone={prodDone} />;
+  } else if (stockForm?.type === 'inventory') {
     body = <InventoryForm docId={stockForm.docId} onBack={() => setStockForm(null)} onDone={stockDone} />;
   } else if (stockForm) {
     body = <StockForm type={stockForm.type} onBack={() => setStockForm(null)} onDone={stockDone} />;
@@ -72,13 +83,14 @@ export default function Home({ tick, refresh, onLogout }) {
   else if (current === 'today') body = <Today onShift={setShiftId} />;
   else if (current === 'shifts') body = <Shifts onShift={setShiftId} tick={tick} />;
   else if (current === 'lab') body = <Lab onOpen={setLabId} />;
+  else if (current === 'prod') body = <Production tick={tick} onNew={() => setProdView({ screen: 'new' })} onTask={(id) => setProdView({ screen: 'task', id })} onClose={() => setProdView({ screen: 'close' })} />;
   else if (current === 'stock') body = <Stock tick={tick} onForm={(type, docId) => setStockForm({ type, docId })} />;
   else if (current === 'debts') body = <Debts onOpen={setCardId} onPay={setPayFor} tick={tick} />;
   else if (current === 'pays') body = <Payments onOpen={setCardId} />;
   else if (current === 'mypays') body = <MyPayments />;
   else body = <Profile tick={tick} onLogout={onLogout} setFull={setFull} />;
 
-  const detail = !!(stockForm || payFor || cardId || shiftId || labId);
+  const detail = !!(prodView || stockForm || payFor || cardId || shiftId || labId);
   const chrome = !full && !detail;
   return (
     <View style={{ flex: 1 }}>

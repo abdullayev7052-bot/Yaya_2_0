@@ -32,7 +32,11 @@ export const DOC_TYPES = {
   transfer: { label: 'Topshirish', prefix: 'T' },
   inventory: { label: 'Inventarizatsiya', prefix: 'INV' },
   writeoff: { label: 'Hisobdan chiqarish', prefix: 'HC' },
+  production: { label: 'Ishlab chiqarish', prefix: 'IC' },
+  shift_close: { label: 'Texnolog smenasi yakuni', prefix: 'TS' },
 };
+// Types a person creates directly; the others come from shifts and production.
+const MANUAL_TYPES = new Set(['opening', 'transfer', 'inventory', 'writeoff']);
 export const docLabel = (d) => `${DOC_TYPES[d.type]?.prefix ?? d.type}-${d.number}`;
 
 // ---------------------------------------------------------------- holders
@@ -57,7 +61,7 @@ export function parseHolder(db, v) {
   return null;
 }
 
-const allowNegative = (db, h) => !!(h.warehouseId && db.prepare('SELECT allow_negative FROM warehouses WHERE id = ?').get(h.warehouseId)?.allow_negative);
+export const allowNegative = (db, h) => !!(h.warehouseId && db.prepare('SELECT allow_negative FROM warehouses WHERE id = ?').get(h.warehouseId)?.allow_negative);
 const productName = (db, id) => db.prepare('SELECT name FROM products WHERE id = ?').get(id)?.name ?? `#${id}`;
 
 // ---------------------------------------------------------------- balances
@@ -70,7 +74,7 @@ export function productBalance(db, h, productId) {
 export function lotBalances(db, h, productId) {
   const [cond, v] = holderCond(h, 'm.');
   return db.prepare(`
-    SELECT m.lot_id, ROUND(SUM(m.qty), 3) AS qty, ROUND(SUM(m.cost), 2) AS cost, l.number, l.unit_cost, l.produced_at, l.expires_at
+    SELECT m.lot_id, ROUND(SUM(m.qty), 3) AS qty, ROUND(SUM(m.cost), 2) AS cost, l.number, l.unit_cost, l.produced_at, l.expires_at, l.provisional
     FROM stock_moves m LEFT JOIN lots l ON l.id = m.lot_id
     WHERE ${cond} AND m.product_id = ?
     GROUP BY m.lot_id
@@ -83,28 +87,28 @@ export function lastUnitCost(db, productId) {
 }
 
 // ---------------------------------------------------------------- low-level moves
-function insertMove(db, ctx, { lineId = null, productId, lotId = null, h, qty, cost, kind = null }) {
+export function insertMove(db, ctx, { lineId = null, productId, lotId = null, h, qty, cost, kind = null }) {
   db.prepare(`INSERT INTO stock_moves (doc_id, line_id, product_id, lot_id, warehouse_id, holder_id, qty, cost, at, kind)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(ctx.doc.id, lineId, productId, lotId, h.warehouseId ?? null, h.userId ?? null, r3(qty), r2(cost), ctx.at, kind);
   if (h.warehouseId) ctx.touched.add(`${h.warehouseId}:${productId}`);
 }
 
-function newLot(db, ctx, { productId, unitCost, expiresAt, producedAt, seq }) {
+function newLot(db, ctx, { productId, qty, unitCost, expiresAt, producedAt, seq, provisional = 0, shiftId = null }) {
   const p = db.prepare('SELECT shelf_life_hours FROM products WHERE id = ?').get(productId);
   const produced = producedAt ?? ctx.at;
   const expires = expiresAt ?? (p?.shelf_life_hours ? new Date(Date.parse(produced) + p.shelf_life_hours * 3600e3).toISOString() : null);
-  return Number(db.prepare('INSERT INTO lots (product_id, number, unit_cost, produced_at, expires_at, doc_id) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(productId, `${docLabel(ctx.doc)}/${seq}`, unitCost, produced, expires, ctx.doc.id).lastInsertRowid);
+  return Number(db.prepare('INSERT INTO lots (product_id, number, unit_cost, produced_at, expires_at, doc_id, qty0, provisional, shift_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(productId, `${docLabel(ctx.doc)}/${seq}`, unitCost, produced, expires, ctx.doc.id, qty ?? null, provisional ? 1 : 0, shiftId).lastInsertRowid);
 }
 
-function pnl(db, ctx, code, amount, note = null) {
+export function pnl(db, ctx, code, amount, note = null) {
   if (Math.abs(amount) < 0.005) return;
   const cat = typeof code === 'number' ? code : db.prepare('SELECT id FROM pnl_categories WHERE code = ?').get(code)?.id;
   db.prepare('INSERT INTO pnl_entries (category_id, amount, doc_id, note, at) VALUES (?, ?, ?, ?, ?)').run(cat, r2(amount), ctx.doc.id, note, ctx.at);
 }
 
-function chargeStaff(db, ctx, userId, amount, kind, note = null) {
+export function chargeStaff(db, ctx, userId, amount, kind, note = null) {
   if (Math.abs(amount) < 0.005) return;
   db.prepare("INSERT INTO party_entries (party_type, party_id, amount, kind, doc_id, note, at) VALUES ('staff', ?, ?, ?, ?, ?, ?)")
     .run(userId, r2(amount), kind, ctx.doc.id, note, ctx.at);
@@ -143,7 +147,7 @@ export function takeOut(db, ctx, { productId, h, qty, lineId = null, kind = null
 // A receipt into a warehouse that is below zero for this product settles that first.
 export function addIn(db, ctx, { productId, h, qty, cost, lotId, lot, lineId = null, kind = null }) {
   let id = lotId ?? null;
-  if (lotId === undefined && lot) id = newLot(db, ctx, { productId, ...lot });
+  if (lotId === undefined && lot) id = newLot(db, ctx, { productId, qty, ...lot });
   insertMove(db, ctx, { lineId, productId, lotId: id, h, qty, cost, kind });
   if (id != null && h.warehouseId) settleNegative(db, ctx, h, productId, id);
   return id;
@@ -195,7 +199,7 @@ export function addAlert(db, type, text, payload, docId = null) {
 }
 
 // ---------------------------------------------------------------- documents
-const getDoc = (db, id) => db.prepare('SELECT * FROM docs WHERE id = ?').get(id);
+export const getDoc = (db, id) => db.prepare('SELECT * FROM docs WHERE id = ?').get(id);
 const linesOf = (db, id) => db.prepare('SELECT * FROM doc_lines WHERE doc_id = ? ORDER BY sort, id').all(id);
 const meta = (v) => (v ? JSON.parse(v) : {});
 
@@ -218,7 +222,7 @@ function cleanLines(db, lines, { needCost = false, allowZero = false } = {}) {
   });
 }
 
-function nextNumber(db, type) {
+export function nextNumber(db, type) {
   return (db.prepare('SELECT COALESCE(MAX(number), 0) AS n FROM docs WHERE type = ?').get(type).n) + 1;
 }
 
@@ -226,7 +230,7 @@ function nextNumber(db, type) {
 // accepted). Idempotent by uuid: a re-send returns the existing document.
 export function createDoc(db, input, { actor, userId = null }) {
   const type = String(input?.type ?? '');
-  if (!DOC_TYPES[type] || type === 'milk_in') throw new StockError('Hujjat turi noto\'g\'ri');
+  if (!MANUAL_TYPES.has(type)) throw new StockError('Hujjat turi noto\'g\'ri');
   const uuid = String(input.uuid || randomUUID()).slice(0, 80);
   const existing = db.prepare('SELECT * FROM docs WHERE uuid = ?').get(uuid);
   if (existing) {
@@ -249,7 +253,7 @@ export function createDoc(db, input, { actor, userId = null }) {
     status = 'sent';
   } else if (type === 'writeoff') {
     if (!from) throw new StockError('Qayerdan hisobdan chiqarilishini tanlang');
-    const reason = db.prepare('SELECT * FROM stock_reasons WHERE id = ? AND active = 1').get(Number(input.reasonId));
+    const reason = db.prepare("SELECT * FROM stock_reasons WHERE id = ? AND active = 1 AND section = 'warehouse'").get(Number(input.reasonId));
     if (!reason) throw new StockError('Sababni tanlang');
     doc.reason_id = reason.id;
     const charge = Number(input.chargeUserId);
@@ -432,9 +436,18 @@ export function cancelDoc(db, id, actor, reason) {
   const d = getDoc(db, id);
   if (!d) throw new StockError('Hujjat topilmadi');
   if (d.source === 'shift') throw new StockError('Sut kirimi smenadan avtomatik yaratilgan; uni bekor qilib bo\'lmaydi');
+  if (d.source === 'production') throw new StockError('Ishlab chiqarish hujjati topshiriq orqali bekor qilinadi');
+  if (d.source === 'prod_shift') throw new StockError('Texnolog smenasi yakunini bekor qilib bo\'lmaydi');
   if (d.status === 'cancelled' || d.status === 'rejected') throw new StockError('Hujjat allaqachon yopilgan');
   if (!reason) throw new StockError('Bekor qilish sababini yozing');
-  db.transaction(() => {
+  db.transaction(() => cancelDocTx(db, d, actor, reason))();
+  return getDoc(db, id);
+}
+
+// Reverse a document inside the caller's transaction (also used by production).
+export function cancelDocTx(db, d, actor, reason) {
+  const id = d.id;
+  {
     if (d.status === 'posted') {
       const ctx = { doc: d, at: nowIso(), touched: new Set() };
       const moves = db.prepare('SELECT * FROM stock_moves WHERE doc_id = ? ORDER BY id').all(id);
@@ -463,8 +476,7 @@ export function cancelDoc(db, id, actor, reason) {
     }
     closeDocAlerts(db, id, actor);
     db.prepare("UPDATE docs SET status = 'cancelled', cancelled_by = ?, cancelled_at = ?, cancel_reason = ? WHERE id = ?").run(actor, nowIso(), String(reason).slice(0, 300), id);
-  })();
-  return getDoc(db, id);
+  }
 }
 
 // ---------------------------------------------------------------- milk from shifts
@@ -592,6 +604,7 @@ export function stockReport(db, { holder = null, productId = null, kind = null, 
       holder: h, holder_name: holderName(db, h), product_id: r.product_id, product: r.product, unit: r.unit, kind: r.kind,
       qty: r.qty, cost: r.cost, unit_cost: r.qty > EPS ? r2(r.cost / r.qty) : null,
       lots: lots.length, nearest_expiry: expiries[0] ?? null,
+      provisional: lots.some((l) => l.provisional) || undefined,
       weight_kg: r.netto_g ? r3((r.qty * r.netto_g) / 1000) : null,
       volume: r.volume ? r3(r.qty * r.volume) : null, volume_unit: r.volume_unit,
     };
@@ -601,7 +614,7 @@ export function stockReport(db, { holder = null, productId = null, kind = null, 
 // Lots of one product at one holder (for the detail view).
 export function lotReport(db, h, productId) {
   return lotBalances(db, h, productId).map((l) => ({
-    lot_id: l.lot_id, number: l.number ?? '—', qty: l.qty, cost: l.cost, unit_cost: l.lot_id ? l.unit_cost : null,
+    lot_id: l.lot_id, number: l.number ?? '—', qty: l.qty, cost: l.cost, unit_cost: l.lot_id ? l.unit_cost : null, provisional: !!l.provisional,
     produced_at: l.produced_at, expires_at: l.expires_at,
   }));
 }

@@ -414,7 +414,7 @@ const stockTabs = {
   },
 
   async sozlama(box) {
-    const [reasons, units, cats] = await Promise.all([erp('GET', '/reasons'), erp('GET', '/units'), costs() ? erp('GET', '/pnl-categories') : Promise.resolve([])]);
+    const [reasons, units, cats] = await Promise.all([erp('GET', '/reasons?section=warehouse'), erp('GET', '/units'), costs() ? erp('GET', '/pnl-categories') : Promise.resolve([])]);
     const manage = can('stock.manage');
     box.innerHTML = `<div class="grid2">
       <div class="card"><h2>Hisobdan chiqarish sabablari</h2>
@@ -558,6 +558,6 @@ views['stock-doc'] = async (v) => {
 };
 
 // Register the page (before "Mahsulotlar" of milk collection) and its detail route.
-PAGES.splice(PAGES.findIndex((p) => p[0] === 'catalog'), 0, ['stock', 'Ombor', 'stock.view_all']);
+PAGES.push(['stock', 'Ombor', 'stock.view_all', 'stock']);
 PAGE_PARENT['stock-doc'] = 'stock';
 if (me) show();

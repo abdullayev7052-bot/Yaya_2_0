@@ -5,15 +5,16 @@
 import { audit } from '../db/index.js';
 import { makeGuard } from '../auth.js';
 import { getSetting, setSetting } from '../settings.js';
-import { PRODUCT_KINDS, SHAPES, WAREHOUSE_KINDS } from '../erp/schema.js';
+import { PRODUCT_KINDS, REASON_EFFECTS, REASON_SECTIONS, SHAPES, WAREHOUSE_KINDS } from '../erp/schema.js';
 import {
   DOC_TYPES, StockError, addAlert, cancelDoc, createDoc, docDetail, inbox, inventoryPreview, listDocs, lotReport, milkWarehouse, parseHolder, postDoc,
   rejectDoc, staffBalance, stockCard, stockReport, updateDraft,
 } from '../erp/stock.js';
 import { erpImport, erpTemplate, importKinds, templateFile } from '../erp/importer.js';
+import { overview } from '../erp/overview.js';
 
 const COST_KEYS = new Set(['cost', 'unit_cost', 'total_cost', 'amount', 'balance', 'loss', 'surplus']);
-function stripCosts(v) {
+export function stripCosts(v) {
   if (Array.isArray(v)) return v.map(stripCosts);
   if (v && typeof v === 'object' && !(v instanceof Buffer)) {
     const out = {};
@@ -54,10 +55,18 @@ export default async function erpRoutes(app, { db }) {
     units: db.prepare('SELECT * FROM units WHERE active = 1 ORDER BY id').all(),
     warehouses: db.prepare('SELECT id, name, kind FROM warehouses WHERE active = 1 ORDER BY sort, name').all(),
     staff: db.prepare('SELECT id, COALESCE(name, login) AS name FROM users WHERE active = 1 AND is_test = 0 ORDER BY name').all(),
-    reasons: db.prepare('SELECT id, name, charge FROM stock_reasons WHERE active = 1 ORDER BY sort, id').all(),
+    reasons: db.prepare("SELECT id, name, charge FROM stock_reasons WHERE active = 1 AND section = 'warehouse' ORDER BY sort, id").all(),
+    techReasons: db.prepare("SELECT id, name, COALESCE(effect, 'company') AS effect, limit_qty, limit_base FROM stock_reasons WHERE active = 1 AND section = 'tech' ORDER BY sort, id").all(),
+    reasonSections: REASON_SECTIONS, reasonEffects: REASON_EFFECTS,
     myWarehouses: keeperOf(req.me.id),
     milkWarehouseId: Number(getSetting(db, 'erp_milk_warehouse')) || null,
   }));
+
+  // The panel's home: the whole chain at a glance (each block only with its permission).
+  app.get('/overview', need(), async (req, reply) => {
+    const day = /^\d{4}-\d{2}-\d{2}$/.test(req.query.day ?? '') ? req.query.day : undefined;
+    return overview(db, req.me.perms, day);
+  });
 
   // ---------------------------------------------------------------- units
   app.get('/units', need(), async () => db.prepare('SELECT * FROM units ORDER BY active DESC, id').all());
@@ -188,22 +197,54 @@ export default async function erpRoutes(app, { db }) {
   });
 
   // ---------------------------------------------------------------- reasons and categories
-  app.get('/reasons', need(), async () => db.prepare(`SELECT r.*, c.name AS category FROM stock_reasons r LEFT JOIN pnl_categories c ON c.id = r.category_id
-    ORDER BY r.active DESC, r.sort, r.id`).all());
-  app.post('/reasons', need('stock.manage'), async (req, reply) => {
+  // Loss reasons, per section (each section sees only its own): name, effect
+  // (cost / company / staff), expense category, and a proportional limit.
+  app.get('/reasons', need(), async (req) => db.prepare(`SELECT r.*, c.name AS category FROM stock_reasons r LEFT JOIN pnl_categories c ON c.id = r.category_id
+    ${req.query.section ? 'WHERE r.section = ?' : ''} ORDER BY r.section, r.active DESC, r.sort, r.id`).all(...(req.query.section ? [String(req.query.section)] : []))
+    .map((r) => ({ ...r, effect: r.effect ?? (r.charge === 'staff' ? 'staff' : 'company'), section_label: REASON_SECTIONS[r.section] ?? r.section })));
+  const reasonPerm = (req, section) => has(req, section === 'warehouse' ? 'stock.manage' : 'prod.manage') || has(req, 'stock.manage');
+  const reasonData = (b, reply, current = {}) => {
+    const d = {};
+    if (b.section !== undefined) { if (!REASON_SECTIONS[b.section]) return bad(reply, "Bo'lim noto'g'ri"); d.section = b.section; }
+    const effect = b.effect ?? (b.charge ? (b.charge === 'staff' ? 'staff' : 'company') : undefined);
+    if (effect !== undefined) {
+      if (!REASON_EFFECTS[effect]) return bad(reply, "Ta'sir noto'g'ri");
+      if (effect === 'cost' && (d.section ?? current.section ?? 'warehouse') === 'warehouse') return bad(reply, "Ombor sababi tannarxga yozilmaydi");
+      d.effect = effect; d.charge = effect === 'staff' ? 'staff' : 'company';
+    }
+    for (const k of ['limitQty', 'limitBase']) {
+      if (b[k] === undefined) continue;
+      const n = optNum(b[k]);
+      if (Number.isNaN(n)) return bad(reply, 'Limit musbat son bo\'lsin');
+      d[k === 'limitQty' ? 'limit_qty' : 'limit_base'] = n;
+    }
+    if (b.categoryId !== undefined && Number(b.categoryId)) d.category_id = Number(b.categoryId);
+    if (b.active !== undefined) d.active = Number(!!b.active);
+    if (b.sort !== undefined) d.sort = Number(b.sort) || 0;
+    return d;
+  };
+  app.post('/reasons', need(), async (req, reply) => {
     const name = str(req.body?.name, 60);
     if (!name) return bad(reply, 'Nomi shart');
-    const charge = req.body?.charge === 'staff' ? 'staff' : 'company';
-    const cat = Number(req.body?.categoryId) || db.prepare("SELECT id FROM pnl_categories WHERE code = 'writeoff'").get().id;
-    const id = db.prepare('INSERT INTO stock_reasons (name, charge, category_id, sort) VALUES (?, ?, ?, ?)').run(name, charge, cat, Number(req.body?.sort) || 0).lastInsertRowid;
+    const section = req.body?.section ?? 'warehouse';
+    if (!reasonPerm(req, section)) return reply.code(403).send({ error: "Ruxsat yo'q" });
+    const d = reasonData({ section, ...req.body }, reply);
+    if (reply.sent) return reply;
+    d.name = name;
+    if (!d.category_id) d.category_id = db.prepare('SELECT id FROM pnl_categories WHERE code = ?').get(section === 'warehouse' ? 'writeoff' : 'production_loss').id;
+    const id = db.prepare(`INSERT INTO stock_reasons (${Object.keys(d).join(', ')}) VALUES (${Object.keys(d).map(() => '?').join(', ')})`).run(...Object.values(d)).lastInsertRowid;
+    log(req, 'reason.create', { id, name, section });
     return { id };
   });
-  app.patch('/reasons/:id', need('stock.manage'), async (req, reply) => {
+  app.patch('/reasons/:id', need(), async (req, reply) => {
     const r = db.prepare('SELECT * FROM stock_reasons WHERE id = ?').get(req.params.id);
     if (!r) return reply.code(404).send({ error: 'Topilmadi' });
-    const b = req.body ?? {};
-    db.prepare('UPDATE stock_reasons SET name = COALESCE(?, name), charge = COALESCE(?, charge), category_id = COALESCE(?, category_id), active = COALESCE(?, active) WHERE id = ?')
-      .run(str(b.name, 60), b.charge ? (b.charge === 'staff' ? 'staff' : 'company') : null, Number(b.categoryId) || null, b.active == null ? null : Number(!!b.active), r.id);
+    if (!reasonPerm(req, r.section)) return reply.code(403).send({ error: "Ruxsat yo'q" });
+    const d = reasonData(req.body ?? {}, reply, r);
+    if (reply.sent) return reply;
+    if (req.body?.name !== undefined) { const n = str(req.body.name, 60); if (!n) return bad(reply, 'Nomi shart'); d.name = n; }
+    if (Object.keys(d).length) db.prepare(`UPDATE stock_reasons SET ${Object.keys(d).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...Object.values(d), r.id);
+    log(req, 'reason.update', { id: r.id, name: d.name ?? r.name });
     return { ok: true };
   });
   app.get('/pnl-categories', need('stock.costs'), async () => db.prepare('SELECT * FROM pnl_categories ORDER BY kind, system DESC, name').all());

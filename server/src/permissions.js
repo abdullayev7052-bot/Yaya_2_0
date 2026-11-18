@@ -52,6 +52,12 @@ export const PERMISSIONS = [
   { key: 'stock.manage', group: 'Ombor', label: "Omborlar, mas'ullar, sabablar va ombor sozlamalari; istalgan joy nomidan ishlash" },
   { key: 'alerts.view', group: 'Ombor', label: "Ogohlantirishlarni ko'rish (manfiy qoldiq va boshqalar)" },
 
+  // --- production (Yaya 2.0)
+  { key: 'prod.work', group: 'Ishlab chiqarish', label: "Texnolog: smena ochish, tarkib bo'yicha topshiriq bajarish, smenani yopish" },
+  { key: 'prod.view', group: 'Ishlab chiqarish', label: "Barcha texnolog smenalari va topshiriqlarini ko'rish" },
+  { key: 'prod.approve', group: 'Ishlab chiqarish', label: "Limitdan chiqqan topshiriq va smenani tasdiqlash yoki rad etish" },
+  { key: 'prod.manage', group: 'Ishlab chiqarish', label: "Tarkiblar, separatsiya, yo'qotish sabablari va limitlarni sozlash" },
+
   // --- reports
   { key: 'reports.view', group: 'Hisobotlar', label: 'Hisobotlar, o\'rtacha tannarx, kunlik ko\'rsatkichlar' },
   { key: 'reports.export', group: 'Hisobotlar', label: 'Hisobotni Excel\'ga yuklab olish' },
@@ -95,6 +101,7 @@ export const BUILTIN_ROLES = [
   { code: 'collector', name: 'Sut yig\'uvchi', locked: 0,
     perms: [...COLLECT_PERMS, 'suppliers.card_own', 'suppliers.location', 'payments.create'] },
   { code: 'lab', name: 'Laborant', locked: 0, perms: ['lab.view', 'lab.edit'] },
+  { code: 'technologist', name: 'Texnolog', locked: 0, perms: ['prod.work', 'stock.transfer', 'stock.writeoff'] },
 ];
 
 // v3 permission keys -> v4 keys (used once by the v3 -> v4 migration).

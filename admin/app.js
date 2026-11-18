@@ -210,14 +210,31 @@ async function loadBrand() {
   }
 }
 
-const PAGES = [
-  ['dashboard', 'Bugun', 'reports.view'], ['shifts', 'Smenalar', 'shifts.view_all'], ['purchases', 'Xaridlar', 'reports.view'],
-  ['reports', 'Hisobotlar', 'reports.view'],
-  ['debts', 'Qarzlar va to\'lovlar', 'debts.view'], ['suppliers', 'Xonadonlar', 'suppliers.view'],
-  ['staff', 'Xodimlar', 'staff.manage'], ['roles', 'Rollar va ruxsatlar', 'staff.manage'], ['devices', 'Qurilmalar', 'staff.manage'],
-  ['catalog', 'Sut mahsulotlari', 'catalog.manage'], ['lab', 'Laboratoriya', 'lab.fields'], ['integrations', 'Integratsiya', 'integrations.manage'],
-  ['tester', 'Ilovani sinash', 'tester.use'], ['settings', 'Sozlamalar', null],
+// The panel covers the whole chain. Pages are grouped by part of the business; the
+// top row shows the groups, the second row the pages of the open group.
+// [key, label, permission (one, or a list = any of them), group]
+const GROUPS = [
+  ['home', 'Bosh panel'], ['milk', "Sut yig'ish"], ['prod', 'Ishlab chiqarish'], ['stock', 'Ombor'],
+  ['reports', 'Hisobotlar'], ['admin', 'Boshqaruv'],
 ];
+const PAGES = [
+  ['overview', 'Bosh panel', ['reports.view', 'stock.view_all'], 'home'],
+  ['dashboard', 'Kunlik', 'reports.view', 'milk'], ['shifts', 'Smenalar', 'shifts.view_all', 'milk'], ['purchases', 'Xaridlar', 'reports.view', 'milk'],
+  ['suppliers', 'Xonadonlar', 'suppliers.view', 'milk'], ['debts', "Qarzlar va to'lovlar", 'debts.view', 'milk'],
+  ['catalog', 'Sut mahsulotlari', 'catalog.manage', 'milk'], ['lab', 'Laboratoriya', 'lab.fields', 'milk'],
+  ['reports', "Sut yig'ish hisobotlari", 'reports.view', 'reports'],
+  ['staff', 'Xodimlar', 'staff.manage', 'admin'], ['roles', 'Rollar va ruxsatlar', 'staff.manage', 'admin'], ['devices', 'Qurilmalar', 'staff.manage', 'admin'],
+  ['integrations', 'Integratsiya', 'integrations.manage', 'admin'], ['tester', 'Ilovani sinash', 'tester.use', 'admin'], ['settings', 'Sozlamalar', null, 'admin'],
+];
+const canPage = (p) => !p[2] || [].concat(p[2]).some(can);
+const groupOf = (key) => PAGES.find((p) => p[0] === key)?.[3];
+function drawNav() {
+  const pages = PAGES.filter(canPage);
+  $('#nav').innerHTML = GROUPS.map(([g, t]) => {
+    const first = pages.find((p) => p[3] === g);
+    return first ? `<a href="#${first[0]}" data-group="${g}">${esc(t)}</a>` : '';
+  }).join('');
+}
 
 // Detail pages highlight (and are allowed by) their list page.
 const PAGE_PARENT = { supplier: 'suppliers', shift: 'shifts', 'balance-edit': 'debts' };
@@ -229,7 +246,7 @@ async function show() {
   $('#login').hidden = !!me;
   $('#main').hidden = !me;
   if (!me) return;
-  $('#nav').innerHTML = PAGES.filter((p) => !p[2] || can(p[2])).map(([k, t]) => `<a href="#${k}">${t}</a>`).join('');
+  drawNav();
   $('#whoami').textContent = `${me.name || me.login} · ${me.role}`;
   route();
 }
@@ -1474,16 +1491,22 @@ function importFlow(box) {
 
 const route = act(async () => {
   if (!me) return;
-  const name = location.hash.slice(1).split('?')[0] || 'dashboard';
+  const name = location.hash.slice(1).split('?')[0] || 'overview';
   const parent = PAGE_PARENT[name] ?? name;
-  $$('#nav a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === '#' + parent));
+  const pages = PAGES.filter(canPage);
+  const group = groupOf(parent) ?? groupOf(pages[0]?.[0]);
+  $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.group === group));
+  const inGroup = pages.filter((p) => p[3] === group);
+  const sub = $('#subnav');
+  sub.innerHTML = inGroup.length > 1 ? inGroup.map(([k, t]) => `<a href="#${k}" class="${k === parent ? 'active' : ''}">${esc(t)}</a>`).join('') : '';
+  sub.hidden = inGroup.length <= 1;
   // Each navigation renders into a fresh container, so a slow, older page that
   // finishes loading late can never overwrite the page the user is now on.
   const v = document.createElement('main');
   v.id = 'view';
   v.innerHTML = '<p class="muted">Yuklanmoqda...</p>';
   $('#view').replaceWith(v);
-  const allowed = PAGES.filter((p) => !p[2] || can(p[2])).map((p) => p[0]);
+  const allowed = pages.map((p) => p[0]);
   const target = views[name] && allowed.includes(parent) ? name : allowed[0];
   await views[target](v);
 });

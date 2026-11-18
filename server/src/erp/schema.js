@@ -182,6 +182,95 @@ CREATE TABLE IF NOT EXISTS alerts (
   resolved_by TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_open ON alerts(resolved_at, created_at);
+
+-- ---------------------------------------------------------------- production (stage 2)
+-- A recipe (tarkib): what goes into one base batch. kind 'cook' makes one product
+-- (quyma) from milk and raw materials; 'separation' splits milk into several outputs.
+-- out_min / out_max: allowed output weight (kg) for this base batch; a real batch
+-- is checked against the range scaled by its size (all limits are proportional).
+CREATE TABLE IF NOT EXISTS recipes (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'cook' CHECK (kind IN ('cook','separation')),
+  product_id INTEGER REFERENCES products(id),
+  out_min REAL,
+  out_max REAL,
+  note TEXT,
+  sort INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS recipe_lines (
+  id INTEGER PRIMARY KEY,
+  recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  qty REAL NOT NULL,
+  sort INTEGER NOT NULL DEFAULT 0
+);
+-- Alternatives for a line (another container, another starter...). qty NULL = same amount.
+CREATE TABLE IF NOT EXISTS recipe_alts (
+  line_id INTEGER NOT NULL REFERENCES recipe_lines(id) ON DELETE CASCADE,
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  qty REAL,
+  PRIMARY KEY (line_id, product_id)
+);
+-- Separation outputs and how the cost is split: fixed unit cost (capped, e.g. cream
+-- 42 000 per kg), a percent of the total, or the rest.
+CREATE TABLE IF NOT EXISTS recipe_outputs (
+  id INTEGER PRIMARY KEY,
+  recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  cost_mode TEXT NOT NULL DEFAULT 'rest' CHECK (cost_mode IN ('fixed','percent','rest')),
+  cost_value REAL,
+  sort INTEGER NOT NULL DEFAULT 0
+);
+
+-- A technologist's shift: milk and materials are handed to them; tasks use them;
+-- at the end the milk that is not accounted for is explained by reasons.
+CREATE TABLE IF NOT EXISTS prod_shifts (
+  id INTEGER PRIMARY KEY,
+  uuid TEXT NOT NULL UNIQUE,
+  number INTEGER NOT NULL,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','approval','closed')),
+  opened_at TEXT NOT NULL,
+  closed_at TEXT,
+  close_data TEXT,
+  close_doc_id INTEGER REFERENCES docs(id),
+  approval_note TEXT,
+  approved_by TEXT,
+  note TEXT
+);
+CREATE TABLE IF NOT EXISTS prod_tasks (
+  id INTEGER PRIMARY KEY,
+  uuid TEXT NOT NULL UNIQUE,
+  number INTEGER NOT NULL,
+  shift_id INTEGER NOT NULL REFERENCES prod_shifts(id),
+  recipe_id INTEGER REFERENCES recipes(id),
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','approval','done','cancelled')),
+  plan TEXT,
+  result TEXT,
+  doc_id INTEGER REFERENCES docs(id),
+  milk_qty REAL NOT NULL DEFAULT 0,
+  created_by TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  done_at TEXT,
+  approval_note TEXT,
+  approved_by TEXT,
+  cancel_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_prod_tasks_shift ON prod_tasks(shift_id);
+
+-- Lot lineage: which lots went into a new lot. Used to pass a later cost change
+-- (e.g. boiling loss found at the end of the shift) on to everything made from it.
+CREATE TABLE IF NOT EXISTS lot_sources (
+  lot_id INTEGER NOT NULL REFERENCES lots(id),
+  source_lot_id INTEGER NOT NULL REFERENCES lots(id),
+  qty REAL NOT NULL,
+  doc_id INTEGER REFERENCES docs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_lot_sources_src ON lot_sources(source_lot_id);
 `;
 
 // New columns on the existing products table (the milk products keep kind = 'milk').
@@ -199,6 +288,16 @@ export const PRODUCT_COLUMNS = [
   ['dwell_hours', 'REAL'],
   ['note', 'TEXT'],
 ];
+
+// Added to lots: qty0 = quantity the lot was created with; provisional = cost not
+// final yet (the technologist's shift is still open); shift_id = that shift.
+export const LOT_COLUMNS = [['qty0', 'REAL'], ['provisional', 'INTEGER NOT NULL DEFAULT 0'], ['shift_id', 'INTEGER']];
+// Added to stock_reasons: section = where the reason is offered (warehouse, tech =
+// technologist, pour, reprocess); effect = cost (raises the batch cost), company
+// (expense) or staff (the person pays); limit = limit_qty per limit_base of milk used.
+export const REASON_COLUMNS = [['section', "TEXT NOT NULL DEFAULT 'warehouse'"], ['effect', 'TEXT'], ['limit_qty', 'REAL'], ['limit_base', 'REAL']];
+export const REASON_SECTIONS = { warehouse: 'Ombor', tech: 'Texnolog', pour: 'Quyish', reprocess: 'Qayta ishlash' };
+export const REASON_EFFECTS = { cost: 'Tannarxga (partiya qimmatlashadi)', company: 'Kompaniya xarajatiga', staff: 'Xodim hisobiga' };
 
 export const PRODUCT_KINDS = {
   milk: "Yig'uvchilar suti (yog'li / yog'siz)",
@@ -234,12 +333,15 @@ const SEED_CATEGORIES = [
   ['cost_variance', 'Tannarx farqi (manfiy qoldiq yopilganda)', 'expense'],
   ['reprocess_loss', 'Qayta ishlashda yo\'qotilgan tannarx', 'expense'],
   ['container_loss', 'Idish yo\'qotilishi', 'expense'],
+  ['production_loss', "Ishlab chiqarishdagi yo'qotish", 'expense'],
 ];
 const SEED_REASONS = [['Singan', 'company'], ['Yo\'qolgan', 'company'], ['To\'kilgan (xodim aybi)', 'staff'], ['Muddati o\'tgan', 'company'], ['Boshqa', 'company']];
 
 export function setupErp(db, addColumn) {
   db.exec(ERP_SCHEMA);
   for (const [c, def] of PRODUCT_COLUMNS) addColumn('products', c, def);
+  for (const [c, def] of LOT_COLUMNS) addColumn('lots', c, def);
+  for (const [c, def] of REASON_COLUMNS) addColumn('stock_reasons', c, def);
   seedErp(db);
 }
 
@@ -258,10 +360,18 @@ export function seedErp(db) {
     const ins = db.prepare('INSERT INTO stock_reasons (name, charge, category_id, sort) VALUES (?, ?, ?, ?)');
     SEED_REASONS.forEach(([n, ch], i) => ins.run(n, ch, wo, i));
   }
+  // The technologist's reasons for milk that is not accounted for at the end of a shift.
+  if (!db.prepare("SELECT 1 FROM stock_reasons WHERE section = 'tech'").get()) {
+    const wo = db.prepare("SELECT id FROM pnl_categories WHERE code = 'production_loss'").get().id;
+    const ins = db.prepare("INSERT INTO stock_reasons (name, charge, category_id, sort, section, effect, limit_qty, limit_base) VALUES (?, ?, ?, ?, 'tech', ?, ?, ?)");
+    ins.run('Qaynatishda', 'company', wo, 0, 'cost', 100, 1000);
+    ins.run('Oxladitelda', 'company', wo, 1, 'cost', null, null);
+    ins.run("To'kildi", 'company', wo, 2, 'company', null, null);
+  }
 }
 
 // Every table the warehouse part adds.
 export const ERP_SCHEMA_TABLES = [...ERP_SCHEMA.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)].map((m) => m[1]);
 
 // Tables cleared by "clear all history" (children first).
-export const ERP_HISTORY_TABLES = ['alerts', 'stock_moves', 'pnl_entries', 'party_entries', 'doc_lines', 'lots', 'docs'];
+export const ERP_HISTORY_TABLES = ['alerts', 'lot_sources', 'stock_moves', 'pnl_entries', 'party_entries', 'prod_tasks', 'prod_shifts', 'doc_lines', 'lots', 'docs'];

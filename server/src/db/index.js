@@ -291,6 +291,8 @@ const NEW_ROLE_PERMS = {
 };
 // Yaya 2.0 warehouse permissions for the manager (everything but structure and opening stock).
 NEW_ROLE_PERMS.manager.push('stock.view_all', 'stock.costs', 'stock.transfer', 'stock.inventory', 'stock.writeoff', 'stock.cancel', 'alerts.view');
+// Production (stage 2): the manager sees all shifts and approves over-limit tasks.
+NEW_ROLE_PERMS.manager.push('prod.view', 'prod.approve');
 function backfillNewPermissions(db) {
   for (const [code, keys] of Object.entries(NEW_ROLE_PERMS)) {
     const row = db.prepare('SELECT id, permissions FROM roles WHERE code = ?').get(code);

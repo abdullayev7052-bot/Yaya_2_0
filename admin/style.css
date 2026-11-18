@@ -112,3 +112,9 @@ code { background: color-mix(in srgb, var(--line) 50%, transparent); padding: 1p
   display: grid; place-items: center; overflow: hidden; background: #000; }
 .intro-preview video { width: 100%; height: 100%; object-fit: contain; }
 .intro-preview span { color: var(--muted); background: var(--card); padding: 4px 8px; border-radius: 8px; }
+
+/* ---- second-level navigation (pages of the open group) ---- */
+#subnav { display: flex; gap: 4px; flex-wrap: wrap; padding: 6px 16px; background: var(--card); border-bottom: 1px solid var(--line); }
+#subnav a { padding: 4px 10px; border-radius: 6px; color: var(--muted); text-decoration: none; font-size: 14px; }
+#subnav a.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); font-weight: 600; }
+@media (max-width: 760px) { #subnav { flex-wrap: nowrap; overflow-x: auto; } #subnav a { white-space: nowrap; } }
