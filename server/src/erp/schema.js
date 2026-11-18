@@ -201,7 +201,8 @@ export const PRODUCT_COLUMNS = [
 ];
 
 export const PRODUCT_KINDS = {
-  milk: 'Xom sut',
+  milk: "Yig'uvchilar suti (yog'li / yog'siz)",
+  raw_milk: 'Xom sut (ombor)',
   raw: 'Xomashyo',
   semi: 'Yarim tayyor (quyma)',
   pack: 'Idish / tara',
@@ -239,6 +240,13 @@ const SEED_REASONS = [['Singan', 'company'], ['Yo\'qolgan', 'company'], ['To\'ki
 export function setupErp(db, addColumn) {
   db.exec(ERP_SCHEMA);
   for (const [c, def] of PRODUCT_COLUMNS) addColumn('products', c, def);
+  seedErp(db);
+}
+
+// Reference rows the warehouse part needs. Safe to run again at any time; it is
+// also run after a backup restore, so an older (milk-only) Yaya backup restores
+// into a working Yaya 2.0.
+export function seedErp(db) {
   if (!db.prepare('SELECT 1 FROM units LIMIT 1').get()) {
     const ins = db.prepare('INSERT INTO units (name, short, decimals) VALUES (?, ?, ?)');
     for (const u of SEED_UNITS) ins.run(...u);
@@ -251,6 +259,9 @@ export function setupErp(db, addColumn) {
     SEED_REASONS.forEach(([n, ch], i) => ins.run(n, ch, wo, i));
   }
 }
+
+// Every table the warehouse part adds.
+export const ERP_SCHEMA_TABLES = [...ERP_SCHEMA.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)].map((m) => m[1]);
 
 // Tables cleared by "clear all history" (children first).
 export const ERP_HISTORY_TABLES = ['alerts', 'stock_moves', 'pnl_entries', 'party_entries', 'doc_lines', 'lots', 'docs'];

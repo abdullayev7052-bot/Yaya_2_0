@@ -7,12 +7,12 @@ import { makeGuard } from '../auth.js';
 import { getSetting, setSetting } from '../settings.js';
 import { PRODUCT_KINDS, SHAPES, WAREHOUSE_KINDS } from '../erp/schema.js';
 import {
-  DOC_TYPES, StockError, cancelDoc, createDoc, docDetail, inbox, listDocs, lotReport, milkWarehouse, parseHolder, postDoc,
+  DOC_TYPES, StockError, cancelDoc, createDoc, docDetail, inbox, inventoryPreview, listDocs, lotReport, milkWarehouse, parseHolder, postDoc,
   rejectDoc, staffBalance, stockCard, stockReport, updateDraft,
 } from '../erp/stock.js';
 import { erpImport, erpTemplate, importKinds, templateFile } from '../erp/importer.js';
 
-const COST_KEYS = new Set(['cost', 'unit_cost', 'total_cost', 'amount', 'balance']);
+const COST_KEYS = new Set(['cost', 'unit_cost', 'total_cost', 'amount', 'balance', 'loss', 'surplus']);
 function stripCosts(v) {
   if (Array.isArray(v)) return v.map(stripCosts);
   if (v && typeof v === 'object' && !(v instanceof Buffer)) {
@@ -287,6 +287,7 @@ export default async function erpRoutes(app, { db }) {
     if (b.type === 'inventory') {
       const to = parseHolder(db, b.to);
       if (to && !canActFor(req, to)) return reply.code(403).send({ error: 'Bu omborda inventarizatsiya qila olmaysiz' });
+      if (b.charges !== undefined && !has(req, 'stock.costs')) return reply.code(403).send({ error: "Kamomadni taqsimlash uchun ruxsat yo'q" });
     }
     try {
       const d = createDoc(db, b, { actor: req.actor, userId: req.me.id });
@@ -310,7 +311,21 @@ export default async function erpRoutes(app, { db }) {
     const perm = TYPE_PERM[d.type];
     if (!perm || !has(req, perm)) return reply.code(403).send({ error: 'Ruxsat yo\'q' });
     if (d.type === 'inventory' && !canActFor(req, { warehouseId: d.to_wh })) return reply.code(403).send({ error: 'Ruxsat yo\'q' });
-    try { postDoc(db, d.id, req.actor); log(req, 'doc.post', { id: d.id }); return docDetail(db, d.id); } catch (e) { return stockErr(reply, e); }
+    // Who pays an inventory shortage (company / staff / split) is decided with the sums,
+    // so only someone who sees costs decides it; others save the count as a draft.
+    const charges = req.body?.charges;
+    if (charges !== undefined && !has(req, 'stock.costs')) return reply.code(403).send({ error: "Kamomadni taqsimlash uchun ruxsat yo'q" });
+    try {
+      postDoc(db, d.id, req.actor, charges === undefined ? {} : { charges });
+      log(req, 'doc.post', { id: d.id, charges });
+      return docDetail(db, d.id);
+    } catch (e) { return stockErr(reply, e); }
+  });
+  // What posting an inventory count would change (differences; the value only with stock.costs).
+  app.get('/docs/:id/preview', need('stock.inventory'), async (req, reply) => {
+    const d = loadDoc(req, reply); if (!d) return reply;
+    if (!canActFor(req, { warehouseId: d.to_wh })) return reply.code(403).send({ error: "Ruxsat yo'q" });
+    try { return inventoryPreview(db, d.id); } catch (e) { return stockErr(reply, e); }
   });
   // The receiver accepts a hand-over: only now does it move.
   const isReceiver = (req, d) => (d.to_user === req.me.id) || (d.to_wh && keeperOf(req.me.id).includes(d.to_wh)) || has(req, 'stock.manage');

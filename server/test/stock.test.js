@@ -17,20 +17,26 @@ async function base(app, db, ids, { allowNegative = false } = {}) {
 const opening = (app, h, warehouseId, lines, extra = {}) => call(app, 'POST', '/api/erp/docs', h, { type: 'opening', to: { warehouseId }, lines, ...extra });
 const qtyAt = async (app, h, q) => (await call(app, 'GET', `/api/erp/stock?${new URLSearchParams(q)}`, h)).body.rows;
 
-test('accepted milk enters the raw-milk warehouse at what households are owed; test shifts do not', async () => {
+test("accepted milk (yog'li + yog'siz) enters the warehouse as one Xom sut at the shift average; test shifts do not", async () => {
   const { app, db } = setup();
   const h = await ali(app);
   const b = await boss(app);
-  await runShift(app, h, 'm1', [{ supplierId: 1, quantity: 20 }, { supplierId: 2, quantity: 10 }], { close: true });
+  await runShift(app, h, 'm1', [{ supplierId: 1, quantity: 20 }, { supplierId: 2, quantity: 10 }, { supplierId: 1, productId: 2, quantity: 10 }], { close: true });
   const shift = db.prepare("SELECT id FROM shifts WHERE client_uuid = 'm1'").get().id;
-  // real quantity 29 kg instead of the written 30: the company still pays for 30
+  // real yog'li sut 29 kg instead of the written 30: the company still pays for 30
   assert.equal((await call(app, 'POST', `/api/admin/shifts/${shift}/accept`, b, { real: { 1: 29 } })).status, 200);
   const wh = db.prepare("SELECT id, name FROM warehouses WHERE kind = 'raw_milk'").get();
   assert.equal(wh.name, 'Xom sut ombori', 'created on first use');
   const rows = await qtyAt(app, b, { warehouseId: wh.id });
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].qty, 29);
-  assert.equal(rows[0].cost, 20 * 5000 + 10 * 6000, 'cost = what the households are owed');
+  assert.equal(rows.length, 1, 'one product in the warehouse');
+  assert.equal(rows[0].product, 'Xom sut');
+  assert.equal(rows[0].qty, 39);
+  const owed = 20 * 5000 + 10 * 6000 + 10 * 3000;
+  assert.equal(rows[0].cost, owed, 'cost = what the households are owed');
+  assert.equal(rows[0].unit_cost, Math.round((owed / 39) * 100) / 100, "unit cost = this shift's real average");
+  // the panel's milk-collection product list stays Yog'li / Yog'siz sut only
+  const panel = (await call(app, 'GET', '/api/admin/products', b)).body;
+  assert.deepEqual(panel.map((p) => p.name).sort(), ["Yog'li sut", "Yog'siz sut"]);
   const doc = db.prepare("SELECT * FROM docs WHERE type = 'milk_in'").get();
   assert.equal(doc.source, 'shift');
   assert.equal((await call(app, 'POST', `/api/erp/docs/${doc.id}/cancel`, b, { reason: 'x' })).status, 400, 'shift milk cannot be cancelled here');
@@ -40,7 +46,7 @@ test('accepted milk enters the raw-milk warehouse at what households are owed; t
   await runShift(app, t, 't1', [{ supplierId: 1, quantity: 5 }], { close: true });
   const ts = db.prepare("SELECT id FROM shifts WHERE client_uuid = 't1'").get().id;
   await call(app, 'POST', `/api/admin/shifts/${ts}/accept`, b, {});
-  assert.equal((await qtyAt(app, b, { warehouseId: wh.id }))[0].qty, 29);
+  assert.equal((await qtyAt(app, b, { warehouseId: wh.id }))[0].qty, 39);
   // collectors still only see milk products
   const boot = (await call(app, 'GET', '/api/mobile/bootstrap', h)).body;
   assert.ok(boot.products.every((p) => p.name.includes('sut')));
@@ -161,14 +167,51 @@ test('inventory: partial counts only listed items, full zeroes the rest; surplus
   assert.equal(rows.find((r) => r.product_id === idish).qty, 100, 'partial: uncounted items untouched');
 
   // full count lists only the cups (95): the jars not counted become 0
-  const full = (await call(app, 'POST', '/api/erp/docs', b, { type: 'inventory', mode: 'full', to: { warehouseId: fin }, post: true, lines: [{ productId: idish, qty: 95 }] })).body;
+  const full = (await call(app, 'POST', '/api/erp/docs', b, { type: 'inventory', mode: 'full', to: { warehouseId: fin }, post: true, charges: [], lines: [{ productId: idish, qty: 95 }] })).body;
   assert.equal(full.lines.length, 2);
   rows = await qtyAt(app, b, { warehouseId: fin });
   assert.equal(rows.length, 1);
   assert.equal(rows[0].qty, 95);
   const sum = (code) => db.prepare('SELECT COALESCE(SUM(e.amount), 0) a FROM pnl_entries e JOIN pnl_categories c ON c.id = e.category_id WHERE c.code = ?').get(code).a;
   assert.equal(sum('stock_surplus'), 2 * 7000);
-  assert.equal(sum('stock_loss'), 12 * 7000 + 5 * 800);
+  assert.equal(sum('stock_loss'), 12 * 7000 + 5 * 800, 'charges: [] = all to the company');
+});
+
+test('inventory shortage: asked every time; company, one person, or split by sums', async () => {
+  const { app, db, ids } = setup();
+  const { b, fin, smetana } = await base(app, db, ids);
+  await opening(app, b, fin, [{ productId: smetana, qty: 10, unitCost: 7000 }]);
+  const s = await store(app);
+  const draft = (await call(app, 'POST', '/api/erp/docs', s, { type: 'inventory', to: { warehouseId: fin }, lines: [{ productId: smetana, qty: 7 }] })).body;
+  // preview: the storekeeper sees the difference, never the sum
+  const pv = await call(app, 'GET', `/api/erp/docs/${draft.id}/preview`, s);
+  assert.equal(pv.status, 200);
+  assert.equal(pv.body.lines[0].diff, -3);
+  assert.equal(pv.body.loss, undefined);
+  assert.equal((await call(app, 'GET', `/api/erp/docs/${draft.id}/preview`, b)).body.loss, 21000);
+  assert.equal(db.prepare("SELECT status FROM docs WHERE id = ?").get(draft.id).status, 'draft', 'preview changes nothing');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM stock_moves WHERE doc_id = ?').get(draft.id).n, 0);
+  // posting a shortage without a decision is refused, with the amount for the screen
+  const ask = await call(app, 'POST', `/api/erp/docs/${draft.id}/post`, b, {});
+  assert.equal(ask.status, 400);
+  assert.equal(ask.body.details.needDecision, true);
+  assert.equal(ask.body.details.loss, 21000);
+  // the storekeeper cannot split sums
+  assert.equal((await call(app, 'POST', `/api/erp/docs/${draft.id}/post`, s, { charges: [] })).status, 403);
+  // more than the shortage cannot be charged
+  assert.equal((await call(app, 'POST', `/api/erp/docs/${draft.id}/post`, b, { charges: [{ userId: ids.ali, amount: 30000 }] })).status, 400);
+  // split: 15 000 to Ali, 4 000 to the storekeeper, the rest (2 000) to the company
+  const ok = await call(app, 'POST', `/api/erp/docs/${draft.id}/post`, b, { charges: [{ userId: ids.ali, amount: 15000 }, { userId: ids.store, amount: 4000 }] });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.charges.length, 2);
+  assert.equal((await call(app, 'GET', `/api/erp/staff-balance/${ids.ali}`, b)).body.balance, 15000);
+  assert.equal((await call(app, 'GET', `/api/erp/staff-balance/${ids.store}`, b)).body.balance, 4000);
+  const loss = db.prepare("SELECT SUM(e.amount) a FROM pnl_entries e JOIN pnl_categories c ON c.id = e.category_id WHERE c.code = 'stock_loss'").get().a;
+  assert.equal(loss, 2000);
+  // cancelling reverses all of it
+  assert.equal((await call(app, 'POST', `/api/erp/docs/${draft.id}/cancel`, b, { reason: 'Qayta sanaladi' })).status, 200);
+  assert.equal((await call(app, 'GET', `/api/erp/staff-balance/${ids.ali}`, b)).body.balance, 0);
+  assert.equal((await qtyAt(app, b, { warehouseId: fin }))[0].qty, 10);
 });
 
 test('a posted receipt cannot be cancelled once its goods moved on', async () => {
@@ -230,4 +273,25 @@ test('Excel: products and opening stock are checked first, then imported', async
   // the storekeeper cannot import opening stock
   assert.equal((await call(app, 'POST', '/api/erp/import/opening', await store(app), { file: op })).status, 403);
   void now;
+});
+
+test('a backup of the original (milk-only) Yaya restores into Yaya 2.0 and keeps working', async () => {
+  const { snapshot, restore } = await import('../src/backup.js');
+  const { ERP_SCHEMA_TABLES } = await import('../src/erp/schema.js');
+  const { app, db } = setup();
+  const b = await boss(app);
+  const snap = snapshot(db);
+  // what an old Yaya file looks like: no warehouse tables, products without the new columns
+  for (const t of ERP_SCHEMA_TABLES) delete snap.tables[t];
+  snap.tables.products = snap.tables.products.map(({ id, name, unit, active, created_at }) => ({ id, name, unit, active, created_at }));
+  restore(db, snap);
+  assert.ok(db.prepare('SELECT COUNT(*) n FROM units').get().n > 0, 'reference rows seeded again');
+  assert.ok(db.prepare('SELECT COUNT(*) n FROM stock_reasons').get().n > 0);
+  assert.deepEqual(db.prepare('SELECT DISTINCT kind FROM products').all().map((r) => r.kind), ['milk']);
+  // milk collection and the warehouse both work after the restore
+  const h = await ali(app);
+  await runShift(app, h, 'r1', [{ supplierId: 1, quantity: 10 }], { close: true });
+  const shift = db.prepare("SELECT id FROM shifts WHERE client_uuid = 'r1'").get().id;
+  assert.equal((await call(app, 'POST', `/api/admin/shifts/${shift}/accept`, b, {})).status, 200);
+  assert.equal((await qtyAt(app, b, { kind: 'raw_milk' }))[0].qty, 10);
 });

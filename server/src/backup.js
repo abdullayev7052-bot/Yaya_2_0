@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { SCHEMA_VERSION } from './db/index.js';
-import { ERP_HISTORY_TABLES } from './erp/schema.js';
+import { ERP_HISTORY_TABLES, seedErp } from './erp/schema.js';
 
 // Hard cap on decompressed backup size (this app's data is a few MB; 256 MB is
 // far above any legitimate backup) so a decompression bomb cannot OOM the server.
@@ -36,7 +36,10 @@ export function snapshot(db) {
 const revive = (v) => (v && typeof v === 'object' && typeof v.__b64 === 'string' ? Buffer.from(v.__b64, 'base64') : v);
 
 // Replace all data with the snapshot's. Columns are matched by name, so a
-// snapshot from the same schema restores exactly.
+// snapshot from the same schema restores exactly. A backup of the original
+// (milk-only) Yaya has no warehouse tables: they stay empty, new product columns
+// take their defaults (every old product is a collectors' milk product), and the
+// warehouse reference rows are seeded again.
 export function restore(db, snap) {
   if (snap?.app !== 'yaya' || typeof snap.tables !== 'object') throw new Error('Bu Yaya zaxira fayli emas');
   if (snap.schema > SCHEMA_VERSION) throw new Error(`Zaxira yangiroq versiyadan (${snap.schema}). Avval serverni yangilang.`);
@@ -55,6 +58,7 @@ export function restore(db, snap) {
       }
       const broken = db.pragma('foreign_key_check');
       if (broken.length) throw new Error(`Zaxira ichidagi bog'lanishlar buzilgan (${broken.length} ta)`);
+      seedErp(db);
     })();
   } finally {
     db.pragma('foreign_keys = ON');

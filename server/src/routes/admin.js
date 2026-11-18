@@ -370,7 +370,9 @@ export default async function adminRoutes(app, { db }) {
     }
   });
 
-  app.get('/products', need(), async () => db.prepare('SELECT * FROM products ORDER BY active DESC, name').all());
+  // Milk collection only deals with what collectors bring (Yog'li / Yog'siz sut);
+  // warehouse products (Xom sut, raw materials, containers...) live in the Ombor section.
+  app.get('/products', need(), async () => db.prepare("SELECT * FROM products WHERE kind = 'milk' ORDER BY active DESC, name").all());
   app.post('/products', need('catalog.manage'), async (req, reply) => {
     const name = str(req.body?.name, 60);
     if (!name) return bad(reply, 'Nomi shart');
@@ -379,7 +381,7 @@ export default async function adminRoutes(app, { db }) {
     return { id };
   });
   app.patch('/products/:id', need('catalog.manage'), async (req, reply) => {
-    const p = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
+    const p = db.prepare("SELECT * FROM products WHERE id = ? AND kind = 'milk'").get(req.params.id);
     if (!p) return reply.code(404).send({ error: 'Topilmadi' });
     db.prepare('UPDATE products SET name = COALESCE(?, name), unit = COALESCE(?, unit), active = COALESCE(?, active) WHERE id = ?')
       .run(str(req.body?.name, 60), str(req.body?.unit, 10), req.body?.active == null ? null : Number(!!req.body.active), p.id);
@@ -397,6 +399,7 @@ export default async function adminRoutes(app, { db }) {
     const { supplierId, productId, isDefault } = req.body ?? {};
     const price = Number(req.body?.price);
     if (!supplierId || !productId || !Number.isFinite(price) || price < 0 || price > 1e9) return bad(reply, 'Narx noto\'g\'ri');
+    if (!db.prepare("SELECT 1 FROM products WHERE id = ? AND kind = 'milk'").get(productId)) return bad(reply, 'Narx faqat yig\'uvchilar suti uchun belgilanadi');
     db.transaction(() => {
       if (isDefault) db.prepare('UPDATE supplier_products SET is_default = 0 WHERE supplier_id = ?').run(supplierId);
       db.prepare(`INSERT INTO supplier_products (supplier_id, product_id, price, is_default) VALUES (?, ?, ?, ?)

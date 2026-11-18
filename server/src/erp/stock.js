@@ -274,7 +274,7 @@ export function createDoc(db, input, { actor, userId = null }) {
     lines.forEach((l, i) => ins.run(id, l.productId, l.qty, l.unitCost, l.expiresAt, l.meta ? JSON.stringify(l.meta) : null, i));
     // Inventory counts start as drafts unless asked to post; the rest post right away unless asked not to.
     const shouldPost = status === 'draft' && (type === 'inventory' ? input.post === true : input.post !== false);
-    if (shouldPost) postDocTx(db, id, actor);
+    if (shouldPost) postDocTx(db, id, actor, input.charges === undefined ? {} : { charges: input.charges });
     return id;
   });
   return getDoc(db, run());
@@ -296,12 +296,48 @@ export function updateDraft(db, id, input) {
   return getDoc(db, id);
 }
 
-export function postDoc(db, id, actor) {
-  db.transaction(() => postDocTx(db, id, actor))();
+// opts.charges (inventory only): who pays the shortage, [{ userId, amount }]; what is
+// left goes to the company. A shortage is never booked silently: posting an
+// inventory with a shortage and no decision is refused with the amounts, so the
+// screen can ask. [] = all to the company.
+export function postDoc(db, id, actor, opts = {}) {
+  db.transaction(() => postDocTx(db, id, actor, opts))();
   return getDoc(db, id);
 }
 
-function postDocTx(db, id, actor) {
+// What posting an inventory draft would do (book, counted, difference, value),
+// without changing anything: it is posted inside a transaction that is rolled back.
+const PREVIEW = Symbol('preview');
+export function inventoryPreview(db, id) {
+  const d = getDoc(db, id);
+  if (!d || d.type !== 'inventory') throw new StockError('Inventarizatsiya topilmadi');
+  if (d.status !== 'draft') throw new StockError('Faqat qoralama uchun');
+  let out;
+  try {
+    db.transaction(() => {
+      const r = postDocTx(db, id, 'preview', { charges: [] });
+      out = { ...r, lines: docDetail(db, id).lines.filter((l) => Math.abs(l.diff ?? 0) > EPS) };
+      throw PREVIEW;
+    })();
+  } catch (e) { if (e !== PREVIEW) throw e; }
+  return out;
+}
+
+function cleanCharges(db, charges, loss) {
+  if (!Array.isArray(charges)) throw new StockError("Xodimlar hisobi noto'g'ri");
+  const out = new Map();
+  for (const c of charges) {
+    const userId = Number(c?.userId); const amount = r2(c?.amount);
+    if (!Number.isInteger(userId) || !db.prepare('SELECT 1 FROM users WHERE id = ?').get(userId)) throw new StockError('Xodim topilmadi');
+    if (!Number.isFinite(amount) || amount < 0) throw new StockError("Summa noto'g'ri");
+    out.set(userId, r2((out.get(userId) ?? 0) + amount));
+  }
+  const total = r2([...out.values()].reduce((a, x) => a + x, 0));
+  if (total > r2(loss) + 0.01) throw new StockError(`Xodimlarga yozilgan summa (${total}) kamomaddan (${r2(loss)}) ko'p`, { loss: r2(loss) });
+  return { list: [...out].map(([userId, amount]) => ({ userId, amount })), total };
+}
+
+function postDocTx(db, id, actor, opts = {}) {
   const d = getDoc(db, id);
   if (!d) throw new StockError('Hujjat topilmadi');
   const okFrom = d.type === 'transfer' ? 'sent' : 'draft';
@@ -309,6 +345,7 @@ function postDocTx(db, id, actor) {
   const at = d.type === 'opening' || d.type === 'inventory' ? d.doc_date : nowIso();
   const ctx = { doc: d, at, touched: new Set() };
   const lines = linesOf(db, id);
+  let result = {};
 
   if (d.type === 'opening' || d.type === 'milk_in') {
     const to = toOf(d);
@@ -353,12 +390,24 @@ function postDocTx(db, id, actor) {
         loss += takeOut(db, ctx, { productId: l.product_id, h: wh, qty: -diff, lineId: l.id, kind: 'shortage' }).reduce((a, t) => a + t.cost, 0);
       }
     }
-    if (d.charge_user) chargeStaff(db, ctx, d.charge_user, loss, 'inventory', 'Inventarizatsiya kamomadi');
-    else pnl(db, ctx, 'stock_loss', loss);
+    loss = r2(loss); surplus = r2(surplus);
+    if (loss > 0.004) {
+      let charges = opts.charges;
+      if (charges === undefined && d.charge_user) charges = [{ userId: d.charge_user, amount: loss }];
+      if (charges === undefined) {
+        throw new StockError('Kamomad chiqdi: kim hisobiga yozilishini tanlang', { needDecision: true, loss, surplus });
+      }
+      const { list, total } = cleanCharges(db, charges, loss);
+      for (const c of list) chargeStaff(db, ctx, c.userId, c.amount, 'inventory', 'Inventarizatsiya kamomadi');
+      pnl(db, ctx, 'stock_loss', loss - total);
+      if (list.length) db.prepare('UPDATE docs SET meta = ? WHERE id = ?').run(JSON.stringify({ ...meta(d.meta), charges: list }), id);
+    }
     pnl(db, ctx, 'stock_surplus', surplus);
+    result = { loss, surplus };
   }
   db.prepare("UPDATE docs SET status = 'posted', posted_by = ?, posted_at = ? WHERE id = ?").run(actor, nowIso(), id);
   negativeAlerts(db, ctx);
+  return result;
 }
 
 // Receiver declines a hand-over: nothing moves, the sender keeps the goods.
@@ -423,24 +472,36 @@ export function milkWarehouse(db) {
   return w;
 }
 
-// Called inside the shift-accept transaction: the accepted (real) quantity enters
-// the raw-milk warehouse at what the households are owed for it. A real quantity
-// below what was written raises the unit cost — the company paid for the full amount.
+// The warehouse product all collected milk becomes ("Xom sut").
+export function rawMilkProduct(db) {
+  const id = db.prepare("SELECT id FROM products WHERE kind = 'raw_milk' ORDER BY active DESC, id LIMIT 1").get()?.id;
+  if (id) return id;
+  return Number(db.prepare("INSERT INTO products (name, unit, kind) VALUES ('Xom sut', 'kg', 'raw_milk')").run().lastInsertRowid);
+}
+
+// Called inside the shift-accept transaction. Whatever the collector brought
+// (Yog'li sut, Yog'siz sut...) enters the raw-milk warehouse as ONE product, "Xom sut":
+// quantity = the accepted (real) quantities added up, cost = what the households are
+// owed for this shift. So the unit cost is this shift's real average: a real quantity
+// below what was written raises it (the company paid for the full amount), a surplus
+// lowers it.
 export function receiveShiftMilk(db, shiftId, actor) {
   const s = db.prepare('SELECT sh.*, u.is_test FROM shifts sh JOIN users u ON u.id = sh.employee_id WHERE sh.id = ?').get(shiftId);
   if (!s || s.is_test) return null;
   const uuid = `shift-${s.client_uuid}`;
   if (db.prepare('SELECT 1 FROM docs WHERE uuid = ?').get(uuid)) return null;
-  const rows = db.prepare(`SELECT product_id, ROUND(SUM(quantity), 3) AS qty, SUM(ROUND(quantity * price)) AS amount
-    FROM collections WHERE shift_uuid = ? GROUP BY product_id`).all(s.client_uuid);
+  const rows = db.prepare(`SELECT c.product_id, p.name, ROUND(SUM(c.quantity), 3) AS qty, SUM(ROUND(c.quantity * c.price)) AS amount
+    FROM collections c JOIN products p ON p.id = c.product_id WHERE c.shift_uuid = ? GROUP BY c.product_id`).all(s.client_uuid);
   const real = new Map(db.prepare('SELECT product_id, real_quantity FROM shift_accepts WHERE shift_id = ?').all(s.id).map((r) => [r.product_id, r.real_quantity]));
-  const lines = rows.map((r) => ({ productId: r.product_id, qty: r3(real.get(r.product_id) ?? r.qty), cost: r2(r.amount ?? 0) })).filter((l) => l.qty > EPS);
-  if (!lines.length) return null;
+  const parts = rows.map((r) => ({ productId: r.product_id, name: r.name, written: r.qty, qty: r3(real.get(r.product_id) ?? r.qty), cost: r2(r.amount ?? 0) }));
+  const qty = r3(parts.reduce((a, x) => a + x.qty, 0));
+  const cost = r2(parts.reduce((a, x) => a + x.cost, 0));
+  if (qty <= EPS) return null;
   const wh = milkWarehouse(db);
   const id = Number(db.prepare(`INSERT INTO docs (uuid, type, number, status, doc_date, to_wh, source, note, created_by)
     VALUES (?, 'milk_in', ?, 'draft', ?, ?, 'shift', ?, ?)`).run(uuid, nextNumber(db, 'milk_in'), nowIso(), wh, `Smena #${s.number}${s.copy_no ? `-${s.copy_no}` : ''}`, actor).lastInsertRowid);
-  const ins = db.prepare('INSERT INTO doc_lines (doc_id, product_id, qty, unit_cost, meta, sort) VALUES (?, ?, ?, ?, ?, ?)');
-  lines.forEach((l, i) => ins.run(id, l.productId, l.qty, l.cost / l.qty, JSON.stringify({ cost: l.cost, shiftId: s.id }), i));
+  db.prepare('INSERT INTO doc_lines (doc_id, product_id, qty, unit_cost, meta, sort) VALUES (?, ?, ?, ?, ?, 0)')
+    .run(id, rawMilkProduct(db), qty, cost / qty, JSON.stringify({ cost, shiftId: s.id, parts }));
   postDocTx(db, id, actor);
   return id;
 }
@@ -462,6 +523,7 @@ export function docDetail(db, id) {
     total_cost: r2(lines.reduce((a, l) => a + (l.cost ?? 0), 0)),
     reason: d.reason_id ? db.prepare('SELECT name FROM stock_reasons WHERE id = ?').get(d.reason_id)?.name : null,
     charge_user_name: d.charge_user ? holderName(db, { userId: d.charge_user }) : null,
+    charges: (meta(d.meta).charges ?? []).map((c) => ({ ...c, name: holderName(db, { userId: c.userId }) })),
   };
 }
 
