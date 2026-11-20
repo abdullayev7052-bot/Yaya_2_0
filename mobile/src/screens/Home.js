@@ -8,6 +8,7 @@ import { Debts, Lab, LabDetail, MyPayments, Payments, ShiftDetail, Shifts, Today
 import { PaymentForm, SupplierCard } from './Supplier';
 import { InventoryForm, Stock, StockForm, canStock } from './Stock';
 import { CloseShift, NewTask, Production, TaskScreen, canProduce } from './Production';
+import { AlertBanner } from '../AlertBanner';
 import { C, s } from '../ui';
 
 // One app for all staff. The sections shown depend only on the person's permissions:
@@ -101,6 +102,7 @@ export default function Home({ tick, refresh, onLogout }) {
           <Text style={s.muted} numberOfLines={1}>{me?.name || me?.login} · {me?.role}</Text>
         </View>
       )}
+      {(canProduce() || canStock() || api.can('alerts.view')) && <AlertBanner tick={tick} />}
       {!!toast && <View style={{ backgroundColor: C.ok, padding: 12 }}><Text style={{ color: '#fff', fontSize: 17, fontWeight: '700' }}>{toast}</Text></View>}
       <View style={{ flex: 1 }}>{body}</View>
       {chrome && tabs.length > 1 && (

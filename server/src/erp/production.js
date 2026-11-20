@@ -14,12 +14,22 @@
 // - until the shift is closed the output lots are provisional; a cost change is
 //   passed on to whatever was already made from them (lot_sources);
 // - every limit is proportional: set for a base amount, scaled to the real one.
-//   Out of range → the task / shift waits for a manager's approval.
+//   Out of range → the task / shift waits for a manager's approval;
+// - pour / cap tasks (stage 3) are written per 1 unit: the batch is the number of
+//   units. Piece rates (per unit) are part of the cost and become the workers'
+//   wages, split equally between everyone who did the task; cancelling the task
+//   cancels the wages. The output can go straight on as a hand-over (e.g. to the
+//   incubator), which the receiver accepts.
 import { randomUUID } from 'node:crypto';
 import {
-  StockError, addAlert, addIn, cancelDocTx, chargeStaff, getDoc, holderName, insertMove, lastUnitCost, nextNumber, pnl,
+  StockError, addAlert, addIn, cancelDocTx, chargeStaff, getDoc, holderName, insertMove, lastUnitCost, nextNumber, parseHolder, pnl,
   productBalance, r2, r3, rawMilkProduct, takeOut,
 } from './stock.js';
+
+export const RECIPE_KINDS = { cook: 'Tayyorlash (quyma)', separation: 'Separatsiya', pour: 'Quyish (idishga)', cap: 'Qopqoq yopish' };
+// Which permission runs which kind of task.
+export const KIND_PERM = { cook: 'prod.work', separation: 'prod.work', pour: 'prod.pour', cap: 'prod.cap' };
+export const PER_UNIT = new Set(['pour', 'cap']);
 
 const EPS = 0.0005;
 const nowIso = () => new Date().toISOString();
@@ -45,22 +55,31 @@ export function recipeDetail(db, id) {
   }));
   const outputs = db.prepare(`SELECT o.*, p.name AS product, p.unit FROM recipe_outputs o JOIN products p ON p.id = o.product_id
     WHERE o.recipe_id = ? ORDER BY o.sort, o.id`).all(id);
+  const rates = db.prepare('SELECT id, name, amount FROM recipe_rates WHERE recipe_id = ? ORDER BY sort, id').all(id);
   const baseWeight = r3(lines.reduce((a, l) => a + weightKg(product(db, l.product_id), l.qty), 0));
   const baseMilk = r3(lines.filter((l) => l.product_kind === 'raw_milk').reduce((a, l) => a + l.qty, 0));
-  return { ...r, lines, outputs, base_weight: baseWeight, base_milk: baseMilk };
+  return { ...r, kind_label: RECIPE_KINDS[r.kind] ?? r.kind, lines, outputs, rates, rate_total: r2(rates.reduce((a, x) => a + x.amount, 0)), base_weight: baseWeight, base_milk: baseMilk };
 }
 
-export function listRecipes(db, { all = false } = {}) {
-  return db.prepare(`SELECT id FROM recipes ${all ? '' : 'WHERE active = 1'} ORDER BY active DESC, sort, name`).all().map((r) => recipeDetail(db, r.id));
+export function listRecipes(db, { all = false, kinds = null } = {}) {
+  return db.prepare(`SELECT id, kind FROM recipes ${all ? '' : 'WHERE active = 1'} ORDER BY active DESC, sort, name`).all()
+    .filter((r) => !kinds || kinds.includes(r.kind)).map((r) => recipeDetail(db, r.id));
 }
 
 const num = (v) => (v == null || v === '' ? null : Number(v));
 export function saveRecipe(db, id, b) {
   const name = String(b?.name ?? '').trim().slice(0, 120);
   if (!name) throw new StockError('Tarkib nomini yozing');
-  const kind = b.kind === 'separation' ? 'separation' : 'cook';
+  const kind = RECIPE_KINDS[b.kind] ? b.kind : 'cook';
   const productId = num(b.productId);
-  if (kind === 'cook' && !product(db, productId)) throw new StockError('Chiqadigan mahsulotni tanlang');
+  if (kind !== 'separation' && !product(db, productId)) throw new StockError('Chiqadigan mahsulotni tanlang');
+  const maxMinutes = num(b.maxMinutes);
+  if (maxMinutes != null && !(maxMinutes > 0)) throw new StockError('Muddat (daqiqa) musbat bo\'lsin');
+  const rates = (Array.isArray(b.rates) ? b.rates : []).filter((x) => String(x?.name ?? '').trim()).map((x) => {
+    const amount = Number(x.amount);
+    if (!(amount >= 0)) throw new StockError(`${x.name}: ishbay haq noto'g'ri`);
+    return { name: String(x.name).trim().slice(0, 60), amount };
+  });
   const outMin = num(b.outMin); const outMax = num(b.outMax);
   if ((outMin != null && !(outMin >= 0)) || (outMax != null && !(outMax >= 0)) || (outMin != null && outMax != null && outMin > outMax)) {
     throw new StockError('Chiqish chegarasi noto\'g\'ri (eng kami ≤ eng ko\'pi)');
@@ -97,14 +116,17 @@ export function saveRecipe(db, id, b) {
     let rid = id;
     if (rid) {
       if (!db.prepare('SELECT 1 FROM recipes WHERE id = ?').get(rid)) throw new StockError('Tarkib topilmadi');
-      db.prepare('UPDATE recipes SET name = ?, kind = ?, product_id = ?, out_min = ?, out_max = ?, note = ?, active = COALESCE(?, active), sort = COALESCE(?, sort) WHERE id = ?')
-        .run(name, kind, kind === 'cook' ? productId : null, outMin, outMax, b.note ?? null, b.active == null ? null : Number(!!b.active), num(b.sort), rid);
+      db.prepare('UPDATE recipes SET name = ?, kind = ?, product_id = ?, out_min = ?, out_max = ?, max_minutes = ?, note = ?, active = COALESCE(?, active), sort = COALESCE(?, sort) WHERE id = ?')
+        .run(name, kind, kind !== 'separation' ? productId : null, outMin, outMax, maxMinutes, b.note ?? null, b.active == null ? null : Number(!!b.active), num(b.sort), rid);
       db.prepare('DELETE FROM recipe_lines WHERE recipe_id = ?').run(rid);
       db.prepare('DELETE FROM recipe_outputs WHERE recipe_id = ?').run(rid);
+      db.prepare('DELETE FROM recipe_rates WHERE recipe_id = ?').run(rid);
     } else {
-      rid = Number(db.prepare('INSERT INTO recipes (name, kind, product_id, out_min, out_max, note, sort) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .run(name, kind, kind === 'cook' ? productId : null, outMin, outMax, b.note ?? null, num(b.sort) ?? 0).lastInsertRowid);
+      rid = Number(db.prepare('INSERT INTO recipes (name, kind, product_id, out_min, out_max, max_minutes, note, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(name, kind, kind !== 'separation' ? productId : null, outMin, outMax, maxMinutes, b.note ?? null, num(b.sort) ?? 0).lastInsertRowid);
     }
+    const insR = db.prepare('INSERT INTO recipe_rates (recipe_id, name, amount, sort) VALUES (?, ?, ?, ?)');
+    rates.forEach((x, i) => insR.run(rid, x.name, x.amount, i));
     const insL = db.prepare('INSERT INTO recipe_lines (recipe_id, product_id, qty, sort) VALUES (?, ?, ?, ?)');
     const insA = db.prepare('INSERT OR IGNORE INTO recipe_alts (line_id, product_id, qty) VALUES (?, ?, ?)');
     lines.forEach((l, i) => {
@@ -153,6 +175,10 @@ function taskRow(db, t) {
     id: t.id, uuid: t.uuid, number: t.number, label: `TQ-${t.number}`, shift_id: t.shift_id, recipe_id: t.recipe_id, recipe, kind: t.kind, status: t.status,
     factor: plan.factor ?? 1, plan: (plan.lines ?? []).map((l) => ({ ...l, product: product(db, l.productId)?.name, unit: product(db, l.productId)?.unit })),
     result, outputs, milk_qty: t.milk_qty, doc_id: t.doc_id, created_at: t.created_at, done_at: t.done_at,
+    workers: (result?.workers ?? []).map((id) => ({ id, name: holderName(db, { userId: id }) })),
+    wages: t.doc_id ? db.prepare("SELECT party_id AS user_id, -SUM(amount) AS amount FROM party_entries WHERE doc_id = ? GROUP BY party_id").all(t.doc_id)
+      .filter((w) => Math.abs(w.amount) >= 0.005).map((w) => ({ ...w, name: holderName(db, { userId: w.user_id }) })) : [],
+    send_to: result?.sendTo ? holderName(db, result.sendTo) : null,
     approval_note: t.approval_note, approved_by: t.approved_by, cancel_reason: t.cancel_reason,
   };
 }
@@ -185,7 +211,7 @@ export const taskDetail = (db, id) => { const t = getTask(db, id); return t ? ta
 
 // A task starts from a recipe: lines scaled by factor (or by the milk to use);
 // any line may be changed for this batch, or swapped for one of its alternatives.
-export function createTask(db, { uuid, shiftId, recipeId, factor, milkQty, lines }, { actor }) {
+export function createTask(db, { uuid, shiftId, recipeId, factor, milkQty, units, lines }, { actor, allowedKinds = null }) {
   const u = String(uuid || randomUUID()).slice(0, 80);
   const ex = db.prepare('SELECT * FROM prod_tasks WHERE uuid = ?').get(u);
   if (ex) return ex;
@@ -193,8 +219,10 @@ export function createTask(db, { uuid, shiftId, recipeId, factor, milkQty, lines
   if (!s || s.status !== 'open') throw new StockError('Smena ochiq emas');
   const r = recipeDetail(db, Number(recipeId));
   if (!r || !r.active) throw new StockError('Tarkib topilmadi');
+  if (allowedKinds && !allowedKinds.includes(r.kind)) throw new StockError('Bu turdagi topshiriq uchun ruxsatingiz yo\'q');
   let f = Number(factor) || 1;
-  if (milkQty != null && milkQty !== '') {
+  if (PER_UNIT.has(r.kind) && units != null) f = Number(units);
+  if (milkQty != null && milkQty !== '' && !PER_UNIT.has(r.kind)) {
     if (!(r.base_milk > 0)) throw new StockError('Bu tarkibda xom sut yo\'q; miqdorni koeffitsiyent bilan bering');
     f = Number(milkQty) / r.base_milk;
   }
@@ -251,9 +279,9 @@ export function completeTask(db, taskId, body, { actor, approve = false }) {
     const plan = J(t.plan);
     const inputs = cleanQtyLines(db, b?.lines ?? plan.lines, 'Xomashyo');
     let outputs;
-    if (r.kind === 'cook') {
-      const q = r3(b?.outputQty ?? b?.outputs?.[0]?.qty);
-      if (!(q > 0)) throw new StockError('Chiqqan mahsulot og\'irligini kiriting');
+    if (r.kind !== 'separation') {
+      const q = r3(b?.outputQty ?? b?.outputs?.[0]?.qty ?? (PER_UNIT.has(r.kind) ? plan.factor : null));
+      if (!(q > 0)) throw new StockError(PER_UNIT.has(r.kind) ? 'Nechta chiqqanini kiriting' : 'Chiqqan mahsulot og\'irligini kiriting');
       outputs = [{ productId: r.product_id, qty: q, mode: 'rest' }];
     } else {
       const given = new Map((b?.outputs ?? []).map((o) => [Number(o.productId), r3(o.qty)]));
@@ -263,21 +291,40 @@ export function completeTask(db, taskId, body, { actor, approve = false }) {
     const range = outputRange(db, r, inputs);
     const outWeight = r3(outputs.reduce((a, o) => a + weightKg(product(db, o.productId), o.qty), 0));
     const outside = range && ((range.min != null && outWeight < range.min - EPS) || (range.max != null && outWeight > range.max + EPS));
-    const stored = { lines: inputs, outputs: outputs.map((o) => ({ productId: o.productId, qty: o.qty })), outputQty: r.kind === 'cook' ? outputs[0].qty : undefined, note: b?.note ?? null };
+    // Who did it: everyone listed shares the piece rate equally (default: the shift owner).
+    const workers = [...new Set((Array.isArray(b?.workers) && b.workers.length ? b.workers : [s.user_id]).map(Number))];
+    for (const w of workers) if (!db.prepare('SELECT 1 FROM users WHERE id = ? AND active = 1').get(w)) throw new StockError('Xodim topilmadi');
+    let sendTo = null;
+    if (b?.sendTo) {
+      sendTo = parseHolder(db, b.sendTo);
+      if (!sendTo) throw new StockError('Qayerga topshirilishini tanlang');
+      if (sendTo.userId === s.user_id) sendTo = null;
+    }
+    const stored = { lines: inputs, outputs: outputs.map((o) => ({ productId: o.productId, qty: o.qty })), outputQty: r.kind !== 'separation' ? outputs[0].qty : undefined,
+      workers, sendTo, note: b?.note ?? null };
     if (outside && !approve) {
       db.prepare("UPDATE prod_tasks SET status = 'approval', result = ? WHERE id = ?").run(JSON.stringify({ ...stored, range, outWeight }), t.id);
       addAlert(db, 'prod.limit', `TQ-${t.number} (${r.name}): chiqish ${outWeight} kg, ruxsat ${range.min ?? '—'}–${range.max ?? '—'} kg. Tasdiqlang yoki rad eting.`,
         { taskId: t.id, shiftId: s.id });
       return { needApproval: true, range, outWeight, task: taskRow(db, getTask(db, t.id)) };
     }
-    postProduction(db, t, s, r, inputs, outputs, actor, b?.note);
+    const docId = postProduction(db, t, s, r, inputs, outputs, actor, b?.note, workers);
+    if (sendTo) {
+      // Straight on to the next step (incubator, finished goods, next worker): a hand-over they accept.
+      stored.transferId = Number(db.prepare(`INSERT INTO docs (uuid, type, number, status, doc_date, from_user, to_wh, to_user, note, created_by, created_by_id)
+        VALUES (?, 'transfer', ?, 'sent', ?, ?, ?, ?, ?, ?, ?)`).run(`task-send-${t.uuid}`, nextNumber(db, 'transfer'), nowIso(), s.user_id, sendTo.warehouseId ?? null,
+        sendTo.userId ?? null, `TQ-${t.number}: ${r.name}`, actor, s.user_id).lastInsertRowid);
+      const ins = db.prepare('INSERT INTO doc_lines (doc_id, product_id, qty, sort) VALUES (?, ?, ?, ?)');
+      outputs.filter((o) => o.qty > 0).forEach((o, i) => ins.run(stored.transferId, o.productId, o.qty, i));
+    }
+    void docId;
     db.prepare("UPDATE prod_tasks SET status = 'done', result = ?, done_at = ? WHERE id = ?").run(JSON.stringify({ ...stored, range, outWeight }), nowIso(), t.id);
     if (approve) closeAlerts(db, 'taskId', t.id, actor);
     return { task: taskRow(db, getTask(db, t.id)) };
   })();
 }
 
-function postProduction(db, t, s, r, inputs, outputs, actor, note) {
+function postProduction(db, t, s, r, inputs, outputs, actor, note, workers = [s.user_id]) {
   const h = { userId: s.user_id };
   const id = Number(db.prepare(`INSERT INTO docs (uuid, type, number, status, doc_date, from_user, to_user, source, note, created_by)
     VALUES (?, 'production', ?, 'draft', ?, ?, ?, 'production', ?, ?)`).run(`task-${t.uuid}`, nextNumber(db, 'production'), nowIso(), s.user_id, s.user_id,
@@ -291,6 +338,20 @@ function postProduction(db, t, s, r, inputs, outputs, actor, note) {
     for (const x of takeOut(db, ctx, { productId: l.productId, h, qty: l.qty, lineId: lid, kind: 'consume' })) { total += x.cost; taken.push(x); }
     if (product(db, l.productId).kind === 'raw_milk') milk += l.qty;
   });
+  // Piece rates: part of the cost, owed to the workers (split equally).
+  if (r.kind !== 'separation' && r.rates.length) {
+    const units = outputs.reduce((a, o) => a + o.qty, 0);
+    const wage = r2(r.rate_total * units);
+    if (wage > 0) {
+      total += wage;
+      let left = wage;
+      workers.forEach((w, i) => {
+        const share = i === workers.length - 1 ? r2(left) : r2(wage / workers.length);
+        left -= share;
+        chargeStaff(db, ctx, w, -share, 'piece', `TQ-${t.number}: ${r.rates.map((x) => x.name).join(', ')} (${r3(units)} × ${r.rate_total}${workers.length > 1 ? ` ÷ ${workers.length}` : ''})`);
+      });
+    }
+  }
   total = r2(total);
   // Cost of each output.
   const costs = new Map();
@@ -307,17 +368,20 @@ function postProduction(db, t, s, r, inputs, outputs, actor, note) {
   // Fixed outputs worth more than the whole batch: the gap is a cost variance.
   if (rest < 0 || !restOuts.length) pnl(db, ctx, 'cost_variance', !restOuts.length ? rest : rest, `${r.name}: tannarx taqsimoti farqi`);
   const outQty = outputs.reduce((a, o) => a + o.qty, 0);
+  // Final only when the shift that made it closes; a pour from a finished quyma is final already.
+  const provisional = !PER_UNIT.has(r.kind) || taken.some((x) => x.lotId && db.prepare('SELECT provisional FROM lots WHERE id = ?').get(x.lotId)?.provisional);
   outputs.filter((o) => o.qty > 0).forEach((o, i) => {
     const lid = Number(insLine.run(id, o.productId, o.qty, JSON.stringify({ role: 'out', mode: o.mode }), 100 + i).lastInsertRowid);
     const c = costs.get(o.productId) ?? 0;
     const lot = addIn(db, ctx, { productId: o.productId, h, qty: o.qty, cost: c, lineId: lid, kind: 'produce',
-      lot: { unitCost: c / o.qty, seq: i + 1, provisional: 1, shiftId: s.id } });
+      lot: { unitCost: c / o.qty, seq: i + 1, provisional: provisional ? 1 : 0, shiftId: s.id } });
     const share = o.qty / outQty;
     const ins = db.prepare('INSERT INTO lot_sources (lot_id, source_lot_id, qty, doc_id) VALUES (?, ?, ?, ?)');
     for (const x of taken) if (x.lotId) ins.run(lot, x.lotId, r3(x.qty * share), id);
   });
   db.prepare("UPDATE docs SET status = 'posted', posted_by = ?, posted_at = ? WHERE id = ?").run(actor, nowIso(), id);
   db.prepare('UPDATE prod_tasks SET doc_id = ?, milk_qty = ? WHERE id = ?').run(id, r3(milk), t.id);
+  return id;
 }
 
 export function rejectTaskApproval(db, taskId, actor, note) {
@@ -349,6 +413,9 @@ export function cancelTask(db, taskId, actor, reason) {
       if (db.prepare('SELECT 1 FROM lot_sources ls JOIN lots l ON l.id = ls.source_lot_id WHERE l.doc_id = ? LIMIT 1').get(t.doc_id)) {
         throw new StockError('Bu topshiriqdan chiqqan mahsulot keyingi ishlab chiqarishda ishlatilgan');
       }
+      const sent = J(t.result)?.transferId ? getDoc(db, J(t.result).transferId) : null;
+      if (sent?.status === 'posted') throw new StockError('Mahsulot keyingi bosqichda qabul qilingan; avval u yerdan qaytaring');
+      if (sent?.status === 'sent') db.prepare("UPDATE docs SET status = 'cancelled', cancelled_by = ?, cancelled_at = ?, cancel_reason = ? WHERE id = ?").run(actor, nowIso(), 'Topshiriq bekor qilindi', sent.id);
       cancelDocTx(db, getDoc(db, t.doc_id), actor, reason);
       db.prepare('DELETE FROM lot_sources WHERE doc_id = ?').run(t.doc_id);
     }

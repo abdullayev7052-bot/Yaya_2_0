@@ -12,7 +12,8 @@ import { C, fmtQty, s } from '../ui';
 // No sums anywhere — the server does not send them to the technologist.
 
 const prod = (method, path, body, opts) => api.erp(method, `/prod${path}`, body, opts);
-export const canProduce = () => api.can('prod.work');
+export const canProduce = () => api.canAny('prod.work', 'prod.pour', 'prod.cap');
+const PER_UNIT = new Set(['pour', 'cap']);
 
 const TASK = { open: ['Jarayonda', C.warn], approval: ['Rahbar tasdig\'ini kutmoqda', C.warn], done: ['Bajarildi', C.ok], cancelled: ['Bekor qilingan', C.err] };
 function Badge({ map, status }) {
@@ -44,7 +45,7 @@ export function Production({ tick, onTask, onNew, onClose }) {
       {data && !sh && (
         <View style={[s.card, { gap: 12 }]}>
           <Text style={s.h2}>Smena ochilmagan</Text>
-          <Text style={s.muted}>Sut va xomashyoni omborchidan "Ombor" bo'limida qabul qiling, keyin smenani oching.</Text>
+          <Text style={s.muted}>Kerakli mahsulotni (sut, quyma, idish, etiketka, qopqoq...) "Ombor" bo'limida qabul qiling, keyin smenani oching.</Text>
           <Btn title="Smena ochish" onPress={open} />
         </View>
       )}
@@ -56,8 +57,12 @@ export function Production({ tick, onTask, onNew, onClose }) {
               {sh.status === 'approval' && <Badge map={{ approval: ['Rahbar tasdig\'ini kutmoqda', C.warn] }} status="approval" />}
             </View>
             <Text style={s.muted}>Ochildi {fmtDT(sh.opened_at)}</Text>
-            <Text style={s.text}>Qo'lingizda {sh.milk.product}: <Text style={{ fontWeight: '700' }}>{fmtQty(sh.milk.in_hands)} kg</Text></Text>
-            <Text style={s.text}>Topshiriqlarda ishlatildi: <Text style={{ fontWeight: '700' }}>{fmtQty(sh.milk.used)} kg</Text></Text>
+            {(sh.milk.in_hands !== 0 || sh.milk.used > 0) && (
+              <>
+                <Text style={s.text}>Qo'lingizda {sh.milk.product}: <Text style={{ fontWeight: '700' }}>{fmtQty(sh.milk.in_hands)} kg</Text></Text>
+                <Text style={s.text}>Topshiriqlarda ishlatildi: <Text style={{ fontWeight: '700' }}>{fmtQty(sh.milk.used)} kg</Text></Text>
+              </>
+            )}
             {!!sh.approval_note && <Text style={{ color: C.err }}>Rahbar: {sh.approval_note}</Text>}
           </View>
           {sh.status === 'open' && <Btn title="+ Yangi topshiriq" onPress={onNew} />}
@@ -81,14 +86,15 @@ export function Production({ tick, onTask, onNew, onClose }) {
 
 // ---------------------------------------------------------------- new task
 export function NewTask({ onBack, onDone }) {
-  const { data: recipes, err } = useLoad(() => prod('GET', '/recipes'), []);
+  const { data: recipes, err } = useLoad(() => prod('GET', '/recipes?mine=1'), []);
   const [rid, setRid] = useState(null);
   const [milk, setMilk] = useState('');
-  const [factor, setFactor] = useState('1');
+  const [factor, setFactor] = useState('');
   const [over, setOver] = useState({});
   const [busy, setBusy] = useState(false);
   const r = recipes?.find((x) => x.id === rid);
-  const f = r ? (r.base_milk > 0 ? toNumber(milk || 0) / r.base_milk : toNumber(factor || 0)) : 0;
+  const perUnit = r && PER_UNIT.has(r.kind);
+  const f = r ? (r.base_milk > 0 && !perUnit ? toNumber(milk || 0) / r.base_milk : toNumber(factor || 0)) : 0;
   const lines = r ? r.lines.map((l) => {
     const o = over[l.id] ?? {};
     const pid = o.productId ?? l.product_id;
@@ -102,7 +108,7 @@ export function NewTask({ onBack, onDone }) {
     setBusy(true);
     try {
       const t = await prod('POST', '/tasks', {
-        uuid: randomUUID(), recipeId: r.id, ...(r.base_milk > 0 ? { milkQty: toNumber(milk) } : { factor: toNumber(factor) }),
+        uuid: randomUUID(), recipeId: r.id, ...(perUnit ? { units: toNumber(factor) } : r.base_milk > 0 ? { milkQty: toNumber(milk) } : { factor: toNumber(factor) }),
         lines: lines.map((x) => ({ lineId: x.l.id, productId: x.pid, ...(x.qty !== String(x.auto) ? { qty: toNumber(x.qty) } : {}) })),
       }, { idempotent: true });
       onDone(t.id);
@@ -122,15 +128,15 @@ export function NewTask({ onBack, onDone }) {
         </View>
         {r && (
           <View style={[s.card, { gap: 8 }]}>
-            {r.base_milk > 0 ? (
+            {r.base_milk > 0 && !perUnit ? (
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                 <Text style={s.text}>Necha kg sut?</Text>
                 <Num value={milk} onChange={setMilk} unit="kg" />
               </View>
             ) : (
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Text style={s.text}>Necha partiya?</Text>
-                <Num value={factor} onChange={setFactor} unit="×" />
+                <Text style={s.text}>{perUnit ? 'Nechta dona?' : 'Necha partiya?'}</Text>
+                <Num value={factor} onChange={setFactor} unit={perUnit ? 'dona' : '×'} />
               </View>
             )}
             <Text style={s.muted}>Tarkib bo'yicha (shu partiya uchun o'zgartirish mumkin):</Text>
@@ -162,20 +168,29 @@ export function NewTask({ onBack, onDone }) {
 export function TaskScreen({ id, onBack, onDone }) {
   const { data, err, load } = useLoad(async () => {
     const t = await prod('GET', `/tasks/${id}`);
-    const r = t.recipe_id ? await prod('GET', `/recipes/${t.recipe_id}`) : null;
-    return { t, r };
+    const [r, meta] = await Promise.all([t.recipe_id ? prod('GET', `/recipes/${t.recipe_id}`) : null, api.erp('GET', '/meta')]);
+    return { t, r, meta };
   }, [id]);
+  const me = api.me();
+  const [workers, setWorkers] = useState(null);
+  const [sendTo, setSendTo] = useState(undefined);
   const [qty, setQty] = useState({});
   const [out, setOut] = useState({});
   const [busy, setBusy] = useState(false);
-  const t = data?.t; const r = data?.r;
+  const t = data?.t; const r = data?.r; const meta = data?.meta;
+  const perUnit = r && PER_UNIT.has(r.kind);
+  const team = workers ?? [me?.id];
+  // Next step: incubator first for pouring, finished goods for capping.
+  const order = r?.kind === 'pour' ? ['incubator', 'finished'] : ['finished', 'incubator'];
+  const places = meta ? [...meta.warehouses].sort((a, b) => (order.indexOf(a.kind) + 1 || 9) - (order.indexOf(b.kind) + 1 || 9)) : [];
+  const target = sendTo === undefined ? (perUnit && places[0] && order.includes(places[0].kind) ? { warehouseId: places[0].id } : null) : sendTo;
   const inputs = useMemo(() => (t ? t.plan.map((l) => ({ ...l, qty: qty[l.productId] ?? String(l.qty) })) : []), [t, qty]);
   if (!t) return <View style={{ flex: 1 }}><Header title="Topshiriq" onBack={onBack} /><Err err={err} /></View>;
   const inWeight = inputs.reduce((a, l) => a + weightKg(l.unit, toNumber(l.qty || 0)), 0);
   const scale = r?.base_weight > 0 ? inWeight / r.base_weight : 1;
-  const range = r && (r.out_min != null || r.out_max != null) ? { min: r.out_min == null ? null : r.out_min * scale, max: r.out_max == null ? null : r.out_max * scale } : null;
+  const range = r && !PER_UNIT.has(r.kind) && (r.out_min != null || r.out_max != null) ? { min: r.out_min == null ? null : r.out_min * scale, max: r.out_max == null ? null : r.out_max * scale } : null;
   const outs = r?.kind === 'separation' ? r.outputs.map((o) => ({ productId: o.product_id, name: o.product, unit: o.unit })) : [{ productId: r?.product_id, name: r?.product, unit: r?.unit }];
-  const outWeight = outs.reduce((a, o) => a + weightKg(o.unit, toNumber(out[o.productId] || 0)), 0);
+  const outWeight = perUnit ? toNumber(out[r.product_id] ?? String(t.factor)) : outs.reduce((a, o) => a + weightKg(o.unit, toNumber(out[o.productId] || 0)), 0);
   const outside = range && outWeight > 0 && ((range.min != null && outWeight < range.min - 0.0005) || (range.max != null && outWeight > range.max + 0.0005));
   const editable = t.status === 'open';
 
@@ -183,8 +198,10 @@ export function TaskScreen({ id, onBack, onDone }) {
     setBusy(true);
     try {
       const body = { lines: inputs.map((l) => ({ productId: l.productId, qty: toNumber(l.qty) })) };
-      if (r.kind === 'cook') body.outputQty = toNumber(out[r.product_id]);
+      if (r.kind !== 'separation') body.outputQty = toNumber(out[r.product_id] ?? (perUnit ? String(t.factor) : 0));
       else body.outputs = outs.map((o) => ({ productId: o.productId, qty: toNumber(out[o.productId] || 0) }));
+      if (r.rates?.length) body.workers = team;
+      if (target) body.sendTo = target;
       const res = await prod('POST', `/tasks/${t.id}/complete`, body);
       onDone(res.needApproval ? `${t.label}: chiqish limitdan tashqarida — rahbar tasdig'iga yuborildi` : `${t.label} bajarildi`);
     } catch (e) { notify('Xatolik', e.message); load(); } finally { setBusy(false); }
@@ -210,16 +227,38 @@ export function TaskScreen({ id, onBack, onDone }) {
           ))}
         </View>
         <View style={[s.card, { gap: 6 }]}>
-          <Text style={s.muted}>{r?.kind === 'separation' ? 'Nima chiqdi (tarozida)' : 'Tayyor quyma og\'irligi (tarozida)'}</Text>
+          <Text style={s.muted}>{r?.kind === 'separation' ? 'Nima chiqdi (tarozida)' : perUnit ? 'Nechta chiqdi' : 'Tayyor quyma og\'irligi (tarozida)'}</Text>
           {t.status === 'done' ? t.outputs.map((o) => <Text key={o.product_id} style={s.text}>{o.product}: <Text style={{ fontWeight: '700' }}>{fmtQty(o.qty)} {o.unit}</Text></Text>) : outs.map((o) => (
             <View key={o.productId} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
               <Text style={[s.text, { flex: 1 }]}>{o.name}</Text>
-              {editable ? <Num value={out[o.productId] ?? ''} unit={o.unit} onChange={(v) => setOut((x) => ({ ...x, [o.productId]: v }))} /> : null}
+              {editable ? <Num value={out[o.productId] ?? (perUnit ? String(t.factor) : '')} unit={o.unit} onChange={(v) => setOut((x) => ({ ...x, [o.productId]: v }))} /> : null}
             </View>
           ))}
           {range && editable && <Text style={{ color: outside ? C.err : C.muted }}>Ruxsat etilgan: {fmtQty(range.min ?? 0)} – {range.max == null ? '∞' : fmtQty(range.max)} kg{outside ? ' — chegaradan tashqarida, rahbar tasdiqlaydi' : ''}</Text>}
           {t.status === 'approval' && <Text style={{ color: C.warn }}>Chiqish chegaradan tashqarida. Rahbar tasdiqlashini kuting.</Text>}
         </View>
+        {editable && !!r?.rates?.length && (
+          <View style={[s.card, { gap: 8 }]}>
+            <Text style={s.muted}>Kim bilan birga bajardingiz? (ishbay haq teng bo'linadi)</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+              {(meta?.staff ?? []).map((u) => (
+                <Chip key={u.id} label={u.id === me?.id ? `${u.name} (men)` : u.name} on={team.includes(u.id)}
+                  onPress={() => setWorkers(team.includes(u.id) ? (team.length > 1 ? team.filter((x) => x !== u.id) : team) : [...team, u.id])} />
+              ))}
+            </View>
+            <Text style={s.muted}>{team.length} kishi</Text>
+          </View>
+        )}
+        {editable && (
+          <View style={[s.card, { gap: 8 }]}>
+            <Text style={s.muted}>Tayyor mahsulot qayerga o'tadi?</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+              <Chip label="O'zimda qoladi" on={!target} onPress={() => setSendTo(null)} />
+              {places.map((w) => <Chip key={w.id} label={w.name} on={target?.warehouseId === w.id} onPress={() => setSendTo({ warehouseId: w.id })} />)}
+            </View>
+            {!!target && <Text style={s.muted}>Mas'ul xodim qabul qilgach o'tadi.</Text>}
+          </View>
+        )}
         {editable && <Btn title={busy ? '...' : 'Yakunlash'} onPress={finish} disabled={busy || !(outWeight > 0 || outs.some((o) => toNumber(out[o.productId] || 0) > 0))} />}
         {(t.status === 'open' || t.status === 'done' || t.status === 'approval') && <Btn title="Bekor qilish" kind="warn" onPress={cancel} />}
       </ScrollView>
@@ -246,6 +285,8 @@ export function CloseShift({ onBack, onDone }) {
   const explained = toNumber(returned || 0) + reasons.reduce((a, r) => a + toNumber(loss[r.id] || 0), 0);
   const left = Math.round((inHands - explained) * 1000) / 1000;
   const openTasks = shift.tasks.filter((t) => t.status === 'open' || t.status === 'approval');
+  // Pourers and cappers use no milk: nothing to explain, the shift just closes.
+  const noMilk = inHands === 0 && shift.milk.used === 0;
 
   const submit = async () => {
     setBusy(true);
@@ -262,6 +303,13 @@ export function CloseShift({ onBack, onDone }) {
       <Header title={`${shift.label} — yopish`} onBack={onBack} />
       <ScrollView contentContainerStyle={{ padding: 12, gap: 12 }} keyboardShouldPersistTaps="handled">
         {openTasks.length > 0 && <Text style={s.err}>Avval ochiq topshiriqlarni yakunlang: {openTasks.map((t) => t.label).join(', ')}</Text>}
+        {noMilk ? (
+          <View style={[s.card, { gap: 6 }]}>
+            <Text style={s.text}>Bu smenada sut ishlatilmagan.</Text>
+            <Text style={s.muted}>Qo'lingizda qolgan mahsulotni (quyma, idish...) "Ombor" bo'limida omborga yoki keyingi xodimga topshiring.</Text>
+          </View>
+        ) : (
+          <>
         <View style={[s.card, { gap: 6 }]}>
           <Text style={s.text}>Hisob bo'yicha qo'lingizda: <Text style={{ fontWeight: '700' }}>{fmtQty(inHands)} kg</Text> {shift.milk.product}</Text>
           <Text style={s.muted}>Topshiriqlarda ishlatildi {fmtQty(shift.milk.used)} kg. Qolgan sut qayerga ketganini yozing.</Text>
@@ -296,6 +344,8 @@ export function CloseShift({ onBack, onDone }) {
         <Text style={{ fontSize: 18, fontWeight: '700', color: left > 0.0005 ? C.err : left < -0.0005 ? C.ok : C.ok }}>
           {left > 0.0005 ? `Hisobsiz qoldi: ${fmtQty(left)} kg` : left < -0.0005 ? `Yutish: +${fmtQty(-left)} kg (hisobdagidan ko'p)` : 'Hammasi hisoblandi'}
         </Text>
+          </>
+        )}
         <Btn title={busy ? '...' : 'Smenani yopish'} onPress={submit} disabled={busy || left > 0.0005 || openTasks.length > 0} />
       </ScrollView>
     </View>

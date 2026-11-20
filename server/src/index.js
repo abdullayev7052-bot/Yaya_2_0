@@ -4,6 +4,7 @@ import { buildApp } from './app.js';
 import { jwtSecret } from './settings.js';
 import { pruneSafety } from './backup.js';
 import { startBots } from './integrations.js';
+import { runChecks } from './erp/watch.js';
 
 const {
   PORT = '3000',
@@ -38,6 +39,8 @@ if (RESET_DEVICES_FOR) {
 
 const app = buildApp({ db, jwtSecret: jwtSecret(db, JWT_SECRET), logger: true });
 setInterval(() => pruneSafety(db), 6 * 3600e3).unref();
+// Incubator dwell time and late production tasks: checked every minute.
+setInterval(() => runChecks(db), 60e3).unref();
 // Start the Telegram bots (household + backup). No-op until tokens are configured.
 startBots(db);
 

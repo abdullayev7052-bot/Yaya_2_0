@@ -6,7 +6,7 @@ import { audit } from '../db/index.js';
 import { makeGuard } from '../auth.js';
 import { StockError } from '../erp/stock.js';
 import {
-  approvals, approveShift, approveTask, cancelTask, closeShift, completeTask, createTask, listRecipes, listShifts, myShift, openShift,
+  KIND_PERM, approvals, approveShift, approveTask, cancelTask, closeShift, completeTask, createTask, listRecipes, listShifts, myShift, openShift,
   recipeDetail, rejectShiftApproval, rejectTaskApproval, saveRecipe, shiftDetail, taskDetail,
 } from '../erp/production.js';
 import { stripCosts } from './erp.js';
@@ -23,15 +23,20 @@ export default async function productionRoutes(app, { db }) {
   app.addHook('preSerialization', async (req, reply, payload) => (req.me && !req.me.perms.has('stock.costs') ? stripCosts(payload) : payload));
 
   const viewAll = (req) => has(req, 'prod.view') || has(req, 'prod.approve') || has(req, 'prod.manage');
+  // Kinds of task this person may run: technologist (cook, separation), pourer, capper.
+  const myKinds = (req) => Object.entries(KIND_PERM).filter(([, p]) => has(req, p)).map(([k]) => k);
+  const worker = (req) => myKinds(req).length > 0;
+  const needWorker = async (req, reply) => { if (!worker(req)) return deny(reply); return undefined; };
   const shiftOfTask = (id) => db.prepare('SELECT s.* FROM prod_tasks t JOIN prod_shifts s ON s.id = t.shift_id WHERE t.id = ?').get(id);
 
   // ---------------------------------------------------------------- recipes
   app.get('/recipes', need(), async (req, reply) => {
-    if (!has(req, 'prod.work') && !viewAll(req)) return deny(reply);
-    return listRecipes(db, { all: req.query.all === '1' && has(req, 'prod.manage') });
+    if (!worker(req) && !viewAll(req)) return deny(reply);
+    if (viewAll(req) && req.query.mine !== '1') return listRecipes(db, { all: req.query.all === '1' && has(req, 'prod.manage') });
+    return listRecipes(db, { kinds: myKinds(req) });
   });
   app.get('/recipes/:id', need(), async (req, reply) => {
-    if (!has(req, 'prod.work') && !viewAll(req)) return deny(reply);
+    if (!worker(req) && !viewAll(req)) return deny(reply);
     return recipeDetail(db, Number(req.params.id)) ?? reply.code(404).send({ error: 'Topilmadi' });
   });
   app.post('/recipes', need('prod.manage'), async (req, reply) => run(reply, () => {
@@ -46,11 +51,11 @@ export default async function productionRoutes(app, { db }) {
   }));
 
   // ---------------------------------------------------------------- my shift (technologist)
-  app.get('/shift', need('prod.work'), async (req) => {
+  app.get('/shift', { ...need(), preHandler: [need().preHandler, needWorker].flat() }, async (req) => {
     const s = myShift(db, req.me.id);
     return { shift: s ? shiftDetail(db, s.id) : null };
   });
-  app.post('/shift', need('prod.work'), async (req, reply) => run(reply, () => {
+  app.post('/shift', { ...need(), preHandler: [need().preHandler, needWorker].flat() }, async (req, reply) => run(reply, () => {
     const s = openShift(db, { uuid: req.body?.uuid, userId: req.me.id });
     log(req, 'prod.shift.open', { id: s.id, number: s.number });
     return { shift: shiftDetail(db, s.id) };
@@ -58,7 +63,7 @@ export default async function productionRoutes(app, { db }) {
   app.post('/shifts/:id/close', need(), async (req, reply) => {
     const s = db.prepare('SELECT * FROM prod_shifts WHERE id = ?').get(Number(req.params.id));
     if (!s) return reply.code(404).send({ error: 'Topilmadi' });
-    if (s.user_id !== req.me.id || !has(req, 'prod.work')) return deny(reply);
+    if (s.user_id !== req.me.id || !worker(req)) return deny(reply);
     return run(reply, () => {
       const r = closeShift(db, s.id, req.body ?? {}, { actor: req.actor });
       log(req, r.needApproval ? 'prod.shift.approval' : 'prod.shift.close', { id: s.id, number: s.number });
@@ -89,11 +94,11 @@ export default async function productionRoutes(app, { db }) {
   }));
 
   // ---------------------------------------------------------------- tasks
-  app.post('/tasks', need('prod.work'), async (req, reply) => {
+  app.post('/tasks', { ...need(), preHandler: [need().preHandler, needWorker].flat() }, async (req, reply) => {
     const s = myShift(db, req.me.id);
     if (!s) return bad(reply, 'Avval smena oching');
     return run(reply, () => {
-      const t = createTask(db, { ...req.body, shiftId: s.id }, { actor: req.actor });
+      const t = createTask(db, { ...req.body, shiftId: s.id }, { actor: req.actor, allowedKinds: myKinds(req) });
       log(req, 'prod.task.create', { id: t.id, number: t.number });
       return taskDetail(db, t.id);
     });
@@ -104,7 +109,7 @@ export default async function productionRoutes(app, { db }) {
     if (shiftOfTask(t.id)?.user_id !== req.me.id && !viewAll(req)) return deny(reply);
     return t;
   });
-  app.post('/tasks/:id/complete', need('prod.work'), async (req, reply) => {
+  app.post('/tasks/:id/complete', { ...need(), preHandler: [need().preHandler, needWorker].flat() }, async (req, reply) => {
     const s = shiftOfTask(Number(req.params.id));
     if (!s) return reply.code(404).send({ error: 'Topilmadi' });
     if (s.user_id !== req.me.id) return deny(reply);
@@ -117,7 +122,7 @@ export default async function productionRoutes(app, { db }) {
   app.post('/tasks/:id/cancel', need(), async (req, reply) => {
     const s = shiftOfTask(Number(req.params.id));
     if (!s) return reply.code(404).send({ error: 'Topilmadi' });
-    if (!(s.user_id === req.me.id && has(req, 'prod.work')) && !has(req, 'prod.approve')) return deny(reply);
+    if (!(s.user_id === req.me.id && worker(req)) && !has(req, 'prod.approve')) return deny(reply);
     return run(reply, () => {
       const r = cancelTask(db, Number(req.params.id), req.actor, req.body?.reason);
       log(req, 'prod.task.cancel', { id: Number(req.params.id), reason: req.body?.reason });

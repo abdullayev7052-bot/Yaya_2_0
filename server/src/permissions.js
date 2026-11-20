@@ -54,6 +54,8 @@ export const PERMISSIONS = [
 
   // --- production (Yaya 2.0)
   { key: 'prod.work', group: 'Ishlab chiqarish', label: "Texnolog: smena ochish, tarkib bo'yicha topshiriq bajarish, smenani yopish" },
+  { key: 'prod.pour', group: 'Ishlab chiqarish', label: "Quyuvchi: idishga quyish topshiriqlari (ishbay haq bilan)" },
+  { key: 'prod.cap', group: 'Ishlab chiqarish', label: "Qopqoq yopuvchi: qopqoq yopish topshiriqlari (ishbay haq bilan)" },
   { key: 'prod.view', group: 'Ishlab chiqarish', label: "Barcha texnolog smenalari va topshiriqlarini ko'rish" },
   { key: 'prod.approve', group: 'Ishlab chiqarish', label: "Limitdan chiqqan topshiriq va smenani tasdiqlash yoki rad etish" },
   { key: 'prod.manage', group: 'Ishlab chiqarish', label: "Tarkiblar, separatsiya, yo'qotish sabablari va limitlarni sozlash" },
@@ -102,6 +104,8 @@ export const BUILTIN_ROLES = [
     perms: [...COLLECT_PERMS, 'suppliers.card_own', 'suppliers.location', 'payments.create'] },
   { code: 'lab', name: 'Laborant', locked: 0, perms: ['lab.view', 'lab.edit'] },
   { code: 'technologist', name: 'Texnolog', locked: 0, perms: ['prod.work', 'stock.transfer', 'stock.writeoff'] },
+  { code: 'pourer', name: 'Quyuvchi', locked: 0, perms: ['prod.pour', 'stock.transfer', 'stock.writeoff'] },
+  { code: 'capper', name: 'Qopqoq yopuvchi', locked: 0, perms: ['prod.cap', 'stock.transfer', 'stock.writeoff'] },
 ];
 
 // v3 permission keys -> v4 keys (used once by the v3 -> v4 migration).

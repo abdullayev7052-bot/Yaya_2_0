@@ -12,6 +12,7 @@ import {
 } from '../erp/stock.js';
 import { erpImport, erpTemplate, importKinds, templateFile } from '../erp/importer.js';
 import { overview } from '../erp/overview.js';
+import { alertsFor } from '../erp/watch.js';
 
 const COST_KEYS = new Set(['cost', 'unit_cost', 'total_cost', 'amount', 'balance', 'loss', 'surplus']);
 export function stripCosts(v) {
@@ -404,6 +405,8 @@ export default async function erpRoutes(app, { db }) {
   }));
 
   // ---------------------------------------------------------------- alerts
+  // The app's alert banner: alerts naming me or my warehouses (managers: all).
+  app.get('/alerts/mine', need(), async (req) => alertsFor(db, req.me, req.me.perms));
   app.get('/alerts', need('alerts.view'), async (req) => db.prepare(`SELECT * FROM alerts ${req.query.all ? '' : 'WHERE resolved_at IS NULL'} ORDER BY created_at DESC, id DESC LIMIT 300`).all()
     .map((a) => ({ ...a, payload: a.payload ? JSON.parse(a.payload) : null })));
   app.post('/alerts/:id/resolve', need('alerts.view'), async (req) => {

@@ -185,16 +185,20 @@ CREATE INDEX IF NOT EXISTS idx_alerts_open ON alerts(resolved_at, created_at);
 
 -- ---------------------------------------------------------------- production (stage 2)
 -- A recipe (tarkib): what goes into one base batch. kind 'cook' makes one product
--- (quyma) from milk and raw materials; 'separation' splits milk into several outputs.
+-- (quyma) from milk and raw materials; 'separation' splits milk into several outputs;
+-- 'pour' fills containers (per 1 unit: 0.4 kg quyma + container + label); 'cap'
+-- closes them (per 1 unit: the unit itself + a lid). max_minutes: a task running
+-- longer raises an alert with the worker's name.
 -- out_min / out_max: allowed output weight (kg) for this base batch; a real batch
 -- is checked against the range scaled by its size (all limits are proportional).
 CREATE TABLE IF NOT EXISTS recipes (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'cook' CHECK (kind IN ('cook','separation')),
+  kind TEXT NOT NULL DEFAULT 'cook' CHECK (kind IN ('cook','separation','pour','cap')),
   product_id INTEGER REFERENCES products(id),
   out_min REAL,
   out_max REAL,
+  max_minutes REAL,
   note TEXT,
   sort INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1,
@@ -222,6 +226,16 @@ CREATE TABLE IF NOT EXISTS recipe_outputs (
   product_id INTEGER NOT NULL REFERENCES products(id),
   cost_mode TEXT NOT NULL DEFAULT 'rest' CHECK (cost_mode IN ('fixed','percent','rest')),
   cost_value REAL,
+  sort INTEGER NOT NULL DEFAULT 0
+);
+
+-- Piece rates of a recipe, per unit of output (e.g. "Quyish" 170 so'm per jar).
+-- Several workers on one task share it equally.
+CREATE TABLE IF NOT EXISTS recipe_rates (
+  id INTEGER PRIMARY KEY,
+  recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  amount REAL NOT NULL CHECK (amount >= 0),
   sort INTEGER NOT NULL DEFAULT 0
 );
 
@@ -342,7 +356,32 @@ export function setupErp(db, addColumn) {
   for (const [c, def] of PRODUCT_COLUMNS) addColumn('products', c, def);
   for (const [c, def] of LOT_COLUMNS) addColumn('lots', c, def);
   for (const [c, def] of REASON_COLUMNS) addColumn('stock_reasons', c, def);
+  migrateRecipeKinds(db);
+  addColumn('recipes', 'max_minutes', 'REAL');
   seedErp(db);
+}
+
+// Stage 3 added the 'pour' and 'cap' recipe kinds. A database created in stage 2 has
+// the old CHECK on recipes.kind; SQLite cannot change a CHECK in place, so the table
+// is rebuilt once (same rows, same ids; the tables pointing to it keep working).
+function migrateRecipeKinds(db) {
+  const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'recipes'").get()?.sql ?? '';
+  if (!sql || sql.includes("'pour'")) return;
+  const def = ERP_SCHEMA.slice(ERP_SCHEMA.indexOf('CREATE TABLE IF NOT EXISTS recipes ('), ERP_SCHEMA.indexOf('CREATE TABLE IF NOT EXISTS recipe_lines'));
+  const fk = db.pragma('foreign_keys', { simple: true });
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.transaction(() => {
+      db.exec(def.replace('CREATE TABLE IF NOT EXISTS recipes (', 'CREATE TABLE recipes_v3 ('));
+      const keep = db.prepare('PRAGMA table_info(recipes_v3)').all().map((c) => c.name);
+      const cols = db.prepare('PRAGMA table_info(recipes)').all().map((c) => c.name).filter((c) => keep.includes(c)).join(', ');
+      db.exec(`INSERT INTO recipes_v3 (${cols}) SELECT ${cols} FROM recipes`);
+      db.exec('DROP TABLE recipes');
+      db.exec('ALTER TABLE recipes_v3 RENAME TO recipes');
+    })();
+  } finally {
+    db.pragma(`foreign_keys = ${fk ? 'ON' : 'OFF'}`);
+  }
 }
 
 // Reference rows the warehouse part needs. Safe to run again at any time; it is
