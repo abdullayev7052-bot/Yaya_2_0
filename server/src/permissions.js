@@ -60,6 +60,16 @@ export const PERMISSIONS = [
   { key: 'prod.approve', group: 'Ishlab chiqarish', label: "Limitdan chiqqan topshiriq va smenani tasdiqlash yoki rad etish" },
   { key: 'prod.manage', group: 'Ishlab chiqarish', label: "Tarkiblar, separatsiya, yo'qotish sabablari va limitlarni sozlash" },
 
+  // --- sales (Yaya 2.0)
+  { key: 'sales.sell', group: 'Savdo', label: "Sotish va mijozdan to'lov olish (o'z kassasiga)", hint: "Narx, summa va mijoz qarzini ko'radi; tannarxni emas" },
+  { key: 'sales.return', group: 'Savdo', label: "Mijozdan mahsulot qaytarib olish" },
+  { key: 'sales.price_edit', group: 'Savdo', label: "Sotuv va qaytarishda narxni o'zgartirish" },
+  { key: 'sales.view_all', group: 'Savdo', label: "Barcha sotuv, qaytarish va to'lovlarni ko'rish" },
+  { key: 'sales.cancel', group: 'Savdo', label: "Sotuv, qaytarish yoki to'lovni bekor qilish" },
+  { key: 'customers.manage', group: 'Savdo', label: "Mijozlar, mijoz turlari, boshlang'ich qarz va qaytarish siyosati" },
+  { key: 'sales.prices', group: 'Savdo', label: "Sotuv narxlarini belgilash (umumiy, mijoz turi, mijoz bo'yicha)" },
+  { key: 'sales.manage', group: 'Savdo', label: "Savdo sozlamalari: qaytarish turlari, to'lov turlari, kassalar, chek" },
+
   // --- reports
   { key: 'reports.view', group: 'Hisobotlar', label: 'Hisobotlar, o\'rtacha tannarx, kunlik ko\'rsatkichlar' },
   { key: 'reports.export', group: 'Hisobotlar', label: 'Hisobotni Excel\'ga yuklab olish' },
@@ -104,6 +114,7 @@ export const BUILTIN_ROLES = [
     perms: [...COLLECT_PERMS, 'suppliers.card_own', 'suppliers.location', 'payments.create'] },
   { code: 'lab', name: 'Laborant', locked: 0, perms: ['lab.view', 'lab.edit'] },
   { code: 'technologist', name: 'Texnolog', locked: 0, perms: ['prod.work', 'stock.transfer', 'stock.writeoff'] },
+  { code: 'seller', name: 'Sotuvchi', locked: 0, perms: ['sales.sell', 'sales.return', 'stock.transfer'] },
   { code: 'pourer', name: 'Quyuvchi', locked: 0, perms: ['prod.pour', 'stock.transfer', 'stock.writeoff'] },
   { code: 'capper', name: 'Qopqoq yopuvchi', locked: 0, perms: ['prod.cap', 'stock.transfer', 'stock.writeoff'] },
 ];

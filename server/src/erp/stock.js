@@ -34,6 +34,9 @@ export const DOC_TYPES = {
   writeoff: { label: 'Hisobdan chiqarish', prefix: 'HC' },
   production: { label: 'Ishlab chiqarish', prefix: 'IC' },
   shift_close: { label: 'Texnolog smenasi yakuni', prefix: 'TS' },
+  sale: { label: 'Sotuv', prefix: 'S' },
+  return: { label: 'Qaytarish', prefix: 'Q' },
+  payment: { label: "Mijozdan to'lov", prefix: 'TL' },
 };
 // Types a person creates directly; the others come from shifts and production.
 const MANUAL_TYPES = new Set(['opening', 'transfer', 'inventory', 'writeoff']);
@@ -472,6 +475,8 @@ export function cancelDocTx(db, d, actor, reason) {
         SELECT party_type, party_id, -amount, 'reversal', doc_id, 'Bekor qilindi', ? FROM party_entries WHERE doc_id = ? AND kind <> 'reversal'`).run(ctx.at, id);
       db.prepare(`INSERT INTO pnl_entries (category_id, amount, doc_id, note, at)
         SELECT category_id, -amount, doc_id, 'Bekor qilindi', ? FROM pnl_entries WHERE doc_id = ?`).run(ctx.at, id);
+      db.prepare(`INSERT INTO cash_entries (cashbox_id, amount, method_id, doc_id, kind, note, at)
+        SELECT cashbox_id, -amount, method_id, doc_id, 'reversal', 'Bekor qilindi', ? FROM cash_entries WHERE doc_id = ? AND COALESCE(kind, '') <> 'reversal'`).run(ctx.at, id);
       negativeAlerts(db, ctx);
     }
     closeDocAlerts(db, id, actor);

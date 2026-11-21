@@ -285,6 +285,81 @@ CREATE TABLE IF NOT EXISTS lot_sources (
   doc_id INTEGER REFERENCES docs(id)
 );
 CREATE INDEX IF NOT EXISTS idx_lot_sources_src ON lot_sources(source_lot_id);
+
+-- ---------------------------------------------------------------- sales (stage 4)
+CREATE TABLE IF NOT EXISTS customer_types (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  sort INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1
+);
+-- Customer balance = opening_balance + party entries (positive = the customer owes us).
+-- expired_policy: does a return of expired goods reduce what they owe (reduce) or not (keep).
+CREATE TABLE IF NOT EXISTS customers (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  phone TEXT,
+  type_id INTEGER REFERENCES customer_types(id),
+  address TEXT,
+  note TEXT,
+  opening_balance REAL NOT NULL DEFAULT 0,
+  expired_policy TEXT NOT NULL DEFAULT 'reduce' CHECK (expired_policy IN ('reduce','keep')),
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- Selling prices. scope: 'base' (everyone), 't:<type id>' (a customer type) or
+-- 'c:<customer id>' (one customer). The most specific one wins.
+CREATE TABLE IF NOT EXISTS product_prices (
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  scope TEXT NOT NULL,
+  price REAL NOT NULL CHECK (price >= 0),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_by TEXT,
+  PRIMARY KEY (product_id, scope)
+);
+-- Return types: each sends the goods to its own warehouse; expired = 1 follows the
+-- customer's expired_policy for the money.
+CREATE TABLE IF NOT EXISTS return_types (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  warehouse_id INTEGER REFERENCES warehouses(id),
+  expired INTEGER NOT NULL DEFAULT 0,
+  sort INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS payment_methods (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  sort INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1
+);
+-- Cashboxes and who holds them. A seller's money goes to their own cashbox;
+-- moving it to the main cashbox comes with the finance stage.
+CREATE TABLE IF NOT EXISTS cashboxes (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  is_main INTEGER NOT NULL DEFAULT 0,
+  sort INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS cashbox_keepers (
+  cashbox_id INTEGER NOT NULL REFERENCES cashboxes(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (cashbox_id, user_id)
+);
+-- The cash ledger: money in (+) and out (-) of a cashbox, always from a document.
+CREATE TABLE IF NOT EXISTS cash_entries (
+  id INTEGER PRIMARY KEY,
+  cashbox_id INTEGER NOT NULL REFERENCES cashboxes(id),
+  amount REAL NOT NULL,
+  method_id INTEGER REFERENCES payment_methods(id),
+  doc_id INTEGER REFERENCES docs(id),
+  kind TEXT,
+  note TEXT,
+  at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_cash_box ON cash_entries(cashbox_id, at);
+CREATE INDEX IF NOT EXISTS idx_party ON party_entries(party_type, party_id);
 `;
 
 // New columns on the existing products table (the milk products keep kind = 'milk').
@@ -348,6 +423,8 @@ const SEED_CATEGORIES = [
   ['reprocess_loss', 'Qayta ishlashda yo\'qotilgan tannarx', 'expense'],
   ['container_loss', 'Idish yo\'qotilishi', 'expense'],
   ['production_loss', "Ishlab chiqarishdagi yo'qotish", 'expense'],
+  ['sales_revenue', 'Savdo tushumi', 'income'],
+  ['cogs', 'Sotilgan mahsulot tannarxi', 'expense'],
 ];
 const SEED_REASONS = [['Singan', 'company'], ['Yo\'qolgan', 'company'], ['To\'kilgan (xodim aybi)', 'staff'], ['Muddati o\'tgan', 'company'], ['Boshqa', 'company']];
 
@@ -358,6 +435,9 @@ export function setupErp(db, addColumn) {
   for (const [c, def] of REASON_COLUMNS) addColumn('stock_reasons', c, def);
   migrateRecipeKinds(db);
   addColumn('recipes', 'max_minutes', 'REAL');
+  // Sales (stage 4): the customer of a sale / return / payment, and the price of a line.
+  addColumn('docs', 'customer_id', 'INTEGER REFERENCES customers(id)');
+  addColumn('doc_lines', 'price', 'REAL');
   seedErp(db);
 }
 
@@ -399,6 +479,15 @@ export function seedErp(db) {
     const ins = db.prepare('INSERT INTO stock_reasons (name, charge, category_id, sort) VALUES (?, ?, ?, ?)');
     SEED_REASONS.forEach(([n, ch], i) => ins.run(n, ch, wo, i));
   }
+  if (!db.prepare('SELECT 1 FROM payment_methods LIMIT 1').get()) {
+    const ins = db.prepare('INSERT INTO payment_methods (name, sort) VALUES (?, ?)');
+    ['Naqd', 'Karta', "O'tkazma"].forEach((n, i) => ins.run(n, i));
+  }
+  if (!db.prepare('SELECT 1 FROM customer_types LIMIT 1').get()) {
+    const ins = db.prepare('INSERT INTO customer_types (name, sort) VALUES (?, ?)');
+    ["Do'kon", 'Diler', 'Chakana'].forEach((n, i) => ins.run(n, i));
+  }
+  if (!db.prepare('SELECT 1 FROM cashboxes WHERE is_main = 1').get()) db.prepare("INSERT INTO cashboxes (name, is_main) VALUES ('Asosiy kassa', 1)").run();
   // The technologist's reasons for milk that is not accounted for at the end of a shift.
   if (!db.prepare("SELECT 1 FROM stock_reasons WHERE section = 'tech'").get()) {
     const wo = db.prepare("SELECT id FROM pnl_categories WHERE code = 'production_loss'").get().id;
@@ -413,4 +502,4 @@ export function seedErp(db) {
 export const ERP_SCHEMA_TABLES = [...ERP_SCHEMA.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)].map((m) => m[1]);
 
 // Tables cleared by "clear all history" (children first).
-export const ERP_HISTORY_TABLES = ['alerts', 'lot_sources', 'stock_moves', 'pnl_entries', 'party_entries', 'prod_tasks', 'prod_shifts', 'doc_lines', 'lots', 'docs'];
+export const ERP_HISTORY_TABLES = ['alerts', 'cash_entries', 'lot_sources', 'stock_moves', 'pnl_entries', 'party_entries', 'prod_tasks', 'prod_shifts', 'doc_lines', 'lots', 'docs'];
