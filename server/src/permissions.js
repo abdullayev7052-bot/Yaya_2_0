@@ -55,6 +55,7 @@ export const PERMISSIONS = [
   // --- production (Yaya 2.0)
   { key: 'prod.work', group: 'Ishlab chiqarish', label: "Texnolog: smena ochish, tarkib bo'yicha topshiriq bajarish, smenani yopish" },
   { key: 'prod.pour', group: 'Ishlab chiqarish', label: "Quyuvchi: idishga quyish topshiriqlari (ishbay haq bilan)" },
+  { key: 'prod.reprocess', group: 'Ishlab chiqarish', label: "Qayta ishlovchi: muddati o'tgan mahsulotni qayta ishlash (idish va ichidagini ajratish)" },
   { key: 'prod.cap', group: 'Ishlab chiqarish', label: "Qopqoq yopuvchi: qopqoq yopish topshiriqlari (ishbay haq bilan)" },
   { key: 'prod.view', group: 'Ishlab chiqarish', label: "Barcha texnolog smenalari va topshiriqlarini ko'rish" },
   { key: 'prod.approve', group: 'Ishlab chiqarish', label: "Limitdan chiqqan topshiriq va smenani tasdiqlash yoki rad etish" },
@@ -116,6 +117,7 @@ export const BUILTIN_ROLES = [
   { code: 'technologist', name: 'Texnolog', locked: 0, perms: ['prod.work', 'stock.transfer', 'stock.writeoff'] },
   { code: 'seller', name: 'Sotuvchi', locked: 0, perms: ['sales.sell', 'sales.return', 'stock.transfer'] },
   { code: 'pourer', name: 'Quyuvchi', locked: 0, perms: ['prod.pour', 'stock.transfer', 'stock.writeoff'] },
+  { code: 'reprocessor', name: 'Qayta ishlovchi', locked: 0, perms: ['prod.reprocess', 'stock.transfer', 'stock.writeoff'] },
   { code: 'capper', name: 'Qopqoq yopuvchi', locked: 0, perms: ['prod.cap', 'stock.transfer', 'stock.writeoff'] },
 ];
 

@@ -12,8 +12,8 @@ import { C, fmtQty, s } from '../ui';
 // No sums anywhere — the server does not send them to the technologist.
 
 const prod = (method, path, body, opts) => api.erp(method, `/prod${path}`, body, opts);
-export const canProduce = () => api.canAny('prod.work', 'prod.pour', 'prod.cap');
-const PER_UNIT = new Set(['pour', 'cap']);
+export const canProduce = () => api.canAny('prod.work', 'prod.pour', 'prod.cap', 'prod.reprocess');
+const PER_UNIT = new Set(['pour', 'cap', 'reprocess']);
 
 const TASK = { open: ['Jarayonda', C.warn], approval: ['Rahbar tasdig\'ini kutmoqda', C.warn], done: ['Bajarildi', C.ok], cancelled: ['Bekor qilingan', C.err] };
 function Badge({ map, status }) {
@@ -186,6 +186,7 @@ export function TaskScreen({ id, onBack, onDone }) {
   const target = sendTo === undefined ? (perUnit && places[0] && order.includes(places[0].kind) ? { warehouseId: places[0].id } : null) : sendTo;
   const inputs = useMemo(() => (t ? t.plan.map((l) => ({ ...l, qty: qty[l.productId] ?? String(l.qty) })) : []), [t, qty]);
   if (!t) return <View style={{ flex: 1 }}><Header title="Topshiriq" onBack={onBack} /><Err err={err} /></View>;
+  if (r?.kind === 'reprocess') return <ReprocessTask t={t} r={r} onBack={onBack} onDone={onDone} reload={load} />;
   const inWeight = inputs.reduce((a, l) => a + weightKg(l.unit, toNumber(l.qty || 0)), 0);
   const scale = r?.base_weight > 0 ? inWeight / r.base_weight : 1;
   const range = r && !PER_UNIT.has(r.kind) && (r.out_min != null || r.out_max != null) ? { min: r.out_min == null ? null : r.out_min * scale, max: r.out_max == null ? null : r.out_max * scale } : null;
@@ -347,6 +348,86 @@ export function CloseShift({ onBack, onDone }) {
           </>
         )}
         <Btn title={busy ? '...' : 'Smenani yopish'} onPress={submit} disabled={busy || left > 0.0005 || openTasks.length > 0} />
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- reprocessing (stage 5)
+// Expired product taken apart: the container (fixed count per unit) and the content
+// (by netto weight, editable within its range). Containers that did not come out
+// must be explained: the missing count is filled in, the worker picks the reasons.
+function ReprocessTask({ t, r, onBack, onDone, reload }) {
+  const { data: reasons } = useLoad(() => api.erp('GET', '/reasons?section=reprocess'), []);
+  const units = t.plan.reduce((a, l) => a + l.qty, 0);
+  const netto = r.lines[0]?.netto_g;
+  const outs = r.outputs.map((o) => {
+    const per = o.per_unit ?? (netto ? netto / 1000 : 1);
+    return { ...o, expected: Math.round(per * units * 1000) / 1000,
+      min: o.min_per_unit != null ? Math.round(o.min_per_unit * units * 1000) / 1000 : null,
+      max: o.max_per_unit != null ? Math.round(o.max_per_unit * units * 1000) / 1000 : null };
+  });
+  const [vals, setVals] = useState({});
+  const [short, setShort] = useState({});
+  const [busy, setBusy] = useState(false);
+  const val = (o) => (vals[o.product_id] ?? String(o.expected));
+  const box = outs.find((o) => o.is_container);
+  const missing = box ? Math.max(0, Math.round((box.expected - toNumber(val(box) || 0)) * 1000) / 1000) : 0;
+  const active = (reasons ?? []).filter((x) => x.active);
+  // The missing count goes to the first reason until the worker splits it.
+  const shortOf = (id, i) => (short[id] ?? (i === 0 && !Object.keys(short).length ? String(missing) : ''));
+  const told = active.reduce((a, x, i) => a + toNumber(shortOf(x.id, i) || 0), 0);
+  const editable = t.status === 'open';
+
+  const finish = async () => {
+    setBusy(true);
+    try {
+      const res = await prod('POST', `/tasks/${t.id}/complete`, {
+        outputs: outs.map((o) => ({ productId: o.product_id, qty: toNumber(val(o) || 0) })),
+        shortfall: missing > 0 ? active.map((x, i) => ({ reasonId: x.id, qty: toNumber(shortOf(x.id, i) || 0) })).filter((x) => x.qty > 0) : [],
+      });
+      onDone(res.needApproval ? `${t.label}: miqdor chegaradan tashqarida — rahbar tasdig'iga yuborildi` : `${t.label} bajarildi`);
+    } catch (e) { notify('Xatolik', e.message); reload(); } finally { setBusy(false); }
+  };
+  return (
+    <View style={{ flex: 1 }}>
+      <Header title={`${t.label} · ${t.recipe}`} onBack={onBack} />
+      <ScrollView contentContainerStyle={{ padding: 12, gap: 12 }} keyboardShouldPersistTaps="handled">
+        <Badge map={TASK} status={t.status} />
+        <View style={[s.card, { gap: 4 }]}>
+          <Text style={s.text}>{t.plan[0]?.product}: <Text style={{ fontWeight: '700' }}>{fmtQty(units)} {t.plan[0]?.unit}</Text></Text>
+          <Text style={s.muted}>Shundan chiqdi:</Text>
+          {outs.map((o) => {
+            const v = toNumber(val(o) || 0);
+            const bad = !o.is_container && ((o.min != null && v < o.min - 0.0005) || (o.max != null && v > o.max + 0.0005));
+            return (
+              <View key={o.product_id} style={{ gap: 2, paddingVertical: 4 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Text style={[s.text, { flex: 1 }]}>{o.product}</Text>
+                  {editable ? <Num value={val(o)} unit={o.unit} onChange={(x) => setVals((m) => ({ ...m, [o.product_id]: x }))} />
+                    : <Text style={[s.text, { fontWeight: '700' }]}>{fmtQty((t.outputs.find((x) => x.product_id === o.product_id)?.qty) ?? 0)} {o.unit}</Text>}
+                </View>
+                {editable && <Text style={{ fontSize: 13, color: bad ? C.err : C.muted }}>
+                  {o.is_container ? `Chiqishi kerak: ${fmtQty(o.expected)}` : `Hisob: ${fmtQty(o.expected)}${o.min != null || o.max != null ? ` · ruxsat ${fmtQty(o.min ?? 0)}–${o.max == null ? '∞' : fmtQty(o.max)}` : ''}`}
+                  {bad ? ' — chegaradan tashqarida, rahbar tasdiqlaydi' : ''}</Text>}
+              </View>
+            );
+          })}
+        </View>
+        {editable && missing > 0 && (
+          <View style={[s.card, { gap: 8, borderColor: C.warn }]}>
+            <Text style={[s.text, { fontWeight: '700' }]}>{fmtQty(box.expected)} ta chiqishi kerak edi, {fmtQty(toNumber(val(box) || 0))} ta kiritdingiz — qolgan {fmtQty(missing)} tasi nima bo'ldi?</Text>
+            {active.map((x, i) => (
+              <View key={x.id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text style={[s.text, { flex: 1 }]}>{x.name}</Text>
+                <Num value={shortOf(x.id, i)} unit="dona" onChange={(v) => setShort((m) => ({ ...Object.fromEntries(active.map((y, j) => [y.id, shortOf(y.id, j)])), ...m, [x.id]: v }))} />
+              </View>
+            ))}
+            {Math.abs(told - missing) > 0.0005 && <Text style={s.err}>Jami {fmtQty(missing)} ta bo'lishi kerak (hozir {fmtQty(told)})</Text>}
+          </View>
+        )}
+        {editable && <Btn title={busy ? '...' : 'Yakunlash'} onPress={finish} disabled={busy || (missing > 0 && Math.abs(told - missing) > 0.0005)} />}
+        {t.status === 'approval' && <Text style={{ color: C.warn }}>Rahbar tasdig'ini kuting.</Text>}
       </ScrollView>
     </View>
   );

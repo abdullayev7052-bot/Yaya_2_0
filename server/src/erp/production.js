@@ -26,10 +26,22 @@ import {
   productBalance, r2, r3, rawMilkProduct, takeOut,
 } from './stock.js';
 
-export const RECIPE_KINDS = { cook: 'Tayyorlash (quyma)', separation: 'Separatsiya', pour: 'Quyish (idishga)', cap: 'Qopqoq yopish' };
+export const RECIPE_KINDS = { cook: 'Tayyorlash (quyma)', separation: 'Separatsiya', pour: 'Quyish (idishga)', cap: 'Qopqoq yopish', reprocess: 'Qayta ishlash' };
 // Which permission runs which kind of task.
-export const KIND_PERM = { cook: 'prod.work', separation: 'prod.work', pour: 'prod.pour', cap: 'prod.cap' };
-export const PER_UNIT = new Set(['pour', 'cap']);
+export const KIND_PERM = { cook: 'prod.work', separation: 'prod.work', pour: 'prod.pour', cap: 'prod.cap', reprocess: 'prod.reprocess' };
+export const PER_UNIT = new Set(['pour', 'cap', 'reprocess']);
+
+// Reprocessing (stage 5): expected quantity of an output for `units` input units —
+// a set amount per unit, or the input's netto weight in kg (e.g. 400 g of content).
+export function reprocessExpect(db, r, o, units) {
+  const input = product(db, r.product_id);
+  const per = o.per_unit ?? (input?.netto_g ? input.netto_g / 1000 : 1);
+  return {
+    qty: r3(per * units),
+    min: o.min_per_unit != null ? r3(o.min_per_unit * units) : null,
+    max: o.max_per_unit != null ? r3(o.max_per_unit * units) : null,
+  };
+}
 
 const EPS = 0.0005;
 const nowIso = () => new Date().toISOString();
@@ -48,7 +60,7 @@ export function weightKg(p, qty) {
 export function recipeDetail(db, id) {
   const r = db.prepare('SELECT r.*, p.name AS product, p.unit FROM recipes r LEFT JOIN products p ON p.id = r.product_id WHERE r.id = ?').get(id);
   if (!r) return null;
-  const lines = db.prepare(`SELECT l.*, p.name AS product, p.unit, p.kind AS product_kind FROM recipe_lines l JOIN products p ON p.id = l.product_id
+  const lines = db.prepare(`SELECT l.*, p.name AS product, p.unit, p.kind AS product_kind, p.netto_g FROM recipe_lines l JOIN products p ON p.id = l.product_id
     WHERE l.recipe_id = ? ORDER BY l.sort, l.id`).all(id).map((l) => ({
     ...l,
     alts: db.prepare('SELECT a.product_id, a.qty, p.name AS product, p.unit FROM recipe_alts a JOIN products p ON p.id = a.product_id WHERE a.line_id = ?').all(l.id),
@@ -84,7 +96,9 @@ export function saveRecipe(db, id, b) {
   if ((outMin != null && !(outMin >= 0)) || (outMax != null && !(outMax >= 0)) || (outMin != null && outMax != null && outMin > outMax)) {
     throw new StockError('Chiqish chegarasi noto\'g\'ri (eng kami ≤ eng ko\'pi)');
   }
-  const lines = (Array.isArray(b.lines) ? b.lines : []).map((l, i) => {
+  // Reprocessing takes the expired product itself: one unit per unit.
+  const rawLines = kind === 'reprocess' ? [{ productId, qty: 1 }] : (Array.isArray(b.lines) ? b.lines : []);
+  const lines = rawLines.map((l, i) => {
     const p = product(db, num(l.productId));
     if (!p) throw new StockError(`${i + 1}-qator: mahsulot topilmadi`);
     const qty = Number(l.qty);
@@ -99,7 +113,17 @@ export function saveRecipe(db, id, b) {
     return { productId: p.id, qty, alts };
   });
   if (!lines.length) throw new StockError('Kamida bitta xomashyo kiriting');
-  const outputs = kind === 'separation' ? (Array.isArray(b.outputs) ? b.outputs : []).map((o) => {
+  const outputs = kind === 'reprocess' ? (Array.isArray(b.outputs) ? b.outputs : []).map((o) => {
+    const p = product(db, num(o.productId));
+    if (!p) throw new StockError('Chiqadigan mahsulot topilmadi');
+    const value = num(o.costValue) ?? 0;
+    if (!(value >= 0)) throw new StockError(`${p.name}: tannarx manfiy bo'lmasin`);
+    const per = num(o.perUnit); const mn = num(o.minPerUnit); const mx = num(o.maxPerUnit);
+    if ((per != null && !(per > 0)) || (mn != null && !(mn >= 0)) || (mx != null && !(mx >= 0)) || (mn != null && mx != null && mn > mx)) {
+      throw new StockError(`${p.name}: miqdor yoki chegara noto'g'ri`);
+    }
+    return { productId: p.id, mode: 'fixed', value, perUnit: per, minPerUnit: mn, maxPerUnit: mx, container: !!o.isContainer };
+  }) : kind === 'separation' ? (Array.isArray(b.outputs) ? b.outputs : []).map((o) => {
     const p = product(db, num(o.productId));
     if (!p) throw new StockError('Chiqadigan mahsulot topilmadi');
     const mode = ['fixed', 'percent', 'rest'].includes(o.costMode) ? o.costMode : 'rest';
@@ -108,6 +132,10 @@ export function saveRecipe(db, id, b) {
     if (mode === 'percent' && value > 100) throw new StockError(`${p.name}: foiz 100 dan oshmasin`);
     return { productId: p.id, mode, value: mode === 'rest' ? null : value };
   }) : [];
+  if (kind === 'reprocess') {
+    if (!outputs.length) throw new StockError('Nima chiqishini kiriting');
+    if (outputs.filter((o) => o.container).length > 1) throw new StockError('Faqat bitta mahsulot "idish" bo\'lishi mumkin');
+  }
   if (kind === 'separation') {
     if (outputs.length < 2) throw new StockError('Separatsiyada kamida ikkita chiqadigan mahsulot bo\'ladi');
     if (!outputs.some((o) => o.mode === 'rest')) throw new StockError('Bitta mahsulot "qolgan tannarx" bo\'lishi kerak (qolgan xarajat unga tushadi)');
@@ -133,8 +161,8 @@ export function saveRecipe(db, id, b) {
       const lid = Number(insL.run(rid, l.productId, l.qty, i).lastInsertRowid);
       for (const a of l.alts) insA.run(lid, a.productId, a.qty);
     });
-    const insO = db.prepare('INSERT INTO recipe_outputs (recipe_id, product_id, cost_mode, cost_value, sort) VALUES (?, ?, ?, ?, ?)');
-    outputs.forEach((o, i) => insO.run(rid, o.productId, o.mode, o.value, i));
+    const insO = db.prepare('INSERT INTO recipe_outputs (recipe_id, product_id, cost_mode, cost_value, sort, per_unit, min_per_unit, max_per_unit, is_container) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    outputs.forEach((o, i) => insO.run(rid, o.productId, o.mode, o.value, i, o.perUnit ?? null, o.minPerUnit ?? null, o.maxPerUnit ?? null, o.container ? 1 : 0));
     return rid;
   })();
 }
@@ -279,7 +307,32 @@ export function completeTask(db, taskId, body, { actor, approve = false }) {
     const plan = J(t.plan);
     const inputs = cleanQtyLines(db, b?.lines ?? plan.lines, 'Xomashyo');
     let outputs;
-    if (r.kind !== 'separation') {
+    let shortfall = [];
+    let outsideOut = null;
+    if (r.kind === 'reprocess') {
+      const units = r3(inputs.reduce((a, l) => a + l.qty, 0));
+      const given = new Map((b?.outputs ?? []).map((o) => [Number(o.productId), o.qty == null || o.qty === '' ? null : r3(o.qty)]));
+      outputs = r.outputs.map((o) => {
+        const e = reprocessExpect(db, r, o, units);
+        const qty = given.get(o.product_id) ?? e.qty;
+        if (!(qty >= 0)) throw new StockError(`${o.product}: miqdor noto'g'ri`);
+        if (o.is_container && qty > e.qty + EPS) throw new StockError(`${o.product}: ${e.qty} tadan ko'p bo'lmaydi`);
+        if (!o.is_container && ((e.min != null && qty < e.min - EPS) || (e.max != null && qty > e.max + EPS))) outsideOut ??= { product: o.product, qty, min: e.min, max: e.max };
+        return { productId: o.product_id, qty, mode: 'fixed', value: o.cost_value ?? 0, container: !!o.is_container, expected: e.qty };
+      });
+      // Containers that did not come out must be explained (broken / lost, can be split).
+      const box = outputs.find((o) => o.container);
+      const missing = box ? r3(box.expected - box.qty) : 0;
+      shortfall = (Array.isArray(b?.shortfall) ? b.shortfall : []).map((x) => {
+        const reason = db.prepare("SELECT * FROM stock_reasons WHERE id = ? AND section = 'reprocess' AND active = 1").get(Number(x.reasonId));
+        if (!reason) throw new StockError('Idish sababi topilmadi');
+        return { reason, qty: r3(x.qty) };
+      }).filter((x) => x.qty > 0);
+      const told = r3(shortfall.reduce((a, x) => a + x.qty, 0));
+      if (Math.abs(told - missing) > EPS) {
+        throw new StockError(`${box ? box.expected : 0} ta chiqishi kerak edi, ${box ? box.qty : 0} ta kiritdingiz — qolgan ${missing} tasi nima bo'ldi?`, { missing, told });
+      }
+    } else if (r.kind !== 'separation') {
       const q = r3(b?.outputQty ?? b?.outputs?.[0]?.qty ?? (PER_UNIT.has(r.kind) ? plan.factor : null));
       if (!(q > 0)) throw new StockError(PER_UNIT.has(r.kind) ? 'Nechta chiqqanini kiriting' : 'Chiqqan mahsulot og\'irligini kiriting');
       outputs = [{ productId: r.product_id, qty: q, mode: 'rest' }];
@@ -290,7 +343,7 @@ export function completeTask(db, taskId, body, { actor, approve = false }) {
     }
     const range = outputRange(db, r, inputs);
     const outWeight = r3(outputs.reduce((a, o) => a + weightKg(product(db, o.productId), o.qty), 0));
-    const outside = range && ((range.min != null && outWeight < range.min - EPS) || (range.max != null && outWeight > range.max + EPS));
+    const outside = (r.kind !== 'reprocess' && range && ((range.min != null && outWeight < range.min - EPS) || (range.max != null && outWeight > range.max + EPS))) || !!outsideOut;
     // Who did it: everyone listed shares the piece rate equally (default: the shift owner).
     const workers = [...new Set((Array.isArray(b?.workers) && b.workers.length ? b.workers : [s.user_id]).map(Number))];
     for (const w of workers) if (!db.prepare('SELECT 1 FROM users WHERE id = ? AND active = 1').get(w)) throw new StockError('Xodim topilmadi');
@@ -300,15 +353,17 @@ export function completeTask(db, taskId, body, { actor, approve = false }) {
       if (!sendTo) throw new StockError('Qayerga topshirilishini tanlang');
       if (sendTo.userId === s.user_id) sendTo = null;
     }
-    const stored = { lines: inputs, outputs: outputs.map((o) => ({ productId: o.productId, qty: o.qty })), outputQty: r.kind !== 'separation' ? outputs[0].qty : undefined,
-      workers, sendTo, note: b?.note ?? null };
+    const stored = { lines: inputs, outputs: outputs.map((o) => ({ productId: o.productId, qty: o.qty })), outputQty: !['separation', 'reprocess'].includes(r.kind) ? outputs[0].qty : undefined,
+      shortfall: shortfall.map((x) => ({ reasonId: x.reason.id, reason: x.reason.name, qty: x.qty })), workers, sendTo, note: b?.note ?? null };
     if (outside && !approve) {
-      db.prepare("UPDATE prod_tasks SET status = 'approval', result = ? WHERE id = ?").run(JSON.stringify({ ...stored, range, outWeight }), t.id);
-      addAlert(db, 'prod.limit', `TQ-${t.number} (${r.name}): chiqish ${outWeight} kg, ruxsat ${range.min ?? '—'}–${range.max ?? '—'} kg. Tasdiqlang yoki rad eting.`,
+      db.prepare("UPDATE prod_tasks SET status = 'approval', result = ? WHERE id = ?").run(JSON.stringify({ ...stored, range: outsideOut ?? range, outWeight }), t.id);
+      addAlert(db, 'prod.limit', outsideOut
+        ? `TQ-${t.number} (${r.name}): ${outsideOut.product} ${outsideOut.qty}, ruxsat ${outsideOut.min ?? '—'}–${outsideOut.max ?? '—'}. Tasdiqlang yoki rad eting.`
+        : `TQ-${t.number} (${r.name}): chiqish ${outWeight} kg, ruxsat ${range.min ?? '—'}–${range.max ?? '—'} kg. Tasdiqlang yoki rad eting.`,
         { taskId: t.id, shiftId: s.id });
-      return { needApproval: true, range, outWeight, task: taskRow(db, getTask(db, t.id)) };
+      return { needApproval: true, range: outsideOut ? { min: outsideOut.min, max: outsideOut.max } : range, outWeight, task: taskRow(db, getTask(db, t.id)) };
     }
-    const docId = postProduction(db, t, s, r, inputs, outputs, actor, b?.note, workers);
+    const docId = postProduction(db, t, s, r, inputs, outputs, actor, b?.note, workers, shortfall);
     if (sendTo) {
       // Straight on to the next step (incubator, finished goods, next worker): a hand-over they accept.
       stored.transferId = Number(db.prepare(`INSERT INTO docs (uuid, type, number, status, doc_date, from_user, to_wh, to_user, note, created_by, created_by_id)
@@ -324,7 +379,7 @@ export function completeTask(db, taskId, body, { actor, approve = false }) {
   })();
 }
 
-function postProduction(db, t, s, r, inputs, outputs, actor, note, workers = [s.user_id]) {
+function postProduction(db, t, s, r, inputs, outputs, actor, note, workers = [s.user_id], shortfall = []) {
   const h = { userId: s.user_id };
   const id = Number(db.prepare(`INSERT INTO docs (uuid, type, number, status, doc_date, from_user, to_user, source, note, created_by)
     VALUES (?, 'production', ?, 'draft', ?, ?, ?, 'production', ?, ?)`).run(`task-${t.uuid}`, nextNumber(db, 'production'), nowIso(), s.user_id, s.user_id,
@@ -340,7 +395,7 @@ function postProduction(db, t, s, r, inputs, outputs, actor, note, workers = [s.
   });
   // Piece rates: part of the cost, owed to the workers (split equally).
   if (r.kind !== 'separation' && r.rates.length) {
-    const units = outputs.reduce((a, o) => a + o.qty, 0);
+    const units = r.kind === 'reprocess' ? inputs.reduce((a, l) => a + l.qty, 0) : outputs.reduce((a, o) => a + o.qty, 0);
     const wage = r2(r.rate_total * units);
     if (wage > 0) {
       total += wage;
@@ -365,8 +420,25 @@ function postProduction(db, t, s, r, inputs, outputs, actor, note, workers = [s.
     const c = i === restOuts.length - 1 ? r2(left) : r2((Math.max(0, rest) * o.qty) / restQty);
     left -= c; costs.set(o.productId, c);
   });
-  // Fixed outputs worth more than the whole batch: the gap is a cost variance.
-  if (rest < 0 || !restOuts.length) pnl(db, ctx, 'cost_variance', !restOuts.length ? rest : rest, `${r.name}: tannarx taqsimoti farqi`);
+  if (r.kind === 'reprocess') {
+    // Containers that did not come out: first made at their fixed cost, then written
+    // off by reason (company expense or the worker's debt). The rest of the input cost
+    // (the spoiled content) is the reprocessing loss; if outputs are worth more, a variance.
+    const box = outputs.find((o) => o.container);
+    let lost = 0;
+    for (const x of shortfall) {
+      const c = r2(x.qty * (box?.value ?? 0));
+      lost += c;
+      const effect = x.reason.effect ?? (x.reason.charge === 'staff' ? 'staff' : 'company');
+      if (effect === 'staff') chargeStaff(db, ctx, s.user_id, c, 'reprocess', `TQ-${t.number}: idish ${x.reason.name}`);
+      else pnl(db, ctx, x.reason.category_id ?? 'container_loss', c, `TQ-${t.number}: idish ${x.reason.name} (${x.qty})`);
+    }
+    const left2 = r2(rest - lost);
+    pnl(db, ctx, left2 >= 0 ? 'reprocess_loss' : 'cost_variance', left2, `TQ-${t.number}: ${r.name}`);
+  } else if (rest < 0 || !restOuts.length) {
+    // Fixed outputs worth more than the whole batch: the gap is a cost variance.
+    pnl(db, ctx, 'cost_variance', rest, `${r.name}: tannarx taqsimoti farqi`);
+  }
   const outQty = outputs.reduce((a, o) => a + o.qty, 0);
   // Final only when the shift that made it closes; a pour from a finished quyma is final already.
   const provisional = !PER_UNIT.has(r.kind) || taken.some((x) => x.lotId && db.prepare('SELECT provisional FROM lots WHERE id = ?').get(x.lotId)?.provisional);

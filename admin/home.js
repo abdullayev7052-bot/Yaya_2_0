@@ -60,7 +60,7 @@ views.overview = async (v) => {
         ${tile('Mijozlar qarzi', fmtMoney(x.customers_debt), `${x.debtors} ta qarzdor`, '#customers')}
       </div></div>`);
   }
-  blocks.push(`<div class="card muted"><h2>5. Qayta ishlash · 6. Moliya</h2>Keyingi bosqichlarda shu yerga qo'shiladi.</div>`);
+  blocks.push(`<div class="card muted"><h2>6. Moliya</h2>Keyingi bosqichda shu yerga qo'shiladi. Qayta ishlash — "Ishlab chiqarish" blokida, yo'qotishlar — "Shu oy" jadvalida.</div>`);
   if (o.alerts) {
     blocks.push(`<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">Ogohlantirishlar (${o.alerts.open})</h2><a href="#stock?tab=ogoh">hammasi →</a></div>
       ${o.alerts.latest.length ? `<table style="margin-top:8px"><tbody>${o.alerts.latest.map((a) => `<tr><td class="muted" style="white-space:nowrap">${fmtDate(a.created_at)}</td><td>${esc(a.text)}</td></tr>`).join('')}</tbody></table>` : '<p class="muted">Ochiq ogohlantirish yo\'q.</p>'}</div>`);

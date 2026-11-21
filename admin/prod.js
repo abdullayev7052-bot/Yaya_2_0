@@ -26,6 +26,7 @@ function taskTable(tasks, { actions = false } = {}) {
         <td>${used.map((l) => `${esc(names[l.productId] ?? `#${l.productId}`)}: ${fmtNum(l.qty, 3)}`).join('<br>')}</td>
         <td>${t.workers?.length > 1 || t.wages?.length ? `<div class="muted">${(t.wages?.length ? t.wages : t.workers).map((w) => `${esc(w.name)}${costs() && w.amount != null ? `: ${fmtMoney(w.amount)}` : ''}`).join(', ')}</div>` : ''}
           ${t.send_to ? `<div class="muted">→ ${esc(t.send_to)}</div>` : ''}
+          ${t.result?.shortfall?.length ? `<div class="warn">Idish chiqmadi: ${t.result.shortfall.map((x) => `${esc(x.reason)} ${fmtNum(x.qty, 3)}`).join(', ')}</div>` : ''}
           ${t.outputs.length ? t.outputs.map((o) => `${esc(o.product)}: <b>${fmtNum(o.qty, 3)} ${esc(o.unit)}</b>`).join('<br>') : (t.result?.outputs ?? []).map((o) => `${esc(o.product ?? '')}: <b>${fmtNum(o.qty, 3)} ${esc(o.unit ?? '')}</b>`).join('<br>')}</td>
         ${costs() ? `<td class="num">${t.outputs.map((o) => `${money2(o.unit_cost)} / birlik${provisionalMark(o)}<br><b>${fmtMoney(o.cost)}</b>`).join('<br>')}</td>` : ''}
         ${actions ? `<td>${t.status === 'approval' && can('prod.approve') ? `<button class="small" data-tapprove="${t.id}">Tasdiqlash</button> <button class="ghost small" data-treject="${t.id}">Rad etish</button>` : ''}</td>` : ''}</tr>`;
@@ -117,6 +118,7 @@ views['prod-recipes'] = async (v) => {
       <table style="margin-top:8px"><tbody>${r.lines.map((l) => `<tr><td>${esc(l.product)}</td><td class="num">${fmtNum(l.qty, 4)} ${esc(l.unit)}</td>
         <td class="muted">${l.alts.length ? `alternativ: ${l.alts.map((a) => esc(a.product)).join(', ')}` : ''}</td></tr>`).join('')}</tbody></table>
       <p class="muted" style="margin:8px 0 0">${['pour', 'cap'].includes(r.kind) ? '1 dona uchun' : `Jami ${fmtNum(r.base_weight, 4)} kg`}${r.rates.length ? ` · ishbay: ${r.rates.map((x) => `${esc(x.name)} ${fmtNum(x.amount)}`).join(', ')} so'm/birlik` : ''}${r.max_minutes ? ` · muddat ${fmtNum(r.max_minutes)} daqiqa` : ''}${r.out_min != null || r.out_max != null ? ` · chiqishi ${fmtNum(r.out_min, 3)}–${fmtNum(r.out_max, 3)} kg (partiyaga nisbatan o'zgaradi)` : ''}
+        ${r.kind === 'reprocess' ? `<br>Chiqadi: ${r.outputs.map((o) => `${esc(o.product)} — ${o.per_unit != null ? fmtNum(o.per_unit, 4) : 'netto'}${o.min_per_unit != null || o.max_per_unit != null ? ` (${fmtNum(o.min_per_unit, 4)}–${fmtNum(o.max_per_unit, 4)})` : ''}, ${fmtMoney(o.cost_value)} so'm${o.is_container ? ', idish' : ''}`).join('; ')}` : ''}
         ${r.kind === 'separation' ? `<br>Chiqadi: ${r.outputs.map((o) => `${esc(o.product)} — ${MODE[o.cost_mode]}${o.cost_value != null ? ` ${fmtNum(o.cost_value)}${o.cost_mode === 'percent' ? '%' : ''}` : ''}`).join('; ')}` : ''}</p></div>`).join('')
       || '<p class="muted">Tarkib yo\'q.</p>'}`;
 };
@@ -128,15 +130,23 @@ views['prod-recipe'] = async (v) => {
   if (!lines.length) lines.push({ productId: '', qty: '', alts: [] });
   const outputs = (r?.outputs ?? []).map((o) => ({ productId: o.product_id, costMode: o.cost_mode, costValue: o.cost_value ?? '' }));
   const rates = (r?.rates ?? []).map((x) => ({ name: x.name, amount: x.amount }));
+  // Reprocessing outputs: per input unit (blank = the input's netto weight), range, fixed cost, container.
+  const rout = r?.kind === 'reprocess' ? r.outputs.map((o) => ({ productId: o.product_id, perUnit: o.per_unit ?? '', minPerUnit: o.min_per_unit ?? '', maxPerUnit: o.max_per_unit ?? '', costValue: o.cost_value ?? 0, isContainer: !!o.is_container })) : [];
   const popts = (sel, filter = () => true) => `<option value="">— mahsulot —</option>${products.filter(filter).map((p) => `<option value="${p.id}" ${String(p.id) === String(sel) ? 'selected' : ''}>${esc(p.name)} (${esc(p.unit)})</option>`).join('')}`;
   v.innerHTML = `<p><a href="#prod-recipes">← Tarkiblar</a></p>
     <form class="card" id="rf" style="display:grid;gap:12px">
       <h2>${r ? 'Tarkibni tahrirlash' : 'Yangi tarkib'}</h2>
       <div class="row"><label>Nomi<input name="name" required value="${esc(r?.name ?? '')}"></label>
-        <label>Turi<select name="kind">${[['cook', 'Tayyorlash — quyma (texnolog)'], ['separation', 'Separatsiya (texnolog)'], ['pour', 'Quyish — idishga (quyuvchi)'], ['cap', 'Qopqoq yopish (qopqoq yopuvchi)']]
+        <label>Turi<select name="kind">${[['cook', 'Tayyorlash — quyma (texnolog)'], ['separation', 'Separatsiya (texnolog)'], ['pour', 'Quyish — idishga (quyuvchi)'], ['cap', 'Qopqoq yopish (qopqoq yopuvchi)'], ['reprocess', "Qayta ishlash — muddati o'tgan (qayta ishlovchi)"]]
           .map(([k, t]) => `<option value="${k}" ${(r?.kind ?? 'cook') === k ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
-        <label id="prodWrap">Chiqadigan mahsulot<select name="productId">${popts(r?.product_id, (p) => p.kind !== 'milk')}</select></label></div>
-      <div class="card" style="margin:0"><h2 id="linesTitle">Nima ketadi (asosiy partiya)</h2><p class="muted" id="unitHint" hidden>Quyish va qopqoq yopishda tarkib <b>1 dona</b> uchun yoziladi: masalan 0,4 kg quyma + 1 idish + 1 etiketka. Qopqoqda birinchi qator — mahsulotning o'zi (1 dona) + 1 qopqoq.</p><div class="table-wrap"><table><thead><tr><th>Mahsulot</th><th>Miqdor</th><th>Alternativlar (bir bosishda almashtiriladi)</th><th></th></tr></thead><tbody id="lines"></tbody></table></div>
+        <label id="prodWrap"><span id="prodLabel">Chiqadigan mahsulot</span><select name="productId">${popts(r?.product_id, (p) => p.kind !== 'milk')}</select></label></div>
+      <div class="card" style="margin:0" id="reprocWrap"><h2>1 dona qayta ishlanganda nima chiqadi</h2>
+        <p class="muted">Masalan "Smetana 400 g": <b>idish</b> — 1 dona, tannarxi qat'iy 800 so'm, "idish" belgilanadi (kam chiqsa sababi so'raladi va xarajatga yoziladi);
+          <b>Vozvrat qatiq</b> — miqdori bo'sh (mahsulotning netto vaznidan: 0,4 kg), chegara 0,37–0,45 kg, tannarxi 0.
+          Qolgan tannarx "Qayta ishlashda yo'qotilgan tannarx" xarajatiga yoziladi.</p>
+        <div class="table-wrap"><table><thead><tr><th>Mahsulot</th><th>1 donadan</th><th>Eng kami</th><th>Eng ko'pi</th><th>1 birlik tannarxi</th><th>Idish</th><th></th></tr></thead><tbody id="rout"></tbody></table></div>
+        <button type="button" class="ghost small" id="addRout">+ Mahsulot</button></div>
+      <div class="card" style="margin:0" id="linesCard"><h2 id="linesTitle">Nima ketadi (asosiy partiya)</h2><p class="muted" id="unitHint" hidden>Quyish va qopqoq yopishda tarkib <b>1 dona</b> uchun yoziladi: masalan 0,4 kg quyma + 1 idish + 1 etiketka. Qopqoqda birinchi qator — mahsulotning o'zi (1 dona) + 1 qopqoq.</p><div class="table-wrap"><table><thead><tr><th>Mahsulot</th><th>Miqdor</th><th>Alternativlar (bir bosishda almashtiriladi)</th><th></th></tr></thead><tbody id="lines"></tbody></table></div>
         <button type="button" class="ghost small" id="addLine">+ Qator</button></div>
       <div class="row" id="rangeRow"><label>Chiqishi eng kami, kg<input name="outMin" type="number" step="0.001" min="0" value="${r?.out_min ?? ''}"></label>
         <label>Chiqishi eng ko'pi, kg<input name="outMax" type="number" step="0.001" min="0" value="${r?.out_max ?? ''}"></label></div>
@@ -178,10 +188,30 @@ views['prod-recipe'] = async (v) => {
   $('#addRate', v).onclick = () => { rates.push({ name: '', amount: '' }); drawRates(); };
   $('#rates', v).oninput = (e) => { const tr = e.target.closest('tr[data-r]'); if (tr && e.target.dataset.k) rates[tr.dataset.r][e.target.dataset.k] = e.target.value; };
   $('#rates', v).onclick = (e) => { const tr = e.target.closest('tr[data-r]'); if (tr && e.target.hasAttribute('data-rdel')) { rates.splice(Number(tr.dataset.r), 1); drawRates(); } };
+  const drawRout = () => {
+    $('#rout', v).innerHTML = rout.map((o, i) => `<tr data-ro="${i}"><td><select data-k="productId">${popts(o.productId, (p) => p.kind !== 'milk')}</select></td>
+      <td><input data-k="perUnit" type="number" step="0.0001" min="0" value="${esc(o.perUnit)}" placeholder="netto" style="width:90px"></td>
+      <td><input data-k="minPerUnit" type="number" step="0.0001" min="0" value="${esc(o.minPerUnit)}" style="width:80px"></td>
+      <td><input data-k="maxPerUnit" type="number" step="0.0001" min="0" value="${esc(o.maxPerUnit)}" style="width:80px"></td>
+      <td><input data-k="costValue" type="number" step="0.01" min="0" value="${esc(o.costValue)}" style="width:100px"></td>
+      <td><input data-k="isContainer" type="checkbox" ${o.isContainer ? 'checked' : ''}></td><td><button type="button" class="ghost small" data-rodel>✕</button></td></tr>`).join('');
+  };
+  drawRout();
+  $('#addRout', v).onclick = () => { rout.push({ productId: '', perUnit: '', minPerUnit: '', maxPerUnit: '', costValue: 0, isContainer: false }); drawRout(); };
+  $('#rout', v).oninput = (e) => {
+    const tr = e.target.closest('tr[data-ro]'); const k = e.target.dataset.k; if (!tr || !k) return;
+    rout[tr.dataset.ro][k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+  };
+  $('#rout', v).onchange = $('#rout', v).oninput;
+  $('#rout', v).onclick = (e) => { const tr = e.target.closest('tr[data-ro]'); if (tr && e.target.hasAttribute('data-rodel')) { rout.splice(Number(tr.dataset.ro), 1); drawRout(); } };
   const kindView = () => {
     const kind = form.elements.kind.value;
+    const rep = kind === 'reprocess';
+    $('#reprocWrap', v).hidden = !rep; $('#linesCard', v).hidden = rep;
+    $('#prodLabel', v).textContent = rep ? 'Qaysi mahsulot qayta ishlanadi' : 'Chiqadigan mahsulot';
+    if (rep && !rout.length) { rout.push({ productId: '', perUnit: 1, minPerUnit: '', maxPerUnit: '', costValue: 800, isContainer: true }, { productId: '', perUnit: '', minPerUnit: '', maxPerUnit: '', costValue: 0, isContainer: false }); drawRout(); }
     const sep = kind === 'separation';
-    const unit = kind === 'pour' || kind === 'cap';
+    const unit = kind === 'pour' || kind === 'cap' || kind === 'reprocess';
     $('#prodWrap', v).hidden = sep; $('#outWrap', v).hidden = !sep;
     $('#rateWrap', v).hidden = sep;
     $('#rangeRow', v).hidden = unit; $('#rangeHint', v).hidden = unit; $('#unitHint', v).hidden = !unit;
@@ -219,7 +249,10 @@ views['prod-recipe'] = async (v) => {
     const body = {
       name: f.name.value, kind: f.kind.value, productId: f.productId.value || null, outMin: f.outMin.value, outMax: f.outMax.value, note: f.note.value || null,
       lines: lines.filter((l) => l.productId).map((l) => ({ productId: Number(l.productId), qty: Number(l.qty), alts: l.alts.filter((a) => a.productId).map((a) => ({ productId: Number(a.productId), qty: a.qty === '' ? null : Number(a.qty) })) })),
-      outputs: outputs.filter((o) => o.productId).map((o) => ({ productId: Number(o.productId), costMode: o.costMode, costValue: o.costValue === '' ? null : Number(o.costValue) })),
+      outputs: f.kind.value === 'reprocess'
+        ? rout.filter((o) => o.productId).map((o) => ({ productId: Number(o.productId), perUnit: o.perUnit === '' ? null : Number(o.perUnit), minPerUnit: o.minPerUnit === '' ? null : Number(o.minPerUnit),
+          maxPerUnit: o.maxPerUnit === '' ? null : Number(o.maxPerUnit), costValue: Number(o.costValue) || 0, isContainer: !!o.isContainer }))
+        : outputs.filter((o) => o.productId).map((o) => ({ productId: Number(o.productId), costMode: o.costMode, costValue: o.costValue === '' ? null : Number(o.costValue) })),
       rates: rates.filter((x) => String(x.name).trim()).map((x) => ({ name: x.name, amount: Number(x.amount) || 0 })),
       maxMinutes: f.maxMinutes.value === '' ? null : Number(f.maxMinutes.value),
       ...(f.active ? { active: f.active.checked } : {}),

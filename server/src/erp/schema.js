@@ -187,14 +187,16 @@ CREATE INDEX IF NOT EXISTS idx_alerts_open ON alerts(resolved_at, created_at);
 -- A recipe (tarkib): what goes into one base batch. kind 'cook' makes one product
 -- (quyma) from milk and raw materials; 'separation' splits milk into several outputs;
 -- 'pour' fills containers (per 1 unit: 0.4 kg quyma + container + label); 'cap'
--- closes them (per 1 unit: the unit itself + a lid). max_minutes: a task running
--- longer raises an alert with the worker's name.
+-- closes them (per 1 unit: the unit itself + a lid); 'reprocess' takes an expired
+-- product apart (per 1 unit: container at a fixed cost + content by netto weight at
+-- no cost; the rest of the cost is an expense). max_minutes: a task running longer
+-- raises an alert with the worker's name.
 -- out_min / out_max: allowed output weight (kg) for this base batch; a real batch
 -- is checked against the range scaled by its size (all limits are proportional).
 CREATE TABLE IF NOT EXISTS recipes (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'cook' CHECK (kind IN ('cook','separation','pour','cap')),
+  kind TEXT NOT NULL DEFAULT 'cook' CHECK (kind IN ('cook','separation','pour','cap','reprocess')),
   product_id INTEGER REFERENCES products(id),
   out_min REAL,
   out_max REAL,
@@ -435,18 +437,21 @@ export function setupErp(db, addColumn) {
   for (const [c, def] of REASON_COLUMNS) addColumn('stock_reasons', c, def);
   migrateRecipeKinds(db);
   addColumn('recipes', 'max_minutes', 'REAL');
+  // Reprocessing outputs (stage 5): quantity per input unit (NULL = the input's netto
+  // weight in kg), allowed range per unit, and which output is the container.
+  for (const [c, def] of [['per_unit', 'REAL'], ['min_per_unit', 'REAL'], ['max_per_unit', 'REAL'], ['is_container', 'INTEGER NOT NULL DEFAULT 0']]) addColumn('recipe_outputs', c, def);
   // Sales (stage 4): the customer of a sale / return / payment, and the price of a line.
   addColumn('docs', 'customer_id', 'INTEGER REFERENCES customers(id)');
   addColumn('doc_lines', 'price', 'REAL');
   seedErp(db);
 }
 
-// Stage 3 added the 'pour' and 'cap' recipe kinds. A database created in stage 2 has
+// Stages 3 and 5 added recipe kinds ('pour', 'cap', 'reprocess'). A database created in stage 2 has
 // the old CHECK on recipes.kind; SQLite cannot change a CHECK in place, so the table
 // is rebuilt once (same rows, same ids; the tables pointing to it keep working).
 function migrateRecipeKinds(db) {
   const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'recipes'").get()?.sql ?? '';
-  if (!sql || sql.includes("'pour'")) return;
+  if (!sql || sql.includes("'reprocess'")) return;
   const def = ERP_SCHEMA.slice(ERP_SCHEMA.indexOf('CREATE TABLE IF NOT EXISTS recipes ('), ERP_SCHEMA.indexOf('CREATE TABLE IF NOT EXISTS recipe_lines'));
   const fk = db.pragma('foreign_keys', { simple: true });
   db.pragma('foreign_keys = OFF');
@@ -488,6 +493,13 @@ export function seedErp(db) {
     ["Do'kon", 'Diler', 'Chakana'].forEach((n, i) => ins.run(n, i));
   }
   if (!db.prepare('SELECT 1 FROM cashboxes WHERE is_main = 1').get()) db.prepare("INSERT INTO cashboxes (name, is_main) VALUES ('Asosiy kassa', 1)").run();
+  // Reprocessing: what happened to containers that did not come out.
+  if (!db.prepare("SELECT 1 FROM stock_reasons WHERE section = 'reprocess'").get()) {
+    const cat = db.prepare("SELECT id FROM pnl_categories WHERE code = 'container_loss'").get().id;
+    const ins = db.prepare("INSERT INTO stock_reasons (name, charge, category_id, sort, section, effect) VALUES (?, 'company', ?, ?, 'reprocess', 'company')");
+    ins.run('Singan', cat, 0);
+    ins.run("Yo'qolgan", cat, 1);
+  }
   // The technologist's reasons for milk that is not accounted for at the end of a shift.
   if (!db.prepare("SELECT 1 FROM stock_reasons WHERE section = 'tech'").get()) {
     const wo = db.prepare("SELECT id FROM pnl_categories WHERE code = 'production_loss'").get().id;
