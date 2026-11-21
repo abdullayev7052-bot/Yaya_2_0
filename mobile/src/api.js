@@ -243,6 +243,7 @@ export const mobile = (method, path, body) => call(method, '/api/mobile' + path,
 // Warehouse (Yaya 2.0). Pass { idempotent: true } for document posts that carry a uuid.
 export const erp = (method, path, body, opts) => call(method, '/api/erp' + path, body, opts);
 export const salesApi = (method, path, body, opts) => call(method, '/api/erp/sales' + path, body, opts);
+export const finApi = (method, path, body, opts) => call(method, '/api/erp/finance' + path, body, opts);
 export const changePassword = (current, next) => call('PUT', '/api/auth/password', { current, next });
 // Change own name/login (admins). Updates the cached session so the UI follows.
 export async function changeProfile({ name, login }) {

@@ -4,6 +4,7 @@
 // task finished or cancelled). Who sees an alert: managers (alerts.view), and in
 // the app the people named in it (payload.userIds) and the warehouse's keepers.
 import { addAlert, holderName } from './stock.js';
+import { accrueSalaries } from './finance.js';
 
 const EPS = 0.0005;
 const minutes = (iso) => (Date.now() - Date.parse(iso.endsWith('Z') || iso.includes('T') ? iso : `${iso.replace(' ', 'T')}Z`)) / 60000;
@@ -52,7 +53,7 @@ export function checkLateTasks(db) {
 }
 
 export function runChecks(db) {
-  try { checkDwell(db); checkLateTasks(db); } catch (e) { console.error('erp checks:', e.message); }
+  try { checkDwell(db); checkLateTasks(db); accrueSalaries(db); } catch (e) { console.error('erp checks:', e.message); }
 }
 
 // Alerts for one person in the app: those naming them, those of warehouses they

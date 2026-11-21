@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Platform, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 'react-native';
 import { randomUUID } from 'expo-crypto';
 import * as api from '../api';
-import { notify } from '../dialog';
+import { ask, notify } from '../dialog';
 import { Btn, Chip, Err, Header, SearchBar, fmtDT, fmtMoney, textMatch, toNumber, useLoad } from '../components';
 import { C, fmtQty, s } from '../ui';
 
@@ -30,6 +30,17 @@ export function SalesHome({ tick, onForm, onOpen }) {
     sales('GET', `/docs?from=${new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10)}`),
   ]), [tick]);
   const [box, docs] = data ?? [null, []];
+  // The day's money goes from the seller's own cashbox to the main one.
+  const handOver = async (b) => {
+    try {
+      const main = await api.finApi('GET', '/main-cashbox');
+      if (!main) { notify('Kassa', 'Asosiy kassa topilmadi'); return; }
+      ask('Kassani topshirish', `${fmtMoney(b.balance)} so'm "${main.name}" ga o'tkazilsinmi?`, 'Ha', async () => {
+        try { await api.finApi('POST', '/cash-moves', { fromId: b.id, toId: main.id, amount: b.balance, uuid: randomUUID() }, { idempotent: true }); load(); }
+        catch (e) { notify('Xatolik', e.message); }
+      });
+    } catch (e) { notify('Xatolik', e.message); }
+  };
   return (
     <ScrollView contentContainerStyle={{ padding: 12, gap: 12 }} refreshControl={<RefreshControl refreshing={busy} onRefresh={load} />}>
       <Err err={err} />
@@ -37,6 +48,7 @@ export function SalesHome({ tick, onForm, onOpen }) {
         <View style={[s.card, { gap: 4 }]}>
           <Text style={s.muted}>{box.name}</Text>
           <Text style={{ fontSize: 26, fontWeight: '700', color: C.text }}>{fmtMoney(box.balance)} so'm</Text>
+          {box.balance > 0 && <Btn title="Asosiy kassaga topshirish" kind="ghost" onPress={() => handOver(box)} />}
         </View>
       )}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>

@@ -71,6 +71,12 @@ export const PERMISSIONS = [
   { key: 'sales.prices', group: 'Savdo', label: "Sotuv narxlarini belgilash (umumiy, mijoz turi, mijoz bo'yicha)" },
   { key: 'sales.manage', group: 'Savdo', label: "Savdo sozlamalari: qaytarish turlari, to'lov turlari, kassalar, chek" },
 
+  // --- finance (Yaya 2.0)
+  { key: 'finance.view', group: 'Moliya', label: "Kassalar, balanslar, foyda-zarar va moliya hujjatlarini ko'rish" },
+  { key: 'finance.cash', group: 'Moliya', label: "Kassa amallari: xarajat, boshqa kirim, kassadan kassaga o'tkazma, boshlang'ich qoldiq" },
+  { key: 'finance.vendors', group: 'Moliya', label: "Yetkazib beruvchilar: xarid (kirim) va ularga to'lov" },
+  { key: 'finance.payroll', group: 'Moliya', label: "Oylik: oklad, bonus, jarima, xodimga to'lov", hint: "Xodimlar ish haqini ko'radi — faqat rahbar/buxgalterga" },
+
   // --- reports
   { key: 'reports.view', group: 'Hisobotlar', label: 'Hisobotlar, o\'rtacha tannarx, kunlik ko\'rsatkichlar' },
   { key: 'reports.export', group: 'Hisobotlar', label: 'Hisobotni Excel\'ga yuklab olish' },

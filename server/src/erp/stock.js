@@ -37,6 +37,17 @@ export const DOC_TYPES = {
   sale: { label: 'Sotuv', prefix: 'S' },
   return: { label: 'Qaytarish', prefix: 'Q' },
   payment: { label: "Mijozdan to'lov", prefix: 'TL' },
+  purchase: { label: 'Xarid (kirim)', prefix: 'XK' },
+  vendor_pay: { label: "Yetkazib beruvchiga to'lov", prefix: 'YT' },
+  expense: { label: 'Xarajat', prefix: 'XR' },
+  income: { label: 'Boshqa kirim', prefix: 'KR' },
+  cash_move: { label: 'Kassadan kassaga', prefix: 'KO' },
+  cash_open: { label: "Kassa boshlang'ich qoldig'i", prefix: 'KB' },
+  salary: { label: 'Oylik hisoblandi', prefix: 'OY' },
+  bonus: { label: 'Bonus', prefix: 'BN' },
+  fine: { label: 'Jarima', prefix: 'JR' },
+  staff_pay: { label: "Xodimga to'lov", prefix: 'IP' },
+  staff_open: { label: "Xodim boshlang'ich balansi", prefix: 'XB' },
 };
 // Types a person creates directly; the others come from shifts and production.
 const MANUAL_TYPES = new Set(['opening', 'transfer', 'inventory', 'writeoff']);

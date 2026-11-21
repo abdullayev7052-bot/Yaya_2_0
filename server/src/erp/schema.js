@@ -362,6 +362,19 @@ CREATE TABLE IF NOT EXISTS cash_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_cash_box ON cash_entries(cashbox_id, at);
 CREATE INDEX IF NOT EXISTS idx_party ON party_entries(party_type, party_id);
+
+-- ---------------------------------------------------------------- finance (stage 6)
+-- Suppliers of raw materials, containers, services. Balance = opening_balance +
+-- party entries; positive = we owe them.
+CREATE TABLE IF NOT EXISTS vendors (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  phone TEXT,
+  note TEXT,
+  opening_balance REAL NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `;
 
 // New columns on the existing products table (the milk products keep kind = 'milk').
@@ -427,6 +440,11 @@ const SEED_CATEGORIES = [
   ['production_loss', "Ishlab chiqarishdagi yo'qotish", 'expense'],
   ['sales_revenue', 'Savdo tushumi', 'income'],
   ['cogs', 'Sotilgan mahsulot tannarxi', 'expense'],
+  ['salary', 'Ish haqi (oklad)', 'expense'],
+  ['bonus', 'Bonuslar', 'expense'],
+  ['fines', 'Xodimlardan jarimalar', 'income'],
+  ['other_expense', 'Boshqa xarajatlar', 'expense'],
+  ['other_income', 'Boshqa daromadlar', 'income'],
 ];
 const SEED_REASONS = [['Singan', 'company'], ['Yo\'qolgan', 'company'], ['To\'kilgan (xodim aybi)', 'staff'], ['Muddati o\'tgan', 'company'], ['Boshqa', 'company']];
 
@@ -443,6 +461,12 @@ export function setupErp(db, addColumn) {
   // Sales (stage 4): the customer of a sale / return / payment, and the price of a line.
   addColumn('docs', 'customer_id', 'INTEGER REFERENCES customers(id)');
   addColumn('doc_lines', 'price', 'REAL');
+  // Finance (stage 6): the vendor of a purchase / payment; each person's fixed salary,
+  // the day of the month it is earned, and since when (no back pay before that).
+  addColumn('docs', 'vendor_id', 'INTEGER REFERENCES vendors(id)');
+  addColumn('users', 'salary', 'REAL');
+  addColumn('users', 'salary_day', 'INTEGER');
+  addColumn('users', 'salary_since', 'TEXT');
   seedErp(db);
 }
 

@@ -3,6 +3,7 @@
 // included only for people allowed to see that part.
 import { dailyCost, todayLocal } from '../reports.js';
 import { r2, r3 } from './stock.js';
+import { balancesSummary } from './finance.js';
 
 const EPS = 0.0005;
 
@@ -64,6 +65,8 @@ export function overview(db, perms, day = todayLocal()) {
       customers_debt: r2(debts.filter((d) => d.b > 0).reduce((a, d) => a + d.b, 0)), debtors: debts.filter((d) => d.b > 0.005).length,
     };
   }
+
+  if (can('finance.view')) out.finance = balancesSummary(db);
 
   if (can('alerts.view')) {
     out.alerts = {
