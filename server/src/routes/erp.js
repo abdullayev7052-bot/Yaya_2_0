@@ -14,7 +14,7 @@ import { erpImport, erpTemplate, importKinds, templateFile } from '../erp/import
 import { overview } from '../erp/overview.js';
 import { alertsFor } from '../erp/watch.js';
 
-const COST_KEYS = new Set(['cost', 'unit_cost', 'total_cost', 'amount', 'balance', 'loss', 'surplus']);
+const COST_KEYS = new Set(['cost', 'unit_cost', 'total_cost', 'amount', 'balance', 'loss', 'surplus', 'spread', 'spread_cost']);
 export function stripCosts(v) {
   if (Array.isArray(v)) return v.map(stripCosts);
   if (v && typeof v === 'object' && !(v instanceof Buffer)) {

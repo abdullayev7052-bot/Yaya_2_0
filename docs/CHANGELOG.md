@@ -2,6 +2,21 @@
 
 Eng yangisi tepada. Qavs ichida Android `versionCode`.
 
+## Yaya 2.0 — butun zanjir (ERP), 2026-11-18 — 2026-11-21
+Server va panel; mobil ilova brauzer versiyasida (`/app/`) sinalgan, APK hali yig'ilmagan. Batafsil: docs/ERP_PLAN.md.
+- **Ombor:** omborlar va mas'ullar, partiyalar va FIFO, topshirish → qabul, hisobdan chiqarish (xodim hisobiga ham),
+  inventarizatsiya (kamomad kim hisobiga — so'raladi), boshlang'ich qoldiq va Excel import; yig'uvchilar suti → bitta "Xom sut".
+- **Ishlab chiqarish:** tarkiblar va alternativlar, texnolog smenasi, qaynatishdagi yo'qotishni tannarxga taqsimlash,
+  separatsiya, nisbatdagi limitlar va rahbar tasdig'i; quyish va qopqoq (ishbay haq bo'linishi), issiqxona turish vaqti va
+  kechikish ogohlantirishlari; muddati o'tganlarni qayta ishlash.
+- **Savdo:** mijozlar, narxlar, sotuv, 80 mm chek, qaytarish turlari, qaytgan tannarx, muddati o'tgan siyosati, to'lovlar.
+- **Moliya:** kassalar, xarajat va kirim, o'tkazmalar, yetkazib beruvchilar va xarid, oylik (avtomatik oklad, bonus,
+  jarima, to'lov), foyda-zarar.
+- **Ish joyi:** monoblok (PIN bilan almashish), internetsiz navbat.
+- **Hisobotlar:** savdo, ishlab chiqarish, ombor harakati, yo'qotishlar, muddatlar, xodimlar; Excel; Bosh panel grafiklari.
+- **Panel:** bo'limlar bo'yicha guruhlangan menyu va "Bosh panel".
+- 68 ta avtomatik test, jumladan butun zanjir va buxgalteriya muvozanati, xodimlarga summa sizmasligi, zaxira/tiklash.
+
 ## Yaya 2.0 — mustaqil nusxa (2026-11-16)
 - Loyiha asl Yaya'dan ajratildi: oʻz reposi (`abdullayev7052-bot/Yaya_2_0`), oʻz serveri
   (https://yaya2-production.up.railway.app, Railway, Yevropa hududi) va oʻz bazasi.

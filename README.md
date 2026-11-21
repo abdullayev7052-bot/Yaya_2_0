@@ -1,15 +1,19 @@
 # Yaya 2.0
 
-Sut xaridi uchun korporativ tizim: barcha xodimlar uchun oflayn ishlaydigan mobil ilova + admin uchun veb panel. To'liq mustaqil tizim.
+Sut korxonasi uchun to'liq tizim — butun zanjir: sut yig'ish → ombor → ishlab chiqarish (texnolog, quyish, issiqxona, qopqoq) →
+savdo → qayta ishlash → moliya va oylik → hisobotlar. Barcha xodimlar uchun oflayn ishlaydigan ilova (telefon, planshet,
+monoblok — PIN bilan almashish) + rahbar uchun veb panel. Oddiy xodimlar tannarx va summalarni ko'rmaydi.
 Bu — asl Yaya loyihasining mustaqil nusxasi; server: https://yaya2-production.up.railway.app (`main` branchdan deploy bo'ladi).
+
+**Ishga tushirish qo'llanmasi: [docs/QOLLANMA.md](docs/QOLLANMA.md)** · ERP reja va bosqichlar: [docs/ERP_PLAN.md](docs/ERP_PLAN.md)
 
 Reja: [docs/PLAN.md](docs/PLAN.md) · Deploy va o'rnatish: [docs/DEPLOY.md](docs/DEPLOY.md) · O'zgarishlar: [docs/CHANGELOG.md](docs/CHANGELOG.md) · Keyingi bosqichlar: [docs/NEXT.md](docs/NEXT.md)
 
 ## Tuzilma
-- `server/` — Node.js API (mobil sinxron, panel, hisobotlar), SQLite
+- `server/` — Node.js API (mobil sinxron, panel, ombor/ishlab chiqarish/savdo/moliya — `src/erp/`, hisobotlar), SQLite
 - `admin/` — boshqaruv paneli (`/admin/`)
 - `mobile/` — mobil ilova, barcha xodimlar uchun (Expo / React Native). Brauzer versiyasi `/app/` da (test uchun)
-- `.github/workflows/android.yml` — APK avtomatik yig'iladi
+- `.github/workflows/android.yml` — APK yig'ish (hozircha faqat qo'lda: GitHub → Actions → Android APK → Run workflow)
 
 ## Lokal ishga tushirish
 ```bash

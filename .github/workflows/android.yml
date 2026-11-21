@@ -1,9 +1,10 @@
 name: Android APK
 
+# Manual only for now (Actions → Android APK → Run workflow): the owner asked to
+# build the apps at the very end, after the whole system is tested in the browser.
+# To build on every push again, restore the push trigger:
+#   push: { branches: [main, 'claude/**'], paths: ['mobile/**', '.github/workflows/android.yml'] }
 on:
-  push:
-    branches: [main, 'claude/**']
-    paths: ['mobile/**', '.github/workflows/android.yml']
   workflow_dispatch:
 
 concurrency:

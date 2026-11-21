@@ -59,7 +59,7 @@ function closeBlock(s) {
       ${c.gain ? `<tr><td>Yutish (hisobdagidan ko'p qoldi)</td><td class="num" style="color:var(--ok)">+${fmtNum(c.gain, 3)} kg</td></tr>` : ''}
     </tbody></table>
     ${(c.over ?? []).length ? `<p class="warn">Limitdan oshgan: ${c.over.map((o) => `${esc(o.reason)} ${fmtNum(o.qty, 3)} kg (ruxsat ${fmtNum(o.allowed, 3)} kg)`).join(', ')}</p>` : ''}
-    ${costs() && c.spread != null ? `<p>Tannarxga taqsimlangan: <b style="color:${c.spread > 0 ? 'var(--err)' : 'var(--ok)'}">${c.spread > 0 ? '+' : ''}${fmtMoney(c.spread)}</b> so'm · smenadagi sutning o'rtacha 1 kg tannarxi ${money2(c.unit)}</p>` : ''}
+    ${costs() && (c.spread_cost ?? c.spread) != null ? `<p>Tannarxga taqsimlangan: <b style="color:${(c.spread_cost ?? c.spread) > 0 ? 'var(--err)' : 'var(--ok)'}">${(c.spread_cost ?? c.spread) > 0 ? '+' : ''}${fmtMoney(c.spread_cost ?? c.spread)}</b> so'm · smenadagi sutning o'rtacha 1 kg tannarxi ${money2(c.unit_cost ?? c.unit)}</p>` : ''}
     ${s.approval_note ? `<p class="muted">Rahbar izohi: ${esc(s.approval_note)}</p>` : ''}</div>`;
 }
 

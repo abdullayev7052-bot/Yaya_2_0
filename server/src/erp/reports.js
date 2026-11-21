@@ -258,7 +258,10 @@ export function runReport(db, key, params, { costs = false } = {}) {
   const r = REPORTS[key];
   if (!r) return null;
   const out = r.run(db, params);
-  const hidden = new Set(out.columns.filter((c) => c.cost && !costs).map((c) => c.key));
+  // Without stock.costs: the cost columns, and any cost-type field a row carries even
+  // when it is not shown as a column (rows are built with them for the totals).
+  const COSTLY = ['cost', 'unit_cost', 'total_cost', 'profit', 'margin', 'value', 'open_value', 'close_value'];
+  const hidden = new Set(costs ? [] : [...out.columns.filter((c) => c.cost).map((c) => c.key), ...COSTLY]);
   const strip = (row) => Object.fromEntries(Object.entries(row).filter(([k]) => !hidden.has(k)));
   return {
     key, title: r.title, from: params.from, to: params.to, note: out.note ?? null, chart: out.chart ?? null,

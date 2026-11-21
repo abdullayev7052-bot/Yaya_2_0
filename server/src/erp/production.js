@@ -629,7 +629,7 @@ export function closeShift(db, shiftId, body, { actor, approve = false }) {
       db.prepare('INSERT INTO doc_lines (doc_id, product_id, qty, sort) VALUES (?, ?, ?, 0)').run(transferId, milk.product_id, returned);
     }
     db.prepare("UPDATE prod_shifts SET status = 'closed', closed_at = ?, close_data = ?, close_doc_id = ? WHERE id = ?")
-      .run(nowIso(), JSON.stringify({ ...data, spread: r2(spread), unit: r2(unit), transferId }), docId, s.id);
+      .run(nowIso(), JSON.stringify({ ...data, spread_cost: r2(spread), unit_cost: r2(unit), transferId }), docId, s.id);
     if (approve) closeAlerts(db, 'shiftId', s.id, actor);
     return { shift: shiftDetail(db, s.id) };
   })();
