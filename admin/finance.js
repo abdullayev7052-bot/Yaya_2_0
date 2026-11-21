@@ -33,38 +33,101 @@ views.finance = async (v) => {
   v.innerHTML = `<div class="tiles">
       <div class="tile"><div class="k">Kassalarda jami</div><div class="v">${fmtMoney(sum.cash)}</div></div>
       <div class="tile"><div class="k">Mijozlar bizga qarz</div><div class="v">${fmtMoney(sum.customers_owe)}</div><div class="s"><a href="#customers">mijozlar</a></div></div>
+      <div class="tile"><div class="k">Biz xonadonlarga qarz (sut)</div><div class="v">${fmtMoney(sum.we_owe_households)}</div><div class="s"><a href="#debts">batafsil</a></div></div>
       <div class="tile"><div class="k">Biz yetkazib beruvchilarga qarz</div><div class="v">${fmtMoney(sum.we_owe_vendors)}</div><div class="s"><a href="#vendors">batafsil</a></div></div>
       <div class="tile"><div class="k">Biz xodimlarga qarz (oylik, ishbay)</div><div class="v">${fmtMoney(sum.we_owe_staff)}</div><div class="s">xodimlar bizga: ${fmtMoney(sum.staff_owe)}</div></div>
     </div>
     ${c ? `<div class="row" style="margin-bottom:12px"><button data-k="expense">− Xarajat</button><button data-k="income" class="ghost">+ Boshqa kirim</button>
-      <button data-k="move" class="ghost">⇄ Kassadan kassaga</button><button data-k="open" class="ghost">Boshlang'ich qoldiq</button></div>` : ''}
+      <button data-k="move" class="ghost">⇄ Kassadan kassaga</button><button data-k="count" class="ghost">Kassani sanash</button><button data-k="open" class="ghost">Boshlang'ich qoldiq</button></div>` : ''}
     <div class="card table-wrap"><table><thead><tr><th>Kassa</th><th>Mas'ullar</th><th class="num">Qoldiq</th></tr></thead><tbody>
       ${boxes.map((b) => `<tr class="${b.active ? '' : 'voided'}"><td><a href="#cashbox?id=${b.id}">${esc(b.name)}</a>${b.is_main ? ' <span class="muted">(asosiy)</span>' : ''}</td>
         <td class="muted">${b.keepers.map((k) => esc(k.name)).join(', ')}</td><td class="num"><b>${fmtMoney(b.balance)}</b></td></tr>`).join('')}
     </tbody></table><p class="muted">Sotuvchi sotsa pul uning o'z kassasiga tushadi; u ilovadan yoki shu yerdan "Kassadan kassaga" bilan asosiy kassaga topshiradi.
       Kassalar ro'yxati va mas'ullar — Savdo → Sozlamalar.</p></div>`;
-  $$('[data-k]', v).forEach((b) => { b.onclick = act(() => cashForm(b.dataset.k)); });
+  $$('[data-k]', v).forEach((b) => { b.onclick = act(() => (b.dataset.k === 'count' ? cashCount() : cashForm(b.dataset.k))); });
 };
+
+// Kassa nazorati: count the money; the difference is booked, a shortage asks who pays.
+async function cashCount(preset = null) {
+  const m = await finMeta();
+  const staff = (await loadMeta()).staff;
+  const dlg = $('#dlg');
+  dlg.innerHTML = `<form method="dialog"><h2>Kassani sanash</h2>
+    <label>Kassa<select name="box">${m.boxes.map((b) => `<option value="${b.id}" data-bal="${b.balance}" ${b.id === preset ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}</select></label>
+    <p>Hisob bo'yicha: <b id="book"></b></p>
+    <label>Sanalgan pul<input name="counted" type="number" step="0.01" min="0" required></label>
+    <p id="diff" class="muted"></p>
+    <fieldset id="who" hidden style="border:1px solid var(--line);border-radius:8px;display:grid;gap:8px"><legend>Kamomad kim hisobiga?</legend>
+      <p class="muted" style="margin:0">Xodim(lar)ga summa yozing; qolgani kompaniya xarajati ("Kassa kamomadi").</p>
+      ${staff.map((u) => `<label class="row" style="align-items:center"><span style="flex:1;color:var(--text)">${esc(u.name)}</span><input type="number" step="0.01" min="0" data-u="${u.id}" style="width:140px"></label>`).join('')}
+    </fieldset>
+    <label>Izoh<input name="note"></label><p class="err" id="dlgErr"></p>
+    <div class="actions"><button type="button" class="ghost" value="cancel">Bekor</button><button value="ok">Saqlash</button></div></form>`;
+  const f = $('form', dlg);
+  const upd = () => {
+    const opt = f.elements.box.selectedOptions[0];
+    const book = Number(opt.dataset.bal);
+    $('#book', dlg).textContent = fmtMoney(book);
+    const c = f.elements.counted.value === '' ? null : Number(f.elements.counted.value);
+    const d = c == null ? 0 : Math.round((c - book) * 100) / 100;
+    $('#diff', dlg).innerHTML = c == null ? '' : d === 0 ? 'Farq yo\'q' : d > 0 ? `<span style="color:var(--ok)">Ortiqcha: +${fmtMoney(d)}</span>` : `<span class="err">Kamomad: ${fmtMoney(-d)}</span>`;
+    $('#who', dlg).hidden = !(d < 0);
+  };
+  f.elements.box.onchange = upd; f.elements.counted.oninput = upd; upd();
+  $('button[value=cancel]', dlg).onclick = () => dlg.close();
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const charges = $$('input[data-u]', f).filter((x) => Number(x.value) > 0).map((x) => ({ userId: Number(x.dataset.u), amount: Number(x.value) }));
+    try {
+      const r = await finApi('POST', '/cash-counts', { cashboxId: Number(f.elements.box.value), counted: Number(f.elements.counted.value), charges, note: f.elements.note.value || null, uuid: uuid() });
+      dlg.close(); flash(`${r.label} saqlandi`); route();
+    } catch (ex) { $('#dlgErr').textContent = ex.message; }
+  };
+  dlg.showModal();
+}
 
 views.cashbox = async (v) => {
   const q = hashParams();
   const f = { from: q.get('from') || addDays(todayLocal(), -30), to: q.get('to') || todayLocal() };
   const id = q.get('id');
   const c = await finApi('GET', `/cashboxes/${id}?from=${f.from}&to=${f.to}`);
-  const TYPE = { sale: 'Sotuv', payment: "Mijoz to'lovi", expense: 'Xarajat', income: 'Boshqa kirim', cash_move: "O'tkazma", cash_open: "Boshlang'ich", purchase: 'Xarid', vendor_pay: "Yetkazib beruvchiga", staff_pay: "Xodimga to'lov" };
+  const TYPE = { sale: 'Sotuv', payment: "Mijoz to'lovi", expense: 'Xarajat', income: 'Boshqa kirim', cash_move: "O'tkazma", cash_open: "Boshlang'ich", purchase: 'Xarid', vendor_pay: "Yetkazib beruvchiga", staff_pay: "Xodimga to'lov", cash_count: "Kassa sanog'i" };
+  const KIND = { household: "Xonadonga to'lov (sut)", household_void: "Xonadon to'lovi bekor qilindi" };
   v.innerHTML = `<p><a href="#finance">← Kassalar</a></p>
     <div class="card"><div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">${esc(c.name)}</h2>
-      ${can('finance.cash') ? `<div class="row"><button data-k="expense" class="small">− Xarajat</button><button data-k="income" class="ghost small">+ Kirim</button><button data-k="move" class="ghost small">⇄ O'tkazma</button></div>` : ''}</div>
+      ${can('finance.cash') ? `<div class="row"><button data-k="expense" class="small">− Xarajat</button><button data-k="income" class="ghost small">+ Kirim</button><button data-k="move" class="ghost small">⇄ O'tkazma</button><button data-k="count" class="ghost small">Sanash</button></div>` : ''}</div>
       <div class="row" style="margin-top:8px"><label>Dan<input type="date" id="from" value="${f.from}"></label><label>Gacha<input type="date" id="to" value="${f.to}"></label></div></div>
     <div class="tiles"><div class="tile"><div class="k">Davr boshida</div><div class="v">${fmtMoney(c.before)}</div></div><div class="tile"><div class="k">Kirim</div><div class="v" style="color:var(--ok)">${fmtMoney(c.in)}</div></div>
       <div class="tile"><div class="k">Chiqim</div><div class="v" style="color:var(--err)">${fmtMoney(c.out)}</div></div><div class="tile"><div class="k">Davr oxirida</div><div class="v">${fmtMoney(c.after)}</div></div></div>
     <div class="card table-wrap"><table><thead><tr><th>Vaqt</th><th>Amal</th><th>To'lov turi</th><th>Izoh</th><th class="num">Summa</th><th class="num">Qoldiq</th></tr></thead><tbody>
-      ${c.entries.map((e) => `<tr><td>${fmtDate(e.at)}</td><td>${esc(TYPE[e.type] ?? e.type ?? '')}${e.kind === 'reversal' ? ' <span class="muted">(bekor)</span>' : ''}</td><td>${esc(e.method ?? '')}</td>
+      ${c.entries.map((e) => `<tr><td>${fmtDate(e.at)}</td><td>${esc(TYPE[e.type] ?? KIND[e.kind] ?? e.type ?? '')}${e.kind === 'reversal' ? ' <span class="muted">(bekor)</span>' : ''}</td><td>${esc(e.method ?? '')}</td>
         <td class="muted">${esc(e.note ?? '')}</td><td class="num">${signed(e.amount)}</td><td class="num">${fmtMoney(e.balance)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">Bu davrda harakat yo\'q</td></tr>'}
     </tbody></table></div>`;
   $('#from', v).onchange = (e) => setHash('cashbox', { id, ...f, from: e.target.value });
   $('#to', v).onchange = (e) => setHash('cashbox', { id, ...f, to: e.target.value });
-  $$('[data-k]', v).forEach((b) => { b.onclick = act(() => cashForm(b.dataset.k, { cashboxId: Number(id) })); });
+  $$('[data-k]', v).forEach((b) => { b.onclick = act(() => (b.dataset.k === 'count' ? cashCount(Number(id)) : cashForm(b.dataset.k, { cashboxId: Number(id) }))); });
+};
+
+// Balanslar: who owes whom across the whole company, with the people behind each total.
+views.balances = async (v) => {
+  const d = await finApi('GET', '/balances');
+  const LINK = { customers: (r) => `#customer?id=${r.id}`, households: (r) => `#supplier?id=${r.id}`, vendors: (r) => `#vendor?id=${r.id}`, staff: (r) => `#staff-fin?id=${r.id}`, cashboxes: (r) => `#cashbox?id=${r.id}` };
+  const REV = { customers: 'Biz mijozlarga qarz (oldindan to\'langan)', households: 'Xonadonlar bizga qarz', vendors: 'Yetkazib beruvchilar bizga qarz', staff: 'Xodimlar bizga qarz' };
+  const card = (k) => {
+    const g = d[k];
+    return `<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">${esc(g.title)}</h2><b style="font-size:20px">${fmtMoney(g.total)}</b></div>
+      ${g.reverse ? `<p class="muted" style="margin:4px 0 0">${REV[k]}: ${fmtMoney(g.reverse)}</p>` : ''}
+      <table style="margin-top:8px"><tbody>${g.rows.slice(0, 15).map((r) => `<tr><td><a href="${LINK[k](r)}">${esc(r.name)}</a></td><td class="num" style="color:${r.balance < 0 ? 'var(--muted)' : 'inherit'}">${fmtMoney(r.balance)}</td></tr>`).join('') || '<tr><td class="muted">Yo\'q</td></tr>'}
+      ${g.rows.length > 15 ? `<tr><td class="muted" colspan="2">va yana ${g.rows.length - 15} ta</td></tr>` : ''}</tbody></table></div>`;
+  };
+  const net = d.cashboxes.total + d.customers.total - d.customers.reverse - d.households.total + d.households.reverse - d.vendors.total + d.vendors.reverse - d.staff.total + d.staff.reverse;
+  v.innerHTML = `<div class="tiles">
+      <div class="tile"><div class="k">Kassalarda</div><div class="v">${fmtMoney(d.cashboxes.total)}</div></div>
+      <div class="tile"><div class="k">Bizga qarzlar</div><div class="v" style="color:var(--ok)">${fmtMoney(d.customers.total + d.households.reverse + d.vendors.reverse + d.staff.reverse)}</div><div class="s">mijozlar, xodimlar va boshqalar</div></div>
+      <div class="tile"><div class="k">Bizning qarzlarimiz</div><div class="v" style="color:var(--err)">${fmtMoney(d.households.total + d.vendors.total + d.staff.total + d.customers.reverse)}</div><div class="s">xonadonlar, yetkazib beruvchilar, xodimlar</div></div>
+      <div class="tile"><div class="k">Pul + bizga qarz − bizning qarz</div><div class="v">${fmtMoney(net)}</div><div class="s">ombordagi mahsulotsiz</div></div>
+    </div>
+    <div class="grid2">${['cashboxes', 'customers', 'households', 'vendors', 'staff'].map(card).join('')}</div>`;
 };
 
 views['fin-docs'] = async (v) => {
@@ -233,6 +296,7 @@ views.pnl = async (v) => {
 GROUPS.splice(GROUPS.findIndex((g) => g[0] === 'reports'), 0, ['finance', 'Moliya']);
 PAGES.push(
   ['finance', 'Kassalar', ['finance.view', 'finance.cash'], 'finance'],
+  ['balances', 'Balanslar', 'finance.view', 'finance'],
   ['fin-docs', 'Hujjatlar', 'finance.view', 'finance'],
   ['vendors', 'Yetkazib beruvchilar', ['finance.vendors', 'finance.view'], 'finance'],
   ['payroll', 'Oylik', ['finance.payroll', 'finance.view'], 'finance'],

@@ -189,7 +189,11 @@ export function TaskScreen({ id, onBack, onDone }) {
   if (r?.kind === 'reprocess') return <ReprocessTask t={t} r={r} onBack={onBack} onDone={onDone} reload={load} />;
   const inWeight = inputs.reduce((a, l) => a + weightKg(l.unit, toNumber(l.qty || 0)), 0);
   const scale = r?.base_weight > 0 ? inWeight / r.base_weight : 1;
-  const range = r && !PER_UNIT.has(r.kind) && (r.out_min != null || r.out_max != null) ? { min: r.out_min == null ? null : r.out_min * scale, max: r.out_max == null ? null : r.out_max * scale } : null;
+  // Conditional limit: when all its products are used, its range applies (most specific wins).
+  const used = new Set(inputs.filter((l) => toNumber(l.qty || 0) > 0).map((l) => Number(l.productId)));
+  const rule = (r?.limits ?? []).filter((x) => x.product_ids.every((pid) => used.has(pid))).sort((x, y) => y.product_ids.length - x.product_ids.length)[0] ?? null;
+  const lo = rule ? rule.out_min : r?.out_min; const hi = rule ? rule.out_max : r?.out_max;
+  const range = r && !PER_UNIT.has(r.kind) && (lo != null || hi != null) ? { min: lo == null ? null : lo * scale, max: hi == null ? null : hi * scale, rule: rule ? (rule.name || rule.products.join(' + ')) : null } : null;
   const outs = r?.kind === 'separation' ? r.outputs.map((o) => ({ productId: o.product_id, name: o.product, unit: o.unit })) : [{ productId: r?.product_id, name: r?.product, unit: r?.unit }];
   const outWeight = perUnit ? toNumber(out[r.product_id] ?? String(t.factor)) : outs.reduce((a, o) => a + weightKg(o.unit, toNumber(out[o.productId] || 0)), 0);
   const outside = range && outWeight > 0 && ((range.min != null && outWeight < range.min - 0.0005) || (range.max != null && outWeight > range.max + 0.0005));
@@ -235,7 +239,7 @@ export function TaskScreen({ id, onBack, onDone }) {
               {editable ? <Num value={out[o.productId] ?? (perUnit ? String(t.factor) : '')} unit={o.unit} onChange={(v) => setOut((x) => ({ ...x, [o.productId]: v }))} /> : null}
             </View>
           ))}
-          {range && editable && <Text style={{ color: outside ? C.err : C.muted }}>Ruxsat etilgan: {fmtQty(range.min ?? 0)} – {range.max == null ? '∞' : fmtQty(range.max)} kg{outside ? ' — chegaradan tashqarida, rahbar tasdiqlaydi' : ''}</Text>}
+          {range && editable && <Text style={{ color: outside ? C.err : C.muted }}>Ruxsat etilgan: {fmtQty(range.min ?? 0)} – {range.max == null ? '∞' : fmtQty(range.max)} kg{range.rule ? ` (shartli: ${range.rule})` : ''}{outside ? ' — chegaradan tashqarida, rahbar tasdiqlaydi' : ''}</Text>}
           {t.status === 'approval' && <Text style={{ color: C.warn }}>Chiqish chegaradan tashqarida. Rahbar tasdiqlashini kuting.</Text>}
         </View>
         {editable && !!r?.rates?.length && (

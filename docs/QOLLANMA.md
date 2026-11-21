@@ -56,6 +56,8 @@ Rol ruxsatlarini **Boshqaruv → Rollar va ruxsatlar**da o'zgartirasiz. Muhim ru
 **Ishlab chiqarish → Tarkiblar:**
 - **Tayyorlash (quyma)** — asosiy partiya: xom sut, qaymoq, zakvaska...; har qatorga alternativ;
   chiqish oralig'i (masalan 320–335 kg) — partiyaga qarab o'zi o'zgaradi.
+  **Shartli limitlar:** "B zakvaska ishlatilsa — 315–330 kg" kabi; bir nechtasi mos kelsa eng aniqi (ko'p xomashyolisi)
+  olinadi, birortasi mos kelmasa — umumiy oraliq. Texnolog ilovada qaysi chegara ishlayotganini ko'radi.
 - **Separatsiya** — chiqadigan mahsulotlar: qaymoq "qat'iy 1 kg tannarxi", yog'siz sut "qolgan tannarx".
 - **Quyish** va **Qopqoq yopish** — 1 dona uchun; ishbay haq (masalan 170 va 90 so'm) va topshiriq muddati.
 - **Qayta ishlash** — 1 dona muddati o'tgan mahsulotdan: idish (qat'iy tannarx, "idish" belgisi) va ichidagi
@@ -73,6 +75,12 @@ chekda vazn/hajm, "o'rtacha" qaytarish tannarxi uchun kunlar soni.
 ## 7. Moliya va oylik
 **Moliya → Oylik:** har bir xodimga oklad va kun (1–28) — shu kuni avtomatik yoziladi. Bonus va jarima — sabab bilan.
 **Moliya → Foyda-zarar** va **Hisobotlar → Umumiy hisobotlar** — natijalar.
+**Xonadonlarga to'lov** kassadan chiqadi: panelda "Qaysi kassadan" tanlanadi (standart — asosiy kassa); sut yig'uvchi
+dalada to'lasa — uning o'z kassasidan (birinchi to'lovda "<ism> kassasi" o'zi ochiladi), keyin u pulni asosiy kassadan
+oladi yoki topshiradi. To'lov bekor qilinsa pul kassaga qaytadi.
+**Kassa nazorati:** Moliya → Kassalar → "Kassani sanash" — sanalgan pulni yozasiz. Ortiqcha — "Kassa ortiqchasi" kirimi;
+kamomad — kim hisobiga ekani so'raladi (xodim(lar)ga summa, qolgani "Kassa kamomadi" xarajati).
+**Moliya → Balanslar:** kassalarda qancha pul, kim bizga va biz kimga qarz — har biri ism bilan.
 
 ## 8. Monoblok (sexdagi umumiy kompyuter)
 1. **Boshqaruv → Monobloklar → "+ Monoblok"** (bo'sh tursa necha daqiqada ismlar ro'yxatiga qaytsin).
@@ -98,6 +106,4 @@ monoblokka kirish uchun internet kerak.
 
 ## 10. Hozircha yo'q (keyingi ishlar)
 - Android ilova (APK) va Desktop o'rnatuvchisini yig'ish; telefonga push xabarlar; Android'da chek printeri.
-- Xonadonlarga to'lovni kassaga bog'lash (hozir sut yig'ish bo'limida alohida).
-- Shartli limit ("shu xomashyolar bo'lsa, chiqishi X–Y").
 - Buyurtmalar va logistika; soliq va Didox; keldi-ketdi (HR).

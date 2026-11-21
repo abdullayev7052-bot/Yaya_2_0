@@ -13,6 +13,7 @@ import { labFields, labList, labDetail, saveLab, acceptLab } from '../lab.js';
 import { purchaseList, purchaseBreakdown, purchaseRows } from '../purchases.js';
 import { intg, setIntg, reloadBots, sendBackup, checkToken, notifyHousehold } from '../integrations.js';
 import { decrypt, encrypt, listSafety, loadSafety, restore, saveSafety, snapshot, wipeHistory } from '../backup.js';
+import { bookHouseholdPayment, voidHouseholdPayment } from '../erp/finance.js';
 import { actorName, describe } from '../auditText.js';
 
 // Fields that reveal money. Stripped from every response for users without
@@ -666,7 +667,9 @@ export default async function adminRoutes(app, { db }) {
     const id = db.prepare(`INSERT INTO payments (client_uuid, supplier_id, amount, method, note, paid_at, created_by, employee_id, number)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(number), 0) + 1 FROM payments))`).run(req.body?.uuid ? String(req.body.uuid) : randomUUID(), supplierId, amount, method,
       str(req.body?.note, 300), paidAt, req.actor, req.me.is_test ? req.me.id : null).lastInsertRowid;
-    log(req, 'payment.create', { id, supplierId, supplier: s.name, amount, method });
+    // The money leaves a cashbox (chosen, the payer's own, or the main one).
+    const cashboxId = bookHouseholdPayment(db, Number(id), req.me, req.body?.cashboxId);
+    log(req, 'payment.create', { id, supplierId, supplier: s.name, amount, method, cashboxId });
     notifyHousehold(db, 'payment', { paymentId: id });
     // The new balance is money: only return it to callers allowed to see debts.
     return { id, ...(has(req, 'debts.view') ? { balance: supplierBalance(db, supplierId) } : {}) };
@@ -678,6 +681,7 @@ export default async function adminRoutes(app, { db }) {
     const p = db.prepare('SELECT * FROM payments WHERE id = ? AND voided_at IS NULL').get(req.params.id);
     if (!p) return reply.code(404).send({ error: 'Topilmadi yoki allaqachon bekor qilingan' });
     db.prepare("UPDATE payments SET voided_at = datetime('now'), void_reason = ?, voided_by = ? WHERE id = ?").run(reason, req.actor, p.id);
+    voidHouseholdPayment(db, p.id);
     log(req, 'payment.void', { id: p.id, amount: p.amount, reason });
     notifyHousehold(db, 'void', { paymentId: p.id });
     return { ok: true };

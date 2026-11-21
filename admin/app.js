@@ -162,20 +162,26 @@ function openBalanceEditor() {
   });
 }
 
-function paymentForm(supplier, balance) {
+async function paymentForm(supplier, balance) {
+  // The money leaves a cashbox (Moliya). Without finance rights the server picks: own, else main.
+  let boxes = [];
+  if (can('finance.view') || can('finance.cash')) {
+    try { boxes = (await api('GET', '/cashboxes', null, '/api/erp/finance')).filter((c) => c.active); } catch { boxes = []; }
+  }
   openForm({
     title: `To'lov: ${supplier.name}`,
     intro: balance != null ? `<p class="muted">Joriy qarzimiz: <b>${fmtMoney(balance)}</b> so'm</p>` : '',
     fields: [
       { name: 'amount', label: 'Summa (so\'m)', type: 'number', min: 1, step: 1, required: true, value: balance > 0 ? Math.round(balance) : '' },
       { name: 'method', label: 'Usul', type: 'select', options: Object.entries(METHOD), value: 'cash' },
+      ...(boxes.length ? [{ name: 'cashboxId', label: 'Qaysi kassadan', type: 'select', options: boxes.map((c) => [c.id, `${c.name} (${fmtMoney(c.balance)})`]), value: boxes.find((c) => c.is_main)?.id }] : []),
       { name: 'paidAt', label: 'Sana', type: 'date', value: todayLocal() },
       { name: 'note', label: 'Izoh' },
     ],
     submit: 'To\'lovni saqlash',
     onSubmit: async (d) => {
       const paidAt = d.paidAt === todayLocal() ? new Date().toISOString() : new Date(`${d.paidAt}T12:00:00+05:00`).toISOString();
-      await api('POST', '/payments', { supplierId: supplier.id, amount: Number(d.amount), method: d.method, note: d.note, paidAt });
+      await api('POST', '/payments', { supplierId: supplier.id, amount: Number(d.amount), method: d.method, note: d.note, paidAt, ...(d.cashboxId ? { cashboxId: Number(d.cashboxId) } : {}) });
       flash('To\'lov saqlandi');
     },
   });
@@ -1515,4 +1521,6 @@ const route = act(async () => {
 
 window.addEventListener('hashchange', route);
 loadBrand();
-show();
+// Section scripts (stock.js … reports.js) load after this file and add their pages:
+// start once they all have, so a reloaded #pnl or #balances opens that page, not the home page.
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show); else show();

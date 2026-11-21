@@ -118,6 +118,7 @@ views['prod-recipes'] = async (v) => {
       <table style="margin-top:8px"><tbody>${r.lines.map((l) => `<tr><td>${esc(l.product)}</td><td class="num">${fmtNum(l.qty, 4)} ${esc(l.unit)}</td>
         <td class="muted">${l.alts.length ? `alternativ: ${l.alts.map((a) => esc(a.product)).join(', ')}` : ''}</td></tr>`).join('')}</tbody></table>
       <p class="muted" style="margin:8px 0 0">${['pour', 'cap'].includes(r.kind) ? '1 dona uchun' : `Jami ${fmtNum(r.base_weight, 4)} kg`}${r.rates.length ? ` · ishbay: ${r.rates.map((x) => `${esc(x.name)} ${fmtNum(x.amount)}`).join(', ')} so'm/birlik` : ''}${r.max_minutes ? ` · muddat ${fmtNum(r.max_minutes)} daqiqa` : ''}${r.out_min != null || r.out_max != null ? ` · chiqishi ${fmtNum(r.out_min, 3)}–${fmtNum(r.out_max, 3)} kg (partiyaga nisbatan o'zgaradi)` : ''}
+        ${r.limits?.length ? `<br>Shartli limit: ${r.limits.map((x) => `${esc(x.name || x.products.join(' + '))} → ${fmtNum(x.out_min, 3)}–${fmtNum(x.out_max, 3)} kg`).join('; ')}` : ''}
         ${r.kind === 'reprocess' ? `<br>Chiqadi: ${r.outputs.map((o) => `${esc(o.product)} — ${o.per_unit != null ? fmtNum(o.per_unit, 4) : 'netto'}${o.min_per_unit != null || o.max_per_unit != null ? ` (${fmtNum(o.min_per_unit, 4)}–${fmtNum(o.max_per_unit, 4)})` : ''}, ${fmtMoney(o.cost_value)} so'm${o.is_container ? ', idish' : ''}`).join('; ')}` : ''}
         ${r.kind === 'separation' ? `<br>Chiqadi: ${r.outputs.map((o) => `${esc(o.product)} — ${MODE[o.cost_mode]}${o.cost_value != null ? ` ${fmtNum(o.cost_value)}${o.cost_mode === 'percent' ? '%' : ''}` : ''}`).join('; ')}` : ''}</p></div>`).join('')
       || '<p class="muted">Tarkib yo\'q.</p>'}`;
@@ -130,6 +131,8 @@ views['prod-recipe'] = async (v) => {
   if (!lines.length) lines.push({ productId: '', qty: '', alts: [] });
   const outputs = (r?.outputs ?? []).map((o) => ({ productId: o.product_id, costMode: o.cost_mode, costValue: o.cost_value ?? '' }));
   const rates = (r?.rates ?? []).map((x) => ({ name: x.name, amount: x.amount }));
+  // Conditional limits: when these products are used, the output must be min–max (for the base batch).
+  const limits = (r?.limits ?? []).map((x) => ({ name: x.name ?? '', productIds: x.product_ids, outMin: x.out_min ?? '', outMax: x.out_max ?? '' }));
   // Reprocessing outputs: per input unit (blank = the input's netto weight), range, fixed cost, container.
   const rout = r?.kind === 'reprocess' ? r.outputs.map((o) => ({ productId: o.product_id, perUnit: o.per_unit ?? '', minPerUnit: o.min_per_unit ?? '', maxPerUnit: o.max_per_unit ?? '', costValue: o.cost_value ?? 0, isContainer: !!o.is_container })) : [];
   const popts = (sel, filter = () => true) => `<option value="">— mahsulot —</option>${products.filter(filter).map((p) => `<option value="${p.id}" ${String(p.id) === String(sel) ? 'selected' : ''}>${esc(p.name)} (${esc(p.unit)})</option>`).join('')}`;
@@ -150,6 +153,10 @@ views['prod-recipe'] = async (v) => {
         <button type="button" class="ghost small" id="addLine">+ Qator</button></div>
       <div class="row" id="rangeRow"><label>Chiqishi eng kami, kg<input name="outMin" type="number" step="0.001" min="0" value="${r?.out_min ?? ''}"></label>
         <label>Chiqishi eng ko'pi, kg<input name="outMax" type="number" step="0.001" min="0" value="${r?.out_max ?? ''}"></label></div>
+      <div class="card" style="margin:0" id="limWrap"><h2>Shartli limitlar</h2>
+        <p class="muted">"Shu xomashyolar ishlatilsa, chiqishi X–Y bo'lsin" — asosiy partiya uchun yoziladi, partiyaga qarab o'zgaradi.
+          Masalan B zakvaska ishlatilsa 315–330 kg. Bir nechtasi mos kelsa, eng ko'p xomashyo sanalgani olinadi; birortasi mos kelmasa — yuqoridagi umumiy chegara.</p>
+        <div id="lims"></div><button type="button" class="ghost small" id="addLim">+ Shartli limit</button></div>
       <div class="card" style="margin:0" id="rateWrap"><h2>Ishbay haq (1 birlik uchun)</h2>
         <p class="muted">Masalan "Quyish" 170 so'm. Bir nechta xodim birga bajarsa, teng bo'linadi (2 kishi — 85 dan). Tannarxga qo'shiladi; topshiriq bekor qilinsa haq ham bekor bo'ladi.</p>
         <table><tbody id="rates"></tbody></table><button type="button" class="ghost small" id="addRate">+ Amal</button></div>
@@ -180,6 +187,25 @@ views['prod-recipe'] = async (v) => {
       <td><input data-k="costValue" type="number" step="0.01" min="0" value="${esc(o.costValue)}" placeholder="${o.costMode === 'percent' ? '%' : 'so\'m / kg'}" ${o.costMode === 'rest' ? 'disabled' : ''} style="width:120px"></td>
       <td><button type="button" class="ghost small" data-odel>✕</button></td></tr>`).join('');
   };
+  const drawLims = () => {
+    // Only this recipe's inputs and their alternatives (plus anything already chosen).
+    const ids = new Set([...lines.flatMap((l) => [l.productId, ...l.alts.map((a) => a.productId)]), ...limits.flatMap((x) => x.productIds)].map(Number).filter(Boolean));
+    const opts = products.filter((p) => ids.has(Number(p.id)));
+    $('#lims', v).innerHTML = limits.map((x, i) => `<div class="row" data-li="${i}" style="border-bottom:1px solid var(--line);padding:6px 0;align-items:end">
+      <label>Nomi<input data-k="name" value="${esc(x.name)}" placeholder="masalan: B zakvaska bilan"></label>
+      <label style="flex:2">Shu xomashyolar ishlatilsa<select data-k="productIds" multiple size="3">${opts.map((p) => `<option value="${p.id}" ${x.productIds.includes(p.id) ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+      <label>Eng kami, kg<input data-k="outMin" type="number" step="0.001" min="0" value="${esc(x.outMin)}" style="width:100px"></label>
+      <label>Eng ko'pi, kg<input data-k="outMax" type="number" step="0.001" min="0" value="${esc(x.outMax)}" style="width:100px"></label>
+      <button type="button" class="ghost small" data-lidel>✕</button></div>`).join('');
+  };
+  drawLims();
+  $('#addLim', v).onclick = () => { limits.push({ name: '', productIds: [], outMin: '', outMax: '' }); drawLims(); };
+  $('#lims', v).oninput = (e) => {
+    const row = e.target.closest('[data-li]'); const k = e.target.dataset.k; if (!row || !k) return;
+    limits[row.dataset.li][k] = k === 'productIds' ? [...e.target.selectedOptions].map((o) => Number(o.value)) : e.target.value;
+  };
+  $('#lims', v).onchange = $('#lims', v).oninput;
+  $('#lims', v).onclick = (e) => { const row = e.target.closest('[data-li]'); if (row && e.target.hasAttribute('data-lidel')) { limits.splice(Number(row.dataset.li), 1); drawLims(); } };
   const drawRates = () => {
     $('#rates', v).innerHTML = rates.map((x, i) => `<tr data-r="${i}"><td><input data-k="name" value="${esc(x.name)}" placeholder="Amal (Quyish, Qopqoq yopish...)"></td>
       <td><input data-k="amount" type="number" step="0.01" min="0" value="${esc(x.amount)}" placeholder="so'm" style="width:120px"></td><td><button type="button" class="ghost small" data-rdel>✕</button></td></tr>`).join('');
@@ -214,7 +240,7 @@ views['prod-recipe'] = async (v) => {
     const unit = kind === 'pour' || kind === 'cap' || kind === 'reprocess';
     $('#prodWrap', v).hidden = sep; $('#outWrap', v).hidden = !sep;
     $('#rateWrap', v).hidden = sep;
-    $('#rangeRow', v).hidden = unit; $('#rangeHint', v).hidden = unit; $('#unitHint', v).hidden = !unit;
+    $('#rangeRow', v).hidden = unit; $('#rangeHint', v).hidden = unit; $('#unitHint', v).hidden = !unit; $('#limWrap', v).hidden = unit;
     $('#linesTitle', v).textContent = unit ? 'Nima ketadi (1 dona uchun)' : 'Nima ketadi (asosiy partiya)';
     if (sep && !outputs.length) { outputs.push({ productId: '', costMode: 'fixed', costValue: '' }, { productId: '', costMode: 'rest', costValue: '' }); drawOuts(); }
   };
@@ -228,7 +254,7 @@ views['prod-recipe'] = async (v) => {
     if (e.target.dataset.k) l[e.target.dataset.k] = e.target.value;
     if (e.target.dataset.ak) l.alts[e.target.dataset.alt][e.target.dataset.ak] = e.target.value;
   };
-  $('#lines', v).onchange = $('#lines', v).oninput;
+  $('#lines', v).onchange = (e) => { $('#lines', v).oninput(e); if (e.target.matches('select')) drawLims(); };
   $('#lines', v).onclick = (e) => {
     const tr = e.target.closest('tr[data-i]'); if (!tr) return;
     const l = lines[tr.dataset.i];
@@ -254,6 +280,8 @@ views['prod-recipe'] = async (v) => {
           maxPerUnit: o.maxPerUnit === '' ? null : Number(o.maxPerUnit), costValue: Number(o.costValue) || 0, isContainer: !!o.isContainer }))
         : outputs.filter((o) => o.productId).map((o) => ({ productId: Number(o.productId), costMode: o.costMode, costValue: o.costValue === '' ? null : Number(o.costValue) })),
       rates: rates.filter((x) => String(x.name).trim()).map((x) => ({ name: x.name, amount: Number(x.amount) || 0 })),
+      limits: ['cook', 'separation'].includes(f.kind.value) ? limits.filter((x) => x.productIds.length).map((x) => ({ name: x.name || null, productIds: x.productIds,
+        outMin: x.outMin === '' ? null : Number(x.outMin), outMax: x.outMax === '' ? null : Number(x.outMax) })) : [],
       maxMinutes: f.maxMinutes.value === '' ? null : Number(f.maxMinutes.value),
       ...(f.active ? { active: f.active.checked } : {}),
     };

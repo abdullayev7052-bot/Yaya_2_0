@@ -397,6 +397,19 @@ CREATE TABLE IF NOT EXISTS kiosk_users (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   PRIMARY KEY (kiosk_id, user_id)
 );
+
+-- Conditional output limits of a recipe: when all the listed products are among a
+-- task's inputs (e.g. an alternative starter, or added cream), this range applies
+-- instead of the recipe's own (for the recipe's base batch, scaled like it).
+CREATE TABLE IF NOT EXISTS recipe_limits (
+  id INTEGER PRIMARY KEY,
+  recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+  name TEXT,
+  product_ids TEXT NOT NULL,
+  out_min REAL,
+  out_max REAL,
+  sort INTEGER NOT NULL DEFAULT 0
+);
 `;
 
 // New columns on the existing products table (the milk products keep kind = 'milk').
@@ -467,6 +480,8 @@ const SEED_CATEGORIES = [
   ['fines', 'Xodimlardan jarimalar', 'income'],
   ['other_expense', 'Boshqa xarajatlar', 'expense'],
   ['other_income', 'Boshqa daromadlar', 'income'],
+  ['cash_shortage', 'Kassa kamomadi', 'expense'],
+  ['cash_surplus', 'Kassa ortiqchasi', 'income'],
 ];
 const SEED_REASONS = [['Singan', 'company'], ['Yo\'qolgan', 'company'], ['To\'kilgan (xodim aybi)', 'staff'], ['Muddati o\'tgan', 'company'], ['Boshqa', 'company']];
 
@@ -491,6 +506,9 @@ export function setupErp(db, addColumn) {
   addColumn('users', 'salary_since', 'TEXT');
   // Workplace (stage 7): a short PIN to sign in on a shared monoblock (bcrypt hash).
   addColumn('users', 'pin_hash', 'TEXT');
+  // Household payments (milk collection) leave a cashbox like any other payment.
+  addColumn('payments', 'cashbox_id', 'INTEGER REFERENCES cashboxes(id)');
+  addColumn('cash_entries', 'payment_id', 'INTEGER REFERENCES payments(id)');
   seedErp(db);
 }
 

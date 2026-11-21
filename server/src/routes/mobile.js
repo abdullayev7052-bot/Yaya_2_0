@@ -1,3 +1,4 @@
+import { bookHouseholdPayment } from '../erp/finance.js';
 import { audit } from '../db/index.js';
 import { makeGuard } from '../auth.js';
 import { getSetting } from '../settings.js';
@@ -315,6 +316,8 @@ export default async function mobileRoutes(app, { db }) {
         const pid = db.prepare(`INSERT INTO payments (client_uuid, supplier_id, amount, method, note, paid_at, created_by, employee_id, number)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(number), 0) + 1 FROM payments))`).run(p.uuid, p.supplierId, Math.round(p.amount), p.method ?? 'cash',
           p.note ? String(p.note).slice(0, 300) : null, p.paidAt, actor, me.id).lastInsertRowid;
+        // Paid in the field: out of the collector's own cashbox (made on first use).
+        bookHouseholdPayment(db, Number(pid), me, null);
         audit(db, actor, 'payment.create', { supplierId: p.supplierId, amount: Math.round(p.amount), method: p.method ?? 'cash', fromApp: true });
         newPayments.push(pid);
         out.payments.accepted.push(p.uuid);

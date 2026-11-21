@@ -66,6 +66,7 @@ views.overview = async (v) => {
       <div class="tiles" style="margin:12px 0 0">
         ${tile('Kassalarda', fmtMoney(f.cash), f.cashboxes.map((c) => `${esc(c.name)}: ${fmtMoney(c.balance)}`).join(' · '))}
         ${tile('Mijozlar bizga qarz', fmtMoney(f.customers_owe), '', '#customers')}
+        ${tile('Biz xonadonlarga (sut)', fmtMoney(f.we_owe_households), '', '#balances')}
         ${tile('Biz yetkazib beruvchilarga', fmtMoney(f.we_owe_vendors), '', '#vendors')}
         ${tile('Biz xodimlarga', fmtMoney(f.we_owe_staff), 'oylik, ishbay, bonus', '#payroll')}
       </div></div>`);

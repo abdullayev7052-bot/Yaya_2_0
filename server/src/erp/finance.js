@@ -15,6 +15,7 @@ import {
   StockError, addIn, getDoc, holderName, nextNumber, pnl, r2, r3,
 } from './stock.js';
 import { cashboxBalance } from './sales.js';
+import { balances as householdLedger } from '../ledger.js';
 
 const nowIso = () => new Date().toISOString();
 const J = (v) => (v ? JSON.parse(v) : {});
@@ -251,11 +252,11 @@ export function accrueSalaries(db, today = localDay()) {
 }
 
 // ---------------------------------------------------------------- reading
-const FIN_TYPES = ['purchase', 'vendor_pay', 'expense', 'income', 'cash_move', 'cash_open', 'salary', 'bonus', 'fine', 'staff_pay', 'staff_open'];
+const FIN_TYPES = ['purchase', 'vendor_pay', 'expense', 'income', 'cash_move', 'cash_open', 'cash_count', 'salary', 'bonus', 'fine', 'staff_pay', 'staff_open'];
 const LABEL = {
   purchase: ['XK', 'Xarid (kirim)'], vendor_pay: ['YT', "Yetkazib beruvchiga to'lov"], expense: ['XR', 'Xarajat'], income: ['KR', 'Boshqa kirim'],
   cash_move: ['KO', 'Kassadan kassaga'], cash_open: ['KB', "Kassa boshlang'ich qoldig'i"], salary: ['OY', 'Oylik'], bonus: ['BN', 'Bonus'],
-  fine: ['JR', 'Jarima'], staff_pay: ['IP', "Xodimga to'lov"], staff_open: ['XB', "Xodim boshlang'ich balansi"],
+  fine: ['JR', 'Jarima'], staff_pay: ['IP', "Xodimga to'lov"], staff_open: ['XB', "Xodim boshlang'ich balansi"], cash_count: ['KS', "Kassa sanog'i"],
 };
 export function finDoc(db, id) {
   const d = getDoc(db, id);
@@ -322,5 +323,98 @@ export function balancesSummary(db) {
     cash: r2(boxes.reduce((a, c) => a + c.balance, 0)), cashboxes: boxes,
     customers_owe: pos(cust), we_owe_customers: neg(cust), we_owe_vendors: pos(vend), vendors_owe: neg(vend),
     we_owe_staff: neg(staff), staff_owe: pos(staff),
+    // Households (milk collection ledger): positive balance = we owe them.
+    we_owe_households: r2(householdLedger(db).totals.weOwe), households_owe: r2(householdLedger(db).totals.theyOwe),
+  };
+}
+
+// ---------------------------------------------------------------- household payments (milk collection)
+// A payment to a household leaves a cashbox: the one chosen, else the payer's own
+// (a collector gets one made on first use, like a seller), else the main cashbox.
+// Field payments synced later can never be refused, so the cashbox may go below
+// zero — the cash count shows it. Test users' payments touch no cashbox.
+const METHOD_NAME = { cash: 'Naqd', card: 'Karta', transfer: "O'tkazma" };
+export function householdCashbox(db, user, requested) {
+  const req = Number(requested);
+  if (req && db.prepare('SELECT 1 FROM cashboxes WHERE id = ? AND active = 1').get(req)) return req;
+  const own = db.prepare('SELECT c.id FROM cashboxes c JOIN cashbox_keepers k ON k.cashbox_id = c.id WHERE k.user_id = ? AND c.active = 1 ORDER BY c.is_main, c.id LIMIT 1').get(user.id);
+  if (own) return own.id;
+  if (user.perms?.has('collect.shift')) {
+    const id = Number(db.prepare('INSERT INTO cashboxes (name) VALUES (?)').run(`${holderName(db, { userId: user.id })} kassasi`).lastInsertRowid);
+    db.prepare('INSERT INTO cashbox_keepers (cashbox_id, user_id) VALUES (?, ?)').run(id, user.id);
+    return id;
+  }
+  return db.prepare('SELECT id FROM cashboxes WHERE is_main = 1 AND active = 1 ORDER BY id LIMIT 1').get()?.id ?? null;
+}
+export function bookHouseholdPayment(db, paymentId, user, requested) {
+  if (user?.is_test) return null;
+  const p = db.prepare('SELECT p.*, s.name AS supplier FROM payments p JOIN suppliers s ON s.id = p.supplier_id WHERE p.id = ?').get(paymentId);
+  if (!p || p.cashbox_id) return p?.cashbox_id ?? null;
+  const box = householdCashbox(db, user, requested);
+  if (!box) return null;
+  const method = db.prepare('SELECT id FROM payment_methods WHERE name = ?').get(METHOD_NAME[p.method] ?? 'Naqd')?.id ?? null;
+  db.prepare("INSERT INTO cash_entries (cashbox_id, amount, method_id, kind, note, at, payment_id) VALUES (?, ?, ?, 'household', ?, ?, ?)")
+    .run(box, -p.amount, method, `Xonadonga to'lov: ${p.supplier}${p.number ? ` (#${p.number})` : ''}`, p.paid_at, p.id);
+  db.prepare('UPDATE payments SET cashbox_id = ? WHERE id = ?').run(box, p.id);
+  return box;
+}
+// Voiding the payment puts the money back into the same cashbox.
+export function voidHouseholdPayment(db, paymentId) {
+  const e = db.prepare("SELECT * FROM cash_entries WHERE payment_id = ? AND kind = 'household'").get(paymentId);
+  if (!e || db.prepare("SELECT 1 FROM cash_entries WHERE payment_id = ? AND kind = 'household_void'").get(paymentId)) return;
+  db.prepare("INSERT INTO cash_entries (cashbox_id, amount, method_id, kind, note, at, payment_id) VALUES (?, ?, ?, 'household_void', ?, datetime('now'), ?)")
+    .run(e.cashbox_id, -e.amount, e.method_id, `Bekor qilindi: ${e.note}`, paymentId);
+}
+
+// ---------------------------------------------------------------- cash count (kassa nazorati)
+// The money actually in the cashbox is counted. A difference is booked so the books
+// match: a surplus is income; a shortage is charged to the people chosen (sums) and
+// the rest is the company's loss. A shortage is never booked silently.
+export function createCashCount(db, b, { actor, userId }) {
+  return run(db, 'cash_count', b, null, (uuid) => {
+    const box = cashbox(db, b.cashboxId);
+    const counted = r2(num(b.counted));
+    if (!(counted >= 0)) throw new StockError('Sanalgan summani kiriting');
+    const book = cashboxBalance(db, box.id);
+    const diff = r2(counted - book);
+    let charges = [];
+    if (diff < -0.004) {
+      if (b.charges === undefined) throw new StockError(`Kamomad: ${-diff}. Kim hisobiga yozilishini tanlang`, { needDecision: true, book, counted, shortage: -diff });
+      charges = (Array.isArray(b.charges) ? b.charges : []).map((c) => ({ user: staffUser(db, c.userId), amount: r2(num(c.amount) ?? 0) })).filter((c) => c.amount > 0);
+      if (r2(charges.reduce((a, c) => a + c.amount, 0)) > -diff + 0.01) throw new StockError('Xodimlarga yozilgan summa kamomaddan ko\'p');
+    }
+    const { doc, ctx } = newDoc(db, 'cash_count', { uuid, actor, userId, note: b.note });
+    cash(db, ctx, box.id, diff, null, 'count');
+    if (diff > 0.004) pnl(db, ctx, 'cash_surplus', diff, box.name);
+    if (diff < -0.004) {
+      const staff = r2(charges.reduce((a, c) => a + c.amount, 0));
+      for (const c of charges) party(db, ctx, 'staff', c.user.id, c.amount, 'cash_shortage', `${box.name}: kassa kamomadi`);
+      pnl(db, ctx, 'cash_shortage', r2(-diff - staff), box.name);
+    }
+    post(db, ctx, actor, { cashboxId: box.id, cashbox: box.name, book, counted, diff, amount: Math.abs(diff),
+      charges: charges.map((c) => ({ userId: c.user.id, name: holderName(db, { userId: c.user.id }), amount: c.amount })) });
+    return getDoc(db, doc.id);
+  });
+}
+
+// ---------------------------------------------------------------- balances (all parties)
+export function balancesDetail(db) {
+  const householdBalances = householdLedger(db).rows;
+  const customers = db.prepare(`SELECT c.id, c.name, c.opening_balance + COALESCE((SELECT SUM(amount) FROM party_entries WHERE party_type = 'customer' AND party_id = c.id), 0) AS balance
+    FROM customers c`).all().map((r) => ({ ...r, balance: r2(r.balance) })).filter((r) => Math.abs(r.balance) >= 0.01).sort((a, b) => b.balance - a.balance);
+  const vendors = listVendors(db, { all: true }).filter((v) => Math.abs(v.balance) >= 0.01).map((v) => ({ id: v.id, name: v.name, balance: v.balance })).sort((a, b) => b.balance - a.balance);
+  const staff = db.prepare("SELECT party_id AS id, ROUND(SUM(amount), 2) AS b FROM party_entries WHERE party_type = 'staff' GROUP BY party_id").all()
+    .filter((r) => Math.abs(r.b) >= 0.01).map((r) => ({ id: r.id, name: holderName(db, { userId: r.id }), balance: r2(-r.b) })).sort((a, b) => b.balance - a.balance);
+  const households = householdBalances.filter((r) => Math.abs(r.balance) >= 0.01).map((r) => ({ id: r.id, name: r.name, balance: r2(r.balance) }));
+  const cashboxes = db.prepare('SELECT id, name, is_main FROM cashboxes WHERE active = 1 ORDER BY is_main DESC, name').all().map((c) => ({ ...c, balance: cashboxBalance(db, c.id) }));
+  const pos = (a) => r2(a.filter((x) => x.balance > 0).reduce((s0, x) => s0 + x.balance, 0));
+  const neg = (a) => r2(-a.filter((x) => x.balance < 0).reduce((s0, x) => s0 + x.balance, 0));
+  return {
+    // Every list: positive = in the direction of its title.
+    customers: { title: 'Mijozlar bizga qarz', rows: customers, total: pos(customers), reverse: neg(customers) },
+    households: { title: 'Biz xonadonlarga qarz', rows: households, total: pos(households), reverse: neg(households) },
+    vendors: { title: 'Biz yetkazib beruvchilarga qarz', rows: vendors, total: pos(vendors), reverse: neg(vendors) },
+    staff: { title: 'Biz xodimlarga qarz', rows: staff, total: pos(staff), reverse: neg(staff) },
+    cashboxes: { title: 'Kassalarda', rows: cashboxes, total: r2(cashboxes.reduce((a, c) => a + c.balance, 0)) },
   };
 }

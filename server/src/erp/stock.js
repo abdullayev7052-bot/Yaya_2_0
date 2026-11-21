@@ -48,6 +48,7 @@ export const DOC_TYPES = {
   fine: { label: 'Jarima', prefix: 'JR' },
   staff_pay: { label: "Xodimga to'lov", prefix: 'IP' },
   staff_open: { label: "Xodim boshlang'ich balansi", prefix: 'XB' },
+  cash_count: { label: 'Kassa sanog\'i', prefix: 'KS' },
 };
 // Types a person creates directly; the others come from shifts and production.
 const MANUAL_TYPES = new Set(['opening', 'transfer', 'inventory', 'writeoff']);

@@ -8,7 +8,7 @@ import { makeGuard } from '../auth.js';
 import { StockError, cancelDoc } from '../erp/stock.js';
 import { cashboxBalance } from '../erp/sales.js';
 import {
-  balancesSummary, cashboxStatement, createCashMove, createCashOpening, createExpense, createIncome, createPurchase, createStaffEntry,
+  balancesDetail, balancesSummary, cashboxStatement, createCashCount, createCashMove, createCashOpening, createExpense, createIncome, createPurchase, createStaffEntry,
   createVendorPayment, finDoc, listFinDocs, listVendors, profitLoss, saveVendor, setSalary, staffBalance, statementOf,
 } from '../erp/finance.js';
 
@@ -26,6 +26,8 @@ export default async function financeRoutes(app, { db }) {
 
   // ---------------------------------------------------------------- overview
   app.get('/summary', guard('finance.view'), async () => balancesSummary(db));
+  // Balanslar: every party (customers, households, vendors, staff) and every cashbox.
+  app.get('/balances', guard('finance.view'), async () => balancesDetail(db));
   app.get('/pnl', guard('finance.view'), async (req) => profitLoss(db, { from: req.query.from || `${today().slice(0, 7)}-01`, to: req.query.to || today() }));
 
   // ---------------------------------------------------------------- cashboxes
@@ -45,6 +47,8 @@ export default async function financeRoutes(app, { db }) {
   cashOp('/expenses', createExpense, 'finance.cash', 'finance.expense');
   cashOp('/incomes', createIncome, 'finance.cash', 'finance.income');
   cashOp('/cash-openings', createCashOpening, 'finance.cash', 'finance.cash_open');
+  // Kassa nazorati: count the money; a shortage asks who pays (like a stock count).
+  cashOp('/cash-counts', createCashCount, 'finance.cash', 'finance.cash_count');
   // Moving money: finance.cash from any cashbox; a keeper from their own cashbox to the main one.
   app.post('/cash-moves', need(), async (req, reply) => {
     const b = req.body ?? {};

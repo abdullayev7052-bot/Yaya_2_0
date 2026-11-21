@@ -68,9 +68,14 @@ export function recipeDetail(db, id) {
   const outputs = db.prepare(`SELECT o.*, p.name AS product, p.unit FROM recipe_outputs o JOIN products p ON p.id = o.product_id
     WHERE o.recipe_id = ? ORDER BY o.sort, o.id`).all(id);
   const rates = db.prepare('SELECT id, name, amount FROM recipe_rates WHERE recipe_id = ? ORDER BY sort, id').all(id);
+  const limits = db.prepare('SELECT id, name, product_ids, out_min, out_max FROM recipe_limits WHERE recipe_id = ? ORDER BY sort, id').all(id)
+    .map((x) => {
+      const ids = JSON.parse(x.product_ids);
+      return { ...x, product_ids: ids, products: ids.map((pid) => product(db, pid)?.name ?? `#${pid}`) };
+    });
   const baseWeight = r3(lines.reduce((a, l) => a + weightKg(product(db, l.product_id), l.qty), 0));
   const baseMilk = r3(lines.filter((l) => l.product_kind === 'raw_milk').reduce((a, l) => a + l.qty, 0));
-  return { ...r, kind_label: RECIPE_KINDS[r.kind] ?? r.kind, lines, outputs, rates, rate_total: r2(rates.reduce((a, x) => a + x.amount, 0)), base_weight: baseWeight, base_milk: baseMilk };
+  return { ...r, kind_label: RECIPE_KINDS[r.kind] ?? r.kind, lines, outputs, rates, limits, rate_total: r2(rates.reduce((a, x) => a + x.amount, 0)), base_weight: baseWeight, base_milk: baseMilk };
 }
 
 export function listRecipes(db, { all = false, kinds = null } = {}) {
@@ -86,6 +91,16 @@ export function saveRecipe(db, id, b) {
   const productId = num(b.productId);
   if (kind !== 'separation' && !product(db, productId)) throw new StockError('Chiqadigan mahsulotni tanlang');
   const maxMinutes = num(b.maxMinutes);
+  // Conditional limits: "when these products are used, the output must be X–Y".
+  const limits = (Array.isArray(b.limits) ? b.limits : []).map((x, i) => {
+    const ids = [...new Set((Array.isArray(x?.productIds) ? x.productIds : []).map(Number))].filter((pid) => product(db, pid));
+    if (!ids.length) throw new StockError(`${i + 1}-shartli limit: qaysi xomashyo ishlatilganda — tanlang`);
+    const mn = num(x.outMin); const mx = num(x.outMax);
+    if ((mn == null && mx == null) || (mn != null && !(mn >= 0)) || (mx != null && !(mx >= 0)) || (mn != null && mx != null && mn > mx)) {
+      throw new StockError(`${i + 1}-shartli limit: chegara noto'g'ri`);
+    }
+    return { name: x.name ? String(x.name).trim().slice(0, 80) : null, ids, mn, mx };
+  });
   if (maxMinutes != null && !(maxMinutes > 0)) throw new StockError('Muddat (daqiqa) musbat bo\'lsin');
   const rates = (Array.isArray(b.rates) ? b.rates : []).filter((x) => String(x?.name ?? '').trim()).map((x) => {
     const amount = Number(x.amount);
@@ -149,12 +164,15 @@ export function saveRecipe(db, id, b) {
       db.prepare('DELETE FROM recipe_lines WHERE recipe_id = ?').run(rid);
       db.prepare('DELETE FROM recipe_outputs WHERE recipe_id = ?').run(rid);
       db.prepare('DELETE FROM recipe_rates WHERE recipe_id = ?').run(rid);
+      db.prepare('DELETE FROM recipe_limits WHERE recipe_id = ?').run(rid);
     } else {
       rid = Number(db.prepare('INSERT INTO recipes (name, kind, product_id, out_min, out_max, max_minutes, note, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
         .run(name, kind, kind !== 'separation' ? productId : null, outMin, outMax, maxMinutes, b.note ?? null, num(b.sort) ?? 0).lastInsertRowid);
     }
     const insR = db.prepare('INSERT INTO recipe_rates (recipe_id, name, amount, sort) VALUES (?, ?, ?, ?)');
     rates.forEach((x, i) => insR.run(rid, x.name, x.amount, i));
+    const insLim = db.prepare('INSERT INTO recipe_limits (recipe_id, name, product_ids, out_min, out_max, sort) VALUES (?, ?, ?, ?, ?, ?)');
+    limits.forEach((x, i) => insLim.run(rid, x.name, JSON.stringify(x.ids), x.mn, x.mx, i));
     const insL = db.prepare('INSERT INTO recipe_lines (recipe_id, product_id, qty, sort) VALUES (?, ?, ?, ?)');
     const insA = db.prepare('INSERT OR IGNORE INTO recipe_alts (line_id, product_id, qty) VALUES (?, ?, ?)');
     lines.forEach((l, i) => {
@@ -273,11 +291,20 @@ export function createTask(db, { uuid, shiftId, recipeId, factor, milkQty, units
 }
 
 // Allowed output weight for a batch: the recipe range scaled by input weight.
+// A conditional limit applies when all its products are among the inputs; with
+// several, the most specific (most products) wins. Otherwise the recipe's own range.
+export function matchingLimit(r, inputs) {
+  const used = new Set(inputs.filter((l) => l.qty > 0).map((l) => Number(l.productId)));
+  return (r.limits ?? []).filter((x) => x.product_ids.every((pid) => used.has(pid))).sort((a, b) => b.product_ids.length - a.product_ids.length)[0] ?? null;
+}
 export function outputRange(db, r, inputs) {
-  if (r.out_min == null && r.out_max == null) return null;
+  const rule = matchingLimit(r, inputs);
+  const min = rule ? rule.out_min : r.out_min;
+  const max = rule ? rule.out_max : r.out_max;
+  if (min == null && max == null) return null;
   const inWeight = inputs.reduce((a, l) => a + weightKg(product(db, l.productId), l.qty), 0);
   const scale = r.base_weight > 0 ? inWeight / r.base_weight : 1;
-  return { min: r.out_min == null ? null : r3(r.out_min * scale), max: r.out_max == null ? null : r3(r.out_max * scale), scale: r3(scale) };
+  return { min: min == null ? null : r3(min * scale), max: max == null ? null : r3(max * scale), scale: r3(scale), rule: rule ? (rule.name || rule.products.join(' + ')) : null };
 }
 
 function cleanQtyLines(db, lines, what) {
@@ -359,7 +386,7 @@ export function completeTask(db, taskId, body, { actor, approve = false }) {
       db.prepare("UPDATE prod_tasks SET status = 'approval', result = ? WHERE id = ?").run(JSON.stringify({ ...stored, range: outsideOut ?? range, outWeight }), t.id);
       addAlert(db, 'prod.limit', outsideOut
         ? `TQ-${t.number} (${r.name}): ${outsideOut.product} ${outsideOut.qty}, ruxsat ${outsideOut.min ?? '—'}–${outsideOut.max ?? '—'}. Tasdiqlang yoki rad eting.`
-        : `TQ-${t.number} (${r.name}): chiqish ${outWeight} kg, ruxsat ${range.min ?? '—'}–${range.max ?? '—'} kg. Tasdiqlang yoki rad eting.`,
+        : `TQ-${t.number} (${r.name}): chiqish ${outWeight} kg, ruxsat ${range.min ?? '—'}–${range.max ?? '—'} kg${range.rule ? ` (shartli limit: ${range.rule})` : ''}. Tasdiqlang yoki rad eting.`,
         { taskId: t.id, shiftId: s.id });
       return { needApproval: true, range: outsideOut ? { min: outsideOut.min, max: outsideOut.max } : range, outWeight, task: taskRow(db, getTask(db, t.id)) };
     }
