@@ -64,10 +64,17 @@ export function makeGuard(app, db) {
         } catch {
           return reply.code(401).send({ error: 'Avtorizatsiya kerak' });
         }
-        const { uid, did, aud, rec } = req.user ?? {};
+        const { uid, did, aud, rec, ksk } = req.user ?? {};
         const u = uid && loadUser(db, uid);
         if (!u || !u.active) return reply.code(401).send({ error: 'Hisobingiz o\'chirilgan yoki topilmadi' });
-        if (!u.is_test && !rec) {
+        if (ksk) {
+          // Signed in on a shared monoblock with a PIN: the monoblock must still be active
+          // and the person still allowed on it (no personal device slot is used).
+          const k = db.prepare('SELECT id FROM kiosks WHERE id = ? AND active = 1 AND token_hash IS NOT NULL').get(ksk);
+          const listed = db.prepare('SELECT COUNT(*) AS n FROM kiosk_users WHERE kiosk_id = ?').get(ksk)?.n;
+          const allowed = !listed || db.prepare('SELECT 1 FROM kiosk_users WHERE kiosk_id = ? AND user_id = ?').get(ksk, u.id);
+          if (!k || !allowed) return reply.code(401).send({ error: "Monoblokdan foydalanishga ruxsat yo'q" });
+        } else if (!u.is_test && !rec) {
           const slot = db.prepare('SELECT id FROM devices WHERE user_id = ? AND device_id = ?').get(u.id, did ?? '');
           if (!slot) return reply.code(401).send({ error: 'Bu qurilmaga ruxsat bekor qilingan. Qayta kiring yoki adminga murojaat qiling.' });
           db.prepare("UPDATE devices SET last_seen_at = datetime('now') WHERE id = ?").run(slot.id);

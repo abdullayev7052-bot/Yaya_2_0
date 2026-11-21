@@ -36,15 +36,15 @@ const deviceLabel = () => {
 // response (4xx/5xx), or an err with `.offline = true` for a dropped / timed-out
 // connection (the field conditions that show up server-side as "499 — client
 // closed the request before the server could respond").
-async function callOnce(method, path, body, timeoutMs) {
-  const session = getSession();
+async function callOnce(method, path, body, timeoutMs, token = null, extraHeaders = null) {
+  const session = token ? { token } : getSession();
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(getServerUrl() + path, {
       method,
       signal: ctrl.signal,
-      headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(session ? { Authorization: `Bearer ${session.token}` } : {}) },
+      headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(session ? { Authorization: `Bearer ${session.token}` } : {}), ...(extraHeaders ?? {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
     const raw = await res.json().then((d) => ({ d }), () => null);
@@ -56,7 +56,7 @@ async function callOnce(method, path, body, timeoutMs) {
       const err = new Error(data.error || `Server xatosi (${res.status})`);
       err.status = res.status;
       // Account switched off or this phone was removed from its device slots.
-      if (res.status === 401 && session && !path.endsWith('/login')) logout(err.message);
+      if (res.status === 401 && session && !token && !path.endsWith('/login')) logout(err.message);
       throw err;
     }
     return data;
@@ -79,13 +79,13 @@ async function callOnce(method, path, body, timeoutMs) {
 // back-off. Only safe-to-repeat calls retry: every GET, and any call the caller
 // marks `idempotent` (the sync endpoint keys off client-generated UUIDs, so a
 // re-send can never double-count). A real HTTP error (4xx/5xx) never retries.
-async function call(method, path, body, { timeoutMs = 15000, idempotent = false } = {}) {
+async function call(method, path, body, { timeoutMs = 15000, idempotent = false, token = null, headers = null } = {}) {
   const retries = method === 'GET' || idempotent ? 2 : 0;
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, 700 * attempt)); // 0.7s, 1.4s
     try {
-      return await callOnce(method, path, body, timeoutMs);
+      return await callOnce(method, path, body, timeoutMs, token, headers);
     } catch (e) {
       if (!e.offline) throw e; // a real server answer (4xx/5xx/401) — do not retry
       lastErr = e;
@@ -213,7 +213,7 @@ export function logout(reason) {
   const token = getSession()?.token;
   // Only a deliberate sign-out frees the slot. A forced logout (revoked/expired
   // token, reason set) would fail the call anyway and must not race.
-  if (token && !reason) releaseDeviceSlot(token);
+  if (token && !reason && !getSession()?.kiosk) releaseDeviceSlot(token);
   store.setKv('session', null);
   store.setKv('bootstrap', null);
   if (reason) store.setKv('logoutReason', reason);
@@ -306,6 +306,101 @@ export async function reopenShiftForEdit(serverId) {
   return r.openShift;
 }
 
+// ---------------------------------------------------------------- shared monoblock (stage 7)
+// The monoblock is paired once with a code from the panel and keeps its own secret.
+// People then pick their name and type their 4-digit PIN; the session is theirs
+// until they switch or the idle timer brings the name list back.
+export const getKiosk = () => store.getKv('kiosk');
+const kioskHeaders = () => ({ 'x-kiosk-token': getKiosk()?.token ?? '' });
+export async function pairKiosk(code) {
+  const r = await call('POST', '/api/kiosk/pair', { code });
+  store.setKv('kiosk', { token: r.token, ...r.kiosk });
+  return r.kiosk;
+}
+export function leaveKiosk() {
+  store.setKv('kiosk', null);
+  logout();
+}
+export async function kioskStaff() {
+  const r = await call('GET', '/api/kiosk/staff', null, { headers: kioskHeaders() });
+  store.setKv('kiosk', { ...getKiosk(), ...r.kiosk });
+  store.setKv('kioskStaff', r.staff);
+  return r;
+}
+export const cachedKioskStaff = () => store.getKv('kioskStaff', []);
+export const kioskAlerts = () => call('GET', '/api/kiosk/alerts', null, { headers: kioskHeaders() });
+export async function kioskLogin(userId, pin) {
+  const r = await call('POST', '/api/kiosk/login', { userId, pin }, { headers: kioskHeaders() });
+  // No "owner" switch here: several people share this screen by design.
+  store.setKv('session', { token: r.token, user: r.user, kiosk: true });
+  store.setKv('logoutReason', null);
+  try { await refreshBootstrap(); } catch { /* offline */ }
+  sessionListeners.forEach((fn) => fn(getSession()));
+  return r.user;
+}
+export const setMyPin = (pin, password) => call('PUT', '/api/kiosk/my-pin', { pin, password });
+
+// ---------------------------------------------------------------- offline outbox (stage 7)
+// Documents that carry their own uuid (sales, returns, payments, hand-overs,
+// write-offs, accept/reject, cash hand-over) are safe to send again, so with no
+// internet they wait here and go out by themselves when the connection is back.
+// Each item keeps the token of the person who made it: on a shared monoblock it is
+// never sent under someone else's name. A refusal from the server (e.g. not enough
+// stock any more) moves it to the "not sent" list for the person to see.
+const outboxListeners = new Set();
+export const onOutbox = (fn) => { outboxListeners.add(fn); return () => outboxListeners.delete(fn); };
+const outboxEmit = () => outboxListeners.forEach((fn) => fn());
+export const getOutbox = () => store.getKv('outbox', []);
+export const getOutboxFailed = () => store.getKv('outboxFailed', []);
+export const dropFailed = (id) => { store.setKv('outboxFailed', getOutboxFailed().filter((x) => x.id !== id)); outboxEmit(); };
+
+export async function send(method, path, body, label) {
+  try {
+    return await call(method, path, body, { idempotent: true });
+  } catch (e) {
+    if (!e.offline) throw e;
+    const s0 = getSession();
+    store.setKv('outbox', [...getOutbox(), { id: randomUUID(), method, path, body, label, token: s0?.token, user: s0?.user?.name ?? s0?.user?.login, at: new Date().toISOString() }]);
+    outboxEmit();
+    return { queued: true };
+  }
+}
+
+let flushing = null;
+export function flushOutbox() {
+  if (flushing) return flushing;
+  flushing = (async () => {
+    for (;;) {
+      const [item] = getOutbox();
+      if (!item) break;
+      try {
+        await call(item.method, item.path, item.body, { idempotent: true, token: item.token, timeoutMs: 20000 });
+      } catch (e) {
+        if (e.offline) break; // still no connection: try again later, keep the order
+        store.setKv('outboxFailed', [...getOutboxFailed(), { ...item, error: e.message }]);
+      }
+      store.setKv('outbox', getOutbox().filter((x) => x.id !== item.id));
+      outboxEmit();
+    }
+  })().finally(() => { flushing = null; });
+  return flushing;
+}
+
+// Reads that keep working offline: the last answer is kept per person and path.
+export async function cachedGet(path) {
+  const key = `cache:${getSession()?.user?.id ?? 0}:${path}`;
+  try {
+    const d = await call('GET', path);
+    store.setKv(key, d);
+    return d;
+  } catch (e) {
+    if (!e.offline) throw e;
+    const d = store.getKv(key);
+    if (d == null) throw e;
+    return d;
+  }
+}
+
 // ---------------------------------------------------------------- background sync
 const listeners = new Set();
 export function onSyncState(fn) { listeners.add(fn); return () => listeners.delete(fn); }
@@ -321,6 +416,7 @@ export function syncNow() {
   // shift just closed (or any change) is pushed immediately, not at the next tick.
   if (inFlight) { resyncQueued = true; return inFlight; }
   inFlight = (async () => {
+    flushOutbox();
     if (!getSession()) return;
     emit({ syncing: true });
     try {

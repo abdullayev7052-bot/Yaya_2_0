@@ -26,8 +26,8 @@ function printHtml(html) {
 // ---------------------------------------------------------------- main
 export function SalesHome({ tick, onForm, onOpen }) {
   const { data, err, busy, load } = useLoad(() => Promise.all([
-    api.can('sales.sell') ? sales('GET', '/my-cashbox') : null,
-    sales('GET', `/docs?from=${new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10)}`),
+    api.can('sales.sell') ? api.cachedGet('/api/erp/sales/my-cashbox') : null,
+    api.cachedGet(`/api/erp/sales/docs?from=${new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10)}`),
   ]), [tick]);
   const [box, docs] = data ?? [null, []];
   // The day's money goes from the seller's own cashbox to the main one.
@@ -36,7 +36,11 @@ export function SalesHome({ tick, onForm, onOpen }) {
       const main = await api.finApi('GET', '/main-cashbox');
       if (!main) { notify('Kassa', 'Asosiy kassa topilmadi'); return; }
       ask('Kassani topshirish', `${fmtMoney(b.balance)} so'm "${main.name}" ga o'tkazilsinmi?`, 'Ha', async () => {
-        try { await api.finApi('POST', '/cash-moves', { fromId: b.id, toId: main.id, amount: b.balance, uuid: randomUUID() }, { idempotent: true }); load(); }
+        try {
+          const r = await api.send('POST', '/api/erp/finance/cash-moves', { fromId: b.id, toId: main.id, amount: b.balance, uuid: randomUUID() }, `Kassani topshirish: ${fmtMoney(b.balance)} so'm`);
+          if (r.queued) notify('Internet yo\'q', 'Navbatga qo\'yildi — internet chiqqanda o\'zi yuboriladi');
+          load();
+        }
         catch (e) { notify('Xatolik', e.message); }
       });
     } catch (e) { notify('Xatolik', e.message); }
@@ -75,7 +79,7 @@ export function SalesHome({ tick, onForm, onOpen }) {
 
 // ---------------------------------------------------------------- customer picker
 function CustomerPick({ value, onPick }) {
-  const { data: list, load } = useLoad(() => sales('GET', '/customers'), []);
+  const { data: list, load } = useLoad(() => api.cachedGet('/api/erp/sales/customers'), []);
   const [q, setQ] = useState('');
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
@@ -130,10 +134,10 @@ function Qty({ value, onChange, unit, width = 90 }) {
 
 // ---------------------------------------------------------------- sale / return / payment
 export function SaleForm({ type, onBack, onDone }) {
-  const { data, err } = useLoad(() => Promise.all([sales('GET', '/meta'), api.erp('GET', '/stock/mine'), api.erp('GET', '/products')]), []);
+  const { data, err } = useLoad(() => Promise.all([api.cachedGet('/api/erp/sales/meta'), api.cachedGet('/api/erp/stock/mine'), api.cachedGet('/api/erp/products')]), []);
   const [meta, mine, products] = data ?? [null, null, []];
   const [customer, setCustomer] = useState(null);
-  const { data: prices } = useLoad(() => (customer ? sales('GET', `/prices?customerId=${customer.id}`) : Promise.resolve({})), [customer?.id]);
+  const { data: prices } = useLoad(() => (customer ? api.cachedGet(`/api/erp/sales/prices?customerId=${customer.id}`) : Promise.resolve({})), [customer?.id]);
   const [src, setSrc] = useState(null);
   const [qty, setQty] = useState({});
   const [priceOver, setPriceOver] = useState({});
@@ -170,10 +174,11 @@ export function SaleForm({ type, onBack, onDone }) {
       let d;
       const uuid = randomUUID();
       const withPrice = (l) => ({ productId: l.productId, qty: l.qty, ...(priceOver[l.productId] !== undefined && priceOver[l.productId] !== '' ? { price: toNumber(priceOver[l.productId]) } : {}) });
-      if (type === 'sale') d = await sales('POST', '/sales', { uuid, customerId: customer.id, from: source.userId ? { userId: source.userId } : { warehouseId: source.warehouseId }, lines: lines.map(withPrice), paid: toNumber(paid || 0), methodId: method }, { idempotent: true });
-      else if (type === 'return') d = await sales('POST', '/returns', { uuid, customerId: customer.id, returnTypeId: rt, costMode, lines: lines.map(withPrice) }, { idempotent: true });
-      else d = await sales('POST', '/payments', { uuid, customerId: customer.id, amount: toNumber(amount), methodId: method }, { idempotent: true });
-      onDone(d.id);
+      // With no internet the document waits in the outbox and goes out by itself later.
+      if (type === 'sale') d = await api.send('POST', `${'/api/erp/sales'}/sales`, { uuid, customerId: customer.id, from: source.userId ? { userId: source.userId } : { warehouseId: source.warehouseId }, lines: lines.map(withPrice), paid: toNumber(paid || 0), methodId: method }, `Sotuv: ${customer.name}, ${fmtMoney(total)} so'm`);
+      else if (type === 'return') d = await api.send('POST', `${'/api/erp/sales'}/returns`, { uuid, customerId: customer.id, returnTypeId: rt, costMode, lines: lines.map(withPrice) }, `Qaytarish: ${customer.name}, ${fmtMoney(total)} so'm`);
+      else d = await api.send('POST', `${'/api/erp/sales'}/payments`, { uuid, customerId: customer.id, amount: toNumber(amount), methodId: method }, `To'lov: ${customer.name}, ${fmtMoney(toNumber(amount))} so'm`);
+      onDone(d.queued ? null : d.id);
     } catch (e) { notify('Xatolik', e.message); } finally { setBusy(false); }
   };
   const title = { sale: 'Sotish', return: 'Qaytarish', payment: "To'lov olish" }[type];

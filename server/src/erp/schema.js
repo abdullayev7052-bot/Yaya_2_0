@@ -375,6 +375,28 @@ CREATE TABLE IF NOT EXISTS vendors (
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ---------------------------------------------------------------- workplace (stage 7)
+-- A monoblock shared by several people. Paired once with a one-time code; then it
+-- holds its own secret (only its SHA-256 is kept here). People sign in on it by
+-- picking their name and typing their PIN — no device slot is used.
+CREATE TABLE IF NOT EXISTS kiosks (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  token_hash TEXT UNIQUE,
+  pair_code TEXT,
+  pair_expires TEXT,
+  idle_minutes INTEGER NOT NULL DEFAULT 2,
+  active INTEGER NOT NULL DEFAULT 1,
+  last_seen_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- Who may sign in on a monoblock (none listed = everyone with a PIN).
+CREATE TABLE IF NOT EXISTS kiosk_users (
+  kiosk_id INTEGER NOT NULL REFERENCES kiosks(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (kiosk_id, user_id)
+);
 `;
 
 // New columns on the existing products table (the milk products keep kind = 'milk').
@@ -467,6 +489,8 @@ export function setupErp(db, addColumn) {
   addColumn('users', 'salary', 'REAL');
   addColumn('users', 'salary_day', 'INTEGER');
   addColumn('users', 'salary_since', 'TEXT');
+  // Workplace (stage 7): a short PIN to sign in on a shared monoblock (bcrypt hash).
+  addColumn('users', 'pin_hash', 'TEXT');
   seedErp(db);
 }
 

@@ -9,6 +9,7 @@ import { PaymentForm, SupplierCard } from './Supplier';
 import { InventoryForm, Stock, StockForm, canStock } from './Stock';
 import { CloseShift, NewTask, Production, TaskScreen, canProduce } from './Production';
 import { AlertBanner } from '../AlertBanner';
+import { OutboxBadge } from '../Outbox';
 import { SaleForm, SaleView, SalesHome, canSell } from './Sales';
 import { C, s } from '../ui';
 
@@ -66,7 +67,11 @@ export default function Home({ tick, refresh, onLogout }) {
   const stockDone = (m) => { setStockForm(null); setToast(m); setTimeout(() => setToast(''), 4000); refresh(); };
   const prodDone = (m) => { setProdView(null); setToast(m); setTimeout(() => setToast(''), 4000); refresh(); };
   if (saleView?.screen === 'form') {
-    body = <SaleForm type={saleView.type} onBack={() => setSaleView(null)} onDone={(id) => { setSaleView({ screen: 'view', id }); refresh(); }} />;
+    body = <SaleForm type={saleView.type} onBack={() => setSaleView(null)} onDone={(id) => {
+      if (id) setSaleView({ screen: 'view', id });
+      else { setSaleView(null); setToast("Internet yo'q — navbatga qo'yildi, internet chiqqanda o'zi yuboriladi"); setTimeout(() => setToast(''), 5000); }
+      refresh();
+    }} />;
   } else if (saleView?.screen === 'view') {
     body = <SaleView id={saleView.id} onBack={() => { setSaleView(null); refresh(); }} />;
   } else if (prodView?.screen === 'new') {
@@ -108,7 +113,13 @@ export default function Home({ tick, refresh, onLogout }) {
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, gap: 10, borderBottomWidth: 1, borderColor: C.line }}>
           <Logo size={28} />
           <Text style={[s.text, { flex: 1, fontWeight: '700' }]} numberOfLines={1}>{api.getBrand().companyName || 'Yaya'}</Text>
+          <OutboxBadge />
           <Text style={s.muted} numberOfLines={1}>{me?.name || me?.login} · {me?.role}</Text>
+          {api.getSession()?.kiosk && (
+            <Pressable onPress={onLogout} style={[s.btnGhost, { paddingVertical: 8, paddingHorizontal: 14 }]}>
+              <Text style={s.btnGhostText}>⇄ Almashish</Text>
+            </Pressable>
+          )}
         </View>
       )}
       {(canProduce() || canStock() || api.can('alerts.view')) && <AlertBanner tick={tick} />}

@@ -10,7 +10,7 @@ const SUPPORT_TG = 'https://t.me/abdullayevder';
 
 // One login screen for everybody. The login and password identify the person;
 // the app then opens exactly the sections their role allows.
-export default function Login({ onDone }) {
+export default function Login({ onDone, onKiosk }) {
   const [id, setId] = useState('');
   const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState(false);
@@ -66,6 +66,11 @@ export default function Login({ onDone }) {
         <Pressable onPress={forgot} hitSlop={10} style={{ alignItems: 'center' }}>
           <Text style={[s.muted, { fontSize: 13, textDecorationLine: 'underline' }]}>Parol esdan chiqdi</Text>
         </Pressable>
+        {!!onKiosk && (
+          <Pressable onPress={onKiosk} hitSlop={10} style={{ alignItems: 'center', marginTop: 8 }}>
+            <Text style={[s.muted, { fontSize: 13 }]}>🖥  Monoblok rejimi (bir nechta xodim, PIN bilan)</Text>
+          </Pressable>
+        )}
         {copied && <Text style={[s.muted, { fontSize: 12, textAlign: 'center' }]}>Xabar nusxalandi — Telegramda qo'ying va jo'nating</Text>}
       </ScrollView>
     </KeyboardAvoidingView>

@@ -11,6 +11,7 @@ import erpRoutes from './routes/erp.js';
 import productionRoutes from './routes/production.js';
 import salesRoutes from './routes/sales.js';
 import financeRoutes from './routes/finance.js';
+import kioskRoutes from './routes/kiosk.js';
 import { createRateLimiter } from './ratelimit.js';
 
 const ADMIN_DIR = fileURLToPath(new URL('../../admin', import.meta.url));
@@ -56,6 +57,7 @@ export function buildApp({ db, jwtSecret, logger = false, rateLimit = true }) {
   app.register(productionRoutes, { prefix: '/api/erp/prod', db });
   app.register(salesRoutes, { prefix: '/api/erp/sales', db });
   app.register(financeRoutes, { prefix: '/api/erp/finance', db });
+  app.register(kioskRoutes, { prefix: '/api/kiosk', db });
   app.register(fastifyStatic, { root: ADMIN_DIR, prefix: '/admin/' });
   if (existsSync(WEBAPP_DIR)) {
     app.register(fastifyStatic, { root: WEBAPP_DIR, prefix: '/app/', decorateReply: false });

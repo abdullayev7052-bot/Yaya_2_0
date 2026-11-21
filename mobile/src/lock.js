@@ -16,6 +16,8 @@ const key = () => `lock:${getSession()?.user?.id ?? 'none'}`;
 export const getLock = () => store.getKv(key(), { pin: null, bio: false, minutes: 5 });
 const saveLock = (patch) => store.setKv(key(), { ...getLock(), ...patch });
 export const lockEnabled = () => !!getLock().pin;
+// Milliseconds since the last touch (the monoblock's idle sign-out uses it).
+export const idleFor = () => Date.now() - lastActive;
 
 const hash = (salt, pin) => Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, `yaya:${salt}:${pin}`);
 

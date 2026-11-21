@@ -108,8 +108,38 @@ export default function Profile({ tick, onLogout, setFull }) {
           )}
         </View>
 
-        <Btn title="Hisobdan chiqish" kind="warn" onPress={logout} />
+        {!api.getSession()?.kiosk && <MonoblockPin />}
+        <Btn title={api.getSession()?.kiosk ? '⇄ Almashish' : 'Hisobdan chiqish'} kind="warn" onPress={logout} />
       </ScrollView>
+    </View>
+  );
+}
+
+// The 4-digit PIN for signing in on a shared monoblock (set from one's own phone).
+function MonoblockPin() {
+  const [open, setOpen] = useState(false);
+  const [pin, setPinV] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    try { await api.setMyPin(pin, password); notify('Tayyor', 'Monoblok PIN kodi saqlandi'); setOpen(false); setPinV(''); setPassword(''); }
+    catch (e) { notify('Xatolik', e.message); } finally { setBusy(false); }
+  };
+  return (
+    <View style={[s.card, { gap: 8 }]}>
+      {!open ? <Btn title="Monoblok uchun PIN" kind="ghost" onPress={() => setOpen(true)} /> : (
+        <>
+          <Text style={[s.text, { fontWeight: '700' }]}>Monoblok PIN kodi</Text>
+          <Text style={s.muted}>Sexdagi umumiy kompyuterda ismingizni tanlab, shu 4 xonali PIN bilan kirasiz.</Text>
+          <TextInput style={s.input} value={pin} onChangeText={(v) => setPinV(v.replace(/\D/g, '').slice(0, 4))} placeholder="Yangi PIN (4 raqam)" keyboardType="number-pad" secureTextEntry />
+          <TextInput style={s.input} value={password} onChangeText={setPassword} placeholder="Parolingiz" secureTextEntry autoCapitalize="none" />
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Btn title="Bekor" kind="ghost" style={{ flex: 1 }} onPress={() => setOpen(false)} />
+            <Btn title={busy ? '...' : 'Saqlash'} style={{ flex: 1 }} disabled={busy || pin.length !== 4 || !password} onPress={save} />
+          </View>
+        </>
+      )}
     </View>
   );
 }

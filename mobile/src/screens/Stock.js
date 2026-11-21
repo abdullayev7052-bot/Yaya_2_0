@@ -43,12 +43,17 @@ function StockRows({ rows, empty }) {
 // ---------------------------------------------------------------- main screen
 export function Stock({ onForm, tick }) {
   const me = api.me();
-  const { data, err, busy, load } = useLoad(() => Promise.all([api.erp('GET', '/stock/mine'), api.erp('GET', '/docs')]), [tick]);
+  const { data, err, busy, load } = useLoad(() => Promise.all([api.cachedGet('/api/erp/stock/mine'), api.cachedGet('/api/erp/docs')]), [tick]);
   const [rejecting, setRejecting] = useState(null);
   const [reason, setReason] = useState('');
   const [mine, docs] = data ?? [null, []];
   const act = async (fn, msg) => {
-    try { await fn(); if (msg) notify('Tayyor', msg); load(); } catch (e) { notify('Xatolik', e.message); }
+    try {
+      const r = await fn();
+      if (r?.queued) notify('Internet yo\'q', 'Navbatga qo\'yildi — internet chiqqanda o\'zi yuboriladi');
+      else if (msg) notify('Tayyor', msg);
+      load();
+    } catch (e) { notify('Xatolik', e.message); }
   };
   const keeps = (mine?.warehouses ?? []).length > 0;
   return (
@@ -74,13 +79,13 @@ export function Stock({ onForm, tick }) {
                   <View style={{ flexDirection: 'row', gap: 8 }}>
                     <Btn title="Bekor" kind="ghost" onPress={() => { setRejecting(null); setReason(''); }} style={{ flex: 1 }} />
                     <Btn title="Rad etish" kind="danger" disabled={!reason.trim()} style={{ flex: 1 }}
-                      onPress={() => act(() => api.erp('POST', `/docs/${d.id}/reject`, { reason }), 'Rad etildi — mahsulot topshiruvchida qoldi').then(() => { setRejecting(null); setReason(''); })} />
+                      onPress={() => act(() => api.send('POST', `/api/erp/docs/${d.id}/reject`, { reason }, `Rad etish: ${d.label}`), 'Rad etildi — mahsulot topshiruvchida qoldi').then(() => { setRejecting(null); setReason(''); })} />
                   </View>
                 </View>
               ) : (
                 <View style={{ flexDirection: 'row', gap: 8 }}>
                   <Btn title="Rad etish" kind="ghost" onPress={() => setRejecting(d.id)} style={{ flex: 1 }} />
-                  <Btn title="Qabul qildim" onPress={() => act(() => api.erp('POST', `/docs/${d.id}/accept`, {}), 'Qabul qilindi')} style={{ flex: 2 }} />
+                  <Btn title="Qabul qildim" onPress={() => act(() => api.send('POST', `/api/erp/docs/${d.id}/accept`, {}, `Qabul: ${d.label}`), 'Qabul qilindi')} style={{ flex: 2 }} />
                 </View>
               )}
             </View>
@@ -150,7 +155,7 @@ function QtyRow({ name, unit, hint, value, onChange }) {
 // ---------------------------------------------------------------- hand over / write off
 export function StockForm({ type, onBack, onDone }) {
   const me = api.me();
-  const { data, err } = useLoad(() => Promise.all([api.erp('GET', '/meta'), api.erp('GET', '/stock/mine')]), []);
+  const { data, err } = useLoad(() => Promise.all([api.cachedGet('/api/erp/meta'), api.cachedGet('/api/erp/stock/mine')]), []);
   const [meta, mine] = data ?? [null, null];
   const sources = useMemo(() => (!meta ? [] : [
     { h: { userId: me.id }, label: 'Mening qo\'lim' },
@@ -183,7 +188,8 @@ export function StockForm({ type, onBack, onDone }) {
       const body = { type, uuid: randomUUID(), from, lines, note: note || null };
       if (type === 'transfer') body.to = to;
       else { body.reasonId = reasonId; if (chargeUser) body.chargeUserId = chargeUser; }
-      const d = await api.erp('POST', '/docs', body, { idempotent: true });
+      const d = await api.send('POST', '/api/erp/docs', body, type === 'transfer' ? 'Topshirish' : 'Hisobdan chiqarish');
+      if (d.queued) { onDone('Internet yo\'q — navbatga qo\'yildi, internet chiqqanda o\'zi yuboriladi'); return; }
       onDone(type === 'transfer' ? `${d.label} yuborildi — qabul qiluvchi tasdiqlashi kerak` : `${d.label} hisobdan chiqarildi`);
     } catch (e) { notify('Xatolik', e.message); } finally { setBusy(false); }
   };
