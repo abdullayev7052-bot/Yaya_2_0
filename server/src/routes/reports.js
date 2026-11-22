@@ -18,7 +18,7 @@ export default async function reportsRoutes(app, { db }) {
 
   app.get('/', need('reports.view'), async (req) => REPORT_LIST.filter((r) => allowed(req, r.key)));
 
-  // Daily figures for the Bosh panel chart: milk collected, production, net sales.
+  // Daily figures for the Bosh panel chart: milk collected and production.
   app.get('/trend', need('reports.view'), async (req) => {
     const days = Math.min(90, Math.max(7, Number(req.query.days) || 14));
     const from = new Date(Date.now() + 5 * 3600e3 - (days - 1) * 864e5).toISOString().slice(0, 10);
@@ -26,12 +26,10 @@ export default async function reportsRoutes(app, { db }) {
     const milk = db.prepare(`SELECT ${local('c.collected_at')} AS d, SUM(c.quantity) AS q FROM collections c JOIN shifts s ON s.client_uuid = c.shift_uuid
       WHERE s.status = 'accepted' AND ${local('c.collected_at')} >= ? GROUP BY d`).all(from);
     const prod = db.prepare(`SELECT ${local('done_at')} AS d, COUNT(*) AS n, SUM(milk_qty) AS milk FROM prod_tasks WHERE status = 'done' AND ${local('done_at')} >= ? GROUP BY d`).all(from);
-    const sales = db.prepare(`SELECT ${local('doc_date')} AS d, type, meta FROM docs WHERE type IN ('sale','return') AND status = 'posted' AND ${local('doc_date')} >= ?`).all(from);
     const out = [];
     for (let i = 0; i < days; i++) {
       const d = new Date(Date.parse(from) + i * 864e5).toISOString().slice(0, 10);
-      const net = sales.filter((x) => x.d === d).reduce((a, x) => { const m = JSON.parse(x.meta || '{}'); return a + (x.type === 'sale' ? m.total ?? 0 : -(m.credit ?? m.total ?? 0)); }, 0);
-      out.push({ day: d, milk: r3(milk.find((x) => x.d === d)?.q ?? 0), tasks: prod.find((x) => x.d === d)?.n ?? 0, milk_used: r3(prod.find((x) => x.d === d)?.milk ?? 0), sales: r2(net) });
+      out.push({ day: d, milk: r3(milk.find((x) => x.d === d)?.q ?? 0), tasks: prod.find((x) => x.d === d)?.n ?? 0, milk_used: r3(prod.find((x) => x.d === d)?.milk ?? 0) });
     }
     return out;
   });

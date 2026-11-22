@@ -9,12 +9,10 @@
 //             (salary, bonus and piece rates make it negative; payouts, fines and
 //             goods lost by their fault make it positive);
 // - vendor:   positive = we owe the vendor (purchases +, payments −);
-// - customer: positive = the customer owes us (stage 4).
 import { randomUUID } from 'node:crypto';
 import {
   StockError, addIn, getDoc, holderName, nextNumber, pnl, r2, r3,
 } from './stock.js';
-import { cashboxBalance } from './sales.js';
 import { balances as householdLedger } from '../ledger.js';
 
 const nowIso = () => new Date().toISOString();
@@ -100,7 +98,7 @@ export function createIncome(db, b, { actor, userId }) {
     return getDoc(db, doc.id);
   });
 }
-// From one cashbox to another (e.g. a seller's cashbox to the main one).
+// From one cashbox to another (e.g. a keeper's cashbox to the main one).
 export function createCashMove(db, b, { actor, userId }) {
   return run(db, 'cash_move', b, null, (uuid) => {
     const from = cashbox(db, b.fromId); const to = cashbox(db, b.toId); const amount = money(b.amount);
@@ -302,6 +300,8 @@ export function cashboxStatement(db, id, { from, to } = {}) {
   return { before, after: run, in: r2(entries.filter((e) => e.amount > 0).reduce((a, e) => a + e.amount, 0)), out: r2(-entries.filter((e) => e.amount < 0).reduce((a, e) => a + e.amount, 0)), entries: entries.reverse() };
 }
 
+export const cashboxBalance = (db, id) => r2(db.prepare('SELECT COALESCE(SUM(amount), 0) AS a FROM cash_entries WHERE cashbox_id = ?').get(id).a);
+
 // Profit and loss for a period, by category.
 export function profitLoss(db, { from, to }) {
   const rows = db.prepare(`SELECT c.id, c.code, c.name, c.kind, ROUND(SUM(e.amount), 2) AS amount FROM pnl_entries e JOIN pnl_categories c ON c.id = e.category_id
@@ -313,7 +313,6 @@ export function profitLoss(db, { from, to }) {
 
 // Who owes whom, across the company.
 export function balancesSummary(db) {
-  const cust = db.prepare(`SELECT c.opening_balance + COALESCE((SELECT SUM(amount) FROM party_entries WHERE party_type = 'customer' AND party_id = c.id), 0) AS b FROM customers c`).all().map((r) => r.b);
   const vend = db.prepare('SELECT id FROM vendors').all().map((v) => vendorBalance(db, v.id));
   const staff = db.prepare("SELECT party_id, SUM(amount) AS b FROM party_entries WHERE party_type = 'staff' GROUP BY party_id").all().map((r) => r.b);
   const boxes = db.prepare('SELECT id, name, is_main FROM cashboxes WHERE active = 1 ORDER BY is_main DESC, name').all().map((c) => ({ ...c, balance: cashboxBalance(db, c.id) }));
@@ -321,7 +320,7 @@ export function balancesSummary(db) {
   const neg = (a) => r2(-a.filter((x) => x < 0).reduce((s, x) => s + x, 0));
   return {
     cash: r2(boxes.reduce((a, c) => a + c.balance, 0)), cashboxes: boxes,
-    customers_owe: pos(cust), we_owe_customers: neg(cust), we_owe_vendors: pos(vend), vendors_owe: neg(vend),
+    we_owe_vendors: pos(vend), vendors_owe: neg(vend),
     we_owe_staff: neg(staff), staff_owe: pos(staff),
     // Households (milk collection ledger): positive balance = we owe them.
     we_owe_households: r2(householdLedger(db).totals.weOwe), households_owe: r2(householdLedger(db).totals.theyOwe),
@@ -330,7 +329,7 @@ export function balancesSummary(db) {
 
 // ---------------------------------------------------------------- household payments (milk collection)
 // A payment to a household leaves a cashbox: the one chosen, else the payer's own
-// (a collector gets one made on first use, like a seller), else the main cashbox.
+// (a collector gets one made on first use), else the main cashbox.
 // Field payments synced later can never be refused, so the cashbox may go below
 // zero — the cash count shows it. Test users' payments touch no cashbox.
 const METHOD_NAME = { cash: 'Naqd', card: 'Karta', transfer: "O'tkazma" };
@@ -400,8 +399,6 @@ export function createCashCount(db, b, { actor, userId }) {
 // ---------------------------------------------------------------- balances (all parties)
 export function balancesDetail(db) {
   const householdBalances = householdLedger(db).rows;
-  const customers = db.prepare(`SELECT c.id, c.name, c.opening_balance + COALESCE((SELECT SUM(amount) FROM party_entries WHERE party_type = 'customer' AND party_id = c.id), 0) AS balance
-    FROM customers c`).all().map((r) => ({ ...r, balance: r2(r.balance) })).filter((r) => Math.abs(r.balance) >= 0.01).sort((a, b) => b.balance - a.balance);
   const vendors = listVendors(db, { all: true }).filter((v) => Math.abs(v.balance) >= 0.01).map((v) => ({ id: v.id, name: v.name, balance: v.balance })).sort((a, b) => b.balance - a.balance);
   const staff = db.prepare("SELECT party_id AS id, ROUND(SUM(amount), 2) AS b FROM party_entries WHERE party_type = 'staff' GROUP BY party_id").all()
     .filter((r) => Math.abs(r.b) >= 0.01).map((r) => ({ id: r.id, name: holderName(db, { userId: r.id }), balance: r2(-r.b) })).sort((a, b) => b.balance - a.balance);
@@ -411,7 +408,6 @@ export function balancesDetail(db) {
   const neg = (a) => r2(-a.filter((x) => x.balance < 0).reduce((s0, x) => s0 + x.balance, 0));
   return {
     // Every list: positive = in the direction of its title.
-    customers: { title: 'Mijozlar bizga qarz', rows: customers, total: pos(customers), reverse: neg(customers) },
     households: { title: 'Biz xonadonlarga qarz', rows: households, total: pos(households), reverse: neg(households) },
     vendors: { title: 'Biz yetkazib beruvchilarga qarz', rows: vendors, total: pos(vendors), reverse: neg(vendors) },
     staff: { title: 'Biz xodimlarga qarz', rows: staff, total: pos(staff), reverse: neg(staff) },

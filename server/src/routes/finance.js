@@ -1,14 +1,13 @@
 // Finance API (Yaya 2.0, stage 6), under /api/erp/finance: cashboxes and their
 // statements, expenses and other income, transfers between cashboxes, vendors with
 // purchases and payments, payroll (salary, bonus, fine, payout), profit and loss,
-// and the company-wide balances. A seller may hand their own cashbox over to the
-// main cashbox without finance rights.
+// and the company-wide balances. A cashbox keeper may hand their own cashbox over
+// to the main cashbox without finance rights.
 import { audit } from '../db/index.js';
 import { makeGuard } from '../auth.js';
 import { StockError, cancelDoc } from '../erp/stock.js';
-import { cashboxBalance } from '../erp/sales.js';
 import {
-  balancesDetail, balancesSummary, cashboxStatement, createCashCount, createCashMove, createCashOpening, createExpense, createIncome, createPurchase, createStaffEntry,
+  balancesDetail, balancesSummary, cashboxBalance, cashboxStatement, createCashCount, createCashMove, createCashOpening, createExpense, createIncome, createPurchase, createStaffEntry,
   createVendorPayment, finDoc, listFinDocs, listVendors, profitLoss, saveVendor, setSalary, staffBalance, statementOf,
 } from '../erp/finance.js';
 
@@ -26,7 +25,7 @@ export default async function financeRoutes(app, { db }) {
 
   // ---------------------------------------------------------------- overview
   app.get('/summary', guard('finance.view'), async () => balancesSummary(db));
-  // Balanslar: every party (customers, households, vendors, staff) and every cashbox.
+  // Balanslar: every party (households, vendors, staff) and every cashbox.
   app.get('/balances', guard('finance.view'), async () => balancesDetail(db));
   app.get('/pnl', guard('finance.view'), async (req) => profitLoss(db, { from: req.query.from || `${today().slice(0, 7)}-01`, to: req.query.to || today() }));
 
@@ -44,6 +43,38 @@ export default async function financeRoutes(app, { db }) {
     log(req, action, { id: d.id, number: d.number });
     return finDoc(db, d.id);
   }));
+  // Cashboxes and payment methods (were under sales until the sales part was taken out).
+  const str = (v, n) => (v == null ? null : String(v).trim().slice(0, n) || null);
+  const flag = (v) => (v == null ? null : Number(!!v));
+  const setKeepers = (id, keepers) => {
+    db.prepare('DELETE FROM cashbox_keepers WHERE cashbox_id = ?').run(id);
+    for (const u of keepers) db.prepare('INSERT OR IGNORE INTO cashbox_keepers (cashbox_id, user_id) SELECT ?, id FROM users WHERE id = ?').run(id, Number(u));
+  };
+  app.post('/cashboxes', guard('finance.cash'), async (req, reply) => {
+    const name = str(req.body?.name, 60);
+    if (!name) return bad(reply, 'Nomi shart');
+    const id = Number(db.prepare('INSERT INTO cashboxes (name) VALUES (?)').run(name).lastInsertRowid);
+    setKeepers(id, req.body?.keepers ?? []);
+    log(req, 'finance.cashbox', { id, name });
+    return { id };
+  });
+  app.patch('/cashboxes/:id', guard('finance.cash'), async (req) => {
+    const id = Number(req.params.id);
+    db.prepare('UPDATE cashboxes SET name = COALESCE(?, name), active = COALESCE(?, active) WHERE id = ?').run(str(req.body?.name, 60), flag(req.body?.active), id);
+    if (Array.isArray(req.body?.keepers)) setKeepers(id, req.body.keepers);
+    return { ok: true };
+  });
+  app.get('/methods', guard('finance.view', 'finance.cash'), async () => db.prepare('SELECT * FROM payment_methods ORDER BY active DESC, sort, id').all());
+  app.post('/methods', guard('finance.cash'), async (req, reply) => {
+    const name = str(req.body?.name, 40);
+    if (!name) return bad(reply, 'Nomi shart');
+    if (db.prepare('SELECT 1 FROM payment_methods WHERE lower(name) = lower(?)').get(name)) return bad(reply, 'Bunday tur bor');
+    return { id: db.prepare('INSERT INTO payment_methods (name) VALUES (?)').run(name).lastInsertRowid };
+  });
+  app.patch('/methods/:id', guard('finance.cash'), async (req) => {
+    db.prepare('UPDATE payment_methods SET name = COALESCE(?, name), active = COALESCE(?, active) WHERE id = ?').run(str(req.body?.name, 40), flag(req.body?.active), Number(req.params.id));
+    return { ok: true };
+  });
   cashOp('/expenses', createExpense, 'finance.cash', 'finance.expense');
   cashOp('/incomes', createIncome, 'finance.cash', 'finance.income');
   cashOp('/cash-openings', createCashOpening, 'finance.cash', 'finance.cash_open');

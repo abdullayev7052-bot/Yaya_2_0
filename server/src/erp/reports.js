@@ -1,4 +1,4 @@
-// Reports over the whole chain (Yaya 2.0, stage 8). Each report returns
+// Reports up to the warehouse (Yaya 2.0, stage 8; sales reports taken out). Each report returns
 // { key, title, columns, rows, totals, note } so the panel table and the Excel
 // export are built the same way. Columns marked cost: true (cost, profit, margin,
 // value) are removed for anyone without stock.costs. Dates are local (UTC+5).
@@ -11,110 +11,7 @@ const C = (key, label, type = 'text', extra = {}) => ({ key, label, type, ...ext
 const pct = (a, b) => (b ? r2((a / b) * 100) : null);
 const sumOf = (rows, keys) => Object.fromEntries(keys.map((k) => [k, r2(rows.reduce((a, r) => a + (Number(r[k]) || 0), 0))]));
 
-// Posted, not cancelled, sale / return lines in the period with their revenue and FIFO cost.
-function salesLines(db, from, to) {
-  return db.prepare(`SELECT d.id AS doc_id, d.type, d.customer_id, d.created_by_id, ${day('d.doc_date')} AS day, d.meta,
-      dl.id AS line_id, dl.product_id, p.name AS product, p.unit, dl.qty, dl.price, dl.unit_cost
-    FROM docs d JOIN doc_lines dl ON dl.doc_id = d.id JOIN products p ON p.id = dl.product_id
-    WHERE d.type IN ('sale','return') AND d.status = 'posted' AND ${day('d.doc_date')} BETWEEN ? AND ?`).all(from, to).map((l) => {
-    const m = J(l.meta);
-    const revenue = r2(l.qty * (l.price ?? 0));
-    const cost = l.type === 'sale'
-      ? r2(db.prepare("SELECT COALESCE(SUM(-cost), 0) AS c FROM stock_moves WHERE line_id = ? AND qty < 0 AND kind = 'sale'").get(l.line_id).c)
-      : r2(l.qty * (l.unit_cost ?? 0));
-    // A return's revenue effect is what the customer was credited (expired + "keep" = 0).
-    const credited = l.type === 'return' ? (m.credited === false ? 0 : revenue) : revenue;
-    return { ...l, revenue, cost, credited };
-  });
-}
-
 const REPORTS = {
-  sales_by_product: {
-    title: 'Savdo — mahsulotlar bo\'yicha',
-    run(db, { from, to }) {
-      const map = new Map();
-      for (const l of salesLines(db, from, to)) {
-        const r = map.get(l.product_id) ?? { product: l.product, unit: l.unit, qty: 0, revenue: 0, cost: 0, ret_qty: 0, ret_value: 0 };
-        if (l.type === 'sale') { r.qty += l.qty; r.revenue += l.revenue; r.cost += l.cost; } else { r.ret_qty += l.qty; r.ret_value += l.credited; r.cost -= l.cost; }
-        map.set(l.product_id, r);
-      }
-      const rows = [...map.values()].map((r) => {
-        const net = r2(r.revenue - r.ret_value);
-        return { ...r, qty: r3(r.qty), ret_qty: r3(r.ret_qty), revenue: r2(r.revenue), ret_value: r2(r.ret_value), net, cost: r2(r.cost), profit: r2(net - r.cost), margin: pct(net - r.cost, net) };
-      }).sort((a, b) => b.net - a.net);
-      return {
-        columns: [C('product', 'Mahsulot'), C('unit', 'Birlik'), C('qty', 'Sotildi', 'qty'), C('revenue', 'Sotuv', 'money'), C('ret_qty', 'Qaytdi', 'qty'), C('ret_value', 'Qaytarish', 'money'),
-          C('net', 'Sof tushum', 'money'), C('cost', 'Tannarx', 'money', { cost: true }), C('profit', 'Yalpi foyda', 'money', { cost: true }), C('margin', 'Marja, %', 'pct', { cost: true })],
-        rows, totals: { ...sumOf(rows, ['revenue', 'ret_value', 'net', 'cost', 'profit']), margin: pct(rows.reduce((a, r) => a + r.profit, 0), rows.reduce((a, r) => a + r.net, 0)) },
-      };
-    },
-  },
-  sales_by_customer: {
-    title: 'Savdo — mijozlar bo\'yicha',
-    run(db, { from, to }) {
-      const map = new Map();
-      const get = (id) => map.get(id) ?? { customer_id: id, receipts: 0, revenue: 0, ret_value: 0, paid: 0, cost: 0 };
-      for (const l of salesLines(db, from, to)) {
-        const r = get(l.customer_id);
-        if (l.type === 'sale') { r.revenue += l.revenue; r.cost += l.cost; } else { r.ret_value += l.credited; r.cost -= l.cost; }
-        map.set(l.customer_id, r);
-      }
-      for (const d of db.prepare(`SELECT type, customer_id, meta FROM docs WHERE type IN ('sale','payment') AND status = 'posted' AND ${day('doc_date')} BETWEEN ? AND ?`).all(from, to)) {
-        const r = get(d.customer_id); const m = J(d.meta);
-        if (d.type === 'sale') r.receipts += 1;
-        r.paid += d.type === 'sale' ? (m.paid ?? 0) : (m.total ?? 0);
-        map.set(d.customer_id, r);
-      }
-      const rows = [...map.values()].map((r) => {
-        const c = db.prepare('SELECT c.name, c.opening_balance, t.name AS type FROM customers c LEFT JOIN customer_types t ON t.id = c.type_id WHERE c.id = ?').get(r.customer_id) ?? {};
-        const debt = r2((c.opening_balance ?? 0) + db.prepare("SELECT COALESCE(SUM(amount), 0) AS a FROM party_entries WHERE party_type = 'customer' AND party_id = ?").get(r.customer_id).a);
-        const net = r2(r.revenue - r.ret_value);
-        return { customer: c.name ?? `#${r.customer_id}`, type: c.type ?? '', receipts: r.receipts, revenue: r2(r.revenue), ret_value: r2(r.ret_value), net, paid: r2(r.paid), cost: r2(r.cost), profit: r2(net - r.cost), debt };
-      }).sort((a, b) => b.net - a.net);
-      return {
-        columns: [C('customer', 'Mijoz'), C('type', 'Turi'), C('receipts', 'Chek', 'qty'), C('revenue', 'Sotuv', 'money'), C('ret_value', 'Qaytarish', 'money'), C('net', 'Sof tushum', 'money'),
-          C('paid', "To'ladi", 'money'), C('profit', 'Yalpi foyda', 'money', { cost: true }), C('debt', 'Hozirgi qarzi', 'money')],
-        rows, totals: sumOf(rows, ['receipts', 'revenue', 'ret_value', 'net', 'paid', 'profit', 'debt']),
-      };
-    },
-  },
-  sales_by_seller: {
-    title: 'Savdo — sotuvchilar bo\'yicha',
-    run(db, { from, to }) {
-      const map = new Map();
-      for (const d of db.prepare(`SELECT type, created_by_id, meta FROM docs WHERE type IN ('sale','return','payment') AND status = 'posted' AND ${day('doc_date')} BETWEEN ? AND ?`).all(from, to)) {
-        const r = map.get(d.created_by_id) ?? { receipts: 0, revenue: 0, returns: 0, cash: 0 };
-        const m = J(d.meta);
-        if (d.type === 'sale') { r.receipts += 1; r.revenue += m.total ?? 0; r.cash += m.paid ?? 0; }
-        if (d.type === 'return') r.returns += m.total ?? 0;
-        if (d.type === 'payment') r.cash += m.total ?? 0;
-        map.set(d.created_by_id, r);
-      }
-      const rows = [...map.entries()].map(([id, r]) => ({ seller: id ? holderName(db, { userId: id }) : '—', receipts: r.receipts, revenue: r2(r.revenue), returns: r2(r.returns), cash: r2(r.cash),
-        avg: r.receipts ? r2(r.revenue / r.receipts) : 0 })).sort((a, b) => b.revenue - a.revenue);
-      return {
-        columns: [C('seller', 'Sotuvchi'), C('receipts', 'Chek', 'qty'), C('revenue', 'Sotuv', 'money'), C('avg', "O'rtacha chek", 'money'), C('returns', 'Qaytarish', 'money'), C('cash', 'Pul oldi', 'money')],
-        rows, totals: sumOf(rows, ['receipts', 'revenue', 'returns', 'cash']),
-      };
-    },
-  },
-  sales_daily: {
-    title: 'Savdo — kunlar bo\'yicha',
-    run(db, { from, to }) {
-      const map = new Map();
-      for (const l of salesLines(db, from, to)) {
-        const r = map.get(l.day) ?? { day: l.day, revenue: 0, ret_value: 0, cost: 0 };
-        if (l.type === 'sale') { r.revenue += l.revenue; r.cost += l.cost; } else { r.ret_value += l.credited; r.cost -= l.cost; }
-        map.set(l.day, r);
-      }
-      const rows = [...map.values()].map((r) => ({ day: r.day, revenue: r2(r.revenue), ret_value: r2(r.ret_value), net: r2(r.revenue - r.ret_value), cost: r2(r.cost), profit: r2(r.revenue - r.ret_value - r.cost) }))
-        .sort((a, b) => a.day.localeCompare(b.day));
-      return {
-        columns: [C('day', 'Kun', 'date'), C('revenue', 'Sotuv', 'money'), C('ret_value', 'Qaytarish', 'money'), C('net', 'Sof tushum', 'money'), C('cost', 'Tannarx', 'money', { cost: true }), C('profit', 'Yalpi foyda', 'money', { cost: true })],
-        rows, totals: sumOf(rows, ['revenue', 'ret_value', 'net', 'cost', 'profit']), chart: { x: 'day', series: [['net', 'Sof tushum'], ['profit', 'Yalpi foyda']] },
-      };
-    },
-  },
   production_by_product: {
     title: 'Ishlab chiqarish — mahsulotlar bo\'yicha',
     run(db, { from, to }) {

@@ -2,6 +2,15 @@
 
 Eng yangisi tepada. Qavs ichida Android `versionCode`.
 
+## Yaya 2.0 — omborgacha fokus, 2026-11-22
+- Sotuv, qaytarish, mijozlar, narxlar, savdo sozlamalari, "Sotuvchi" roli, savdo hisobotlari va sotuv grafigi olib
+  tashlandi (panel, ilova, server). 11–12-bosqichlarda distributsiya bilan yangi uslubda qaytadi.
+- Bazadagi eski savdo ma'lumotlari saqlanib qoldi. Sotuvchilar tizimga kira olmaydi, bo'sh kassalari yopildi.
+- Kassalar va to'lov turlarini boshqarish — **Moliya → Kassalar**ga ko'chdi.
+- Muddati o'tgan mahsulot qayta ishlashga oddiy topshirish orqali boradi (tayyor ombor → "Muddati o'tganlar" → qayta ishlovchi).
+- Bosh panel: "Savdo" bloki o'rniga sut va ishlab chiqarishga ketgan sut grafiklari; Balanslar'da mijozlar yo'q.
+- 69 ta avtomatik test.
+
 ## Yaya 2.0 — butun zanjir (ERP), 2026-11-18 — 2026-11-21
 Server va panel; mobil ilova brauzer versiyasida (`/app/`) sinalgan, APK hali yig'ilmagan. Batafsil: docs/ERP_PLAN.md.
 - **Ombor:** omborlar va mas'ullar, partiyalar va FIFO, topshirish → qabul, hisobdan chiqarish (xodim hisobiga ham),

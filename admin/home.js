@@ -50,22 +50,11 @@ views.overview = async (v) => {
       ${p.output.length ? `<table style="margin-top:12px"><thead><tr><th>Chiqqan mahsulot</th><th class="num">Miqdor</th></tr></thead><tbody>
         ${p.output.map((x) => `<tr><td>${esc(x.name)}</td><td class="num">${fmtNum(x.qty, 3)} ${esc(x.unit)}</td></tr>`).join('')}</tbody></table>` : '<p class="muted" style="margin:12px 0 0">Bu kunda topshiriq bajarilmagan.</p>'}</div>`);
   }
-  if (o.sales) {
-    const x = o.sales;
-    blocks.push(`<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">4. Savdo</h2><a href="#sales?from=${day}&to=${day}">batafsil →</a></div>
-      <div class="tiles" style="margin:12px 0 0">
-        ${tile('Sotuv', fmtMoney(x.total), `${x.count} ta chek`)}
-        ${tile('Pul tushdi', fmtMoney(x.paid), "sotuv va qarz to'lovlari")}
-        ${tile('Qaytarish', fmtMoney(x.returns), `${x.returns_count} ta`)}
-        ${tile('Mijozlar qarzi', fmtMoney(x.customers_debt), `${x.debtors} ta qarzdor`, '#customers')}
-      </div></div>`);
-  }
   if (o.finance) {
     const f = o.finance;
-    blocks.push(`<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">5. Moliya</h2><a href="#finance">batafsil →</a></div>
+    blocks.push(`<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">4. Moliya</h2><a href="#finance">batafsil →</a></div>
       <div class="tiles" style="margin:12px 0 0">
         ${tile('Kassalarda', fmtMoney(f.cash), f.cashboxes.map((c) => `${esc(c.name)}: ${fmtMoney(c.balance)}`).join(' · '))}
-        ${tile('Mijozlar bizga qarz', fmtMoney(f.customers_owe), '', '#customers')}
         ${tile('Biz xonadonlarga (sut)', fmtMoney(f.we_owe_households), '', '#balances')}
         ${tile('Biz yetkazib beruvchilarga', fmtMoney(f.we_owe_vendors), '', '#vendors')}
         ${tile('Biz xodimlarga', fmtMoney(f.we_owe_staff), 'oylik, ishbay, bonus', '#payroll')}

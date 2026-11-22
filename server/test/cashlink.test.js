@@ -17,7 +17,7 @@ test('household payments leave a cashbox: office → chosen or main, field → t
   const e = db.prepare('SELECT * FROM cash_entries WHERE payment_id = ?').get(p1);
   assert.match(e.note, /Karimova Oydin/);
   // a chosen cashbox
-  const other = (await call(app, 'POST', '/api/erp/sales/cashboxes', b, { name: 'Bank' })).body.id;
+  const other = (await call(app, 'POST', '/api/erp/finance/cashboxes', b, { name: 'Bank' })).body.id;
   await call(app, 'POST', '/api/admin/payments', b, { supplierId: 2, amount: 30000, method: 'transfer', cashboxId: other });
   assert.equal(bal(db, other), -30000);
   // voiding puts the money back

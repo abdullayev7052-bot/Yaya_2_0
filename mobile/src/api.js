@@ -242,7 +242,6 @@ export const admin = (method, path, body) => call(method, '/api/admin' + path, b
 export const mobile = (method, path, body) => call(method, '/api/mobile' + path, body);
 // Warehouse (Yaya 2.0). Pass { idempotent: true } for document posts that carry a uuid.
 export const erp = (method, path, body, opts) => call(method, '/api/erp' + path, body, opts);
-export const salesApi = (method, path, body, opts) => call(method, '/api/erp/sales' + path, body, opts);
 export const finApi = (method, path, body, opts) => call(method, '/api/erp/finance' + path, body, opts);
 export const changePassword = (current, next) => call('PUT', '/api/auth/password', { current, next });
 // Change own name/login (admins). Updates the cached session so the UI follows.
@@ -341,7 +340,7 @@ export async function kioskLogin(userId, pin) {
 export const setMyPin = (pin, password) => call('PUT', '/api/kiosk/my-pin', { pin, password });
 
 // ---------------------------------------------------------------- offline outbox (stage 7)
-// Documents that carry their own uuid (sales, returns, payments, hand-overs,
+// Documents that carry their own uuid (payments, hand-overs,
 // write-offs, accept/reject, cash hand-over) are safe to send again, so with no
 // internet they wait here and go out by themselves when the connection is back.
 // Each item keeps the token of the person who made it: on a shared monoblock it is

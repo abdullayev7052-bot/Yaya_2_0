@@ -1,6 +1,6 @@
 'use strict';
 
-// Hisobotlar: one page for every report of the whole chain (sales, production,
+// Hisobotlar: one page for every report up to the warehouse (production,
 // stock, losses, staff). Pick a report and a period; the table, totals and an
 // Excel file come from the same server answer (/api/erp/reports).
 
@@ -14,7 +14,7 @@ const cell = (c, v) => {
   if (c.type === 'date') return `${String(v).slice(8, 10)}.${String(v).slice(5, 7)}.${String(v).slice(0, 4)}`;
   return esc(v);
 };
-const GROUP_OF = (k) => (k.startsWith('sales') ? 'Savdo' : k.startsWith('production') ? 'Ishlab chiqarish' : k.startsWith('staff') ? 'Xodimlar' : 'Ombor');
+const GROUP_OF = (k) => (k.startsWith('production') ? 'Ishlab chiqarish' : k.startsWith('staff') ? 'Xodimlar' : 'Ombor');
 
 views['erp-reports'] = async (v) => {
   const q = hashParams();
@@ -78,10 +78,10 @@ views.overview = async (v) => {
   if (!tr) return;
   const box = document.createElement('div');
   box.className = 'grid2';
-  box.innerHTML = '<div class="card"><h2>Sotuv (sof), 14 kun</h2><div id="trSales"></div></div><div class="card"><h2>Qabul qilingan sut, kg, 14 kun</h2><div id="trMilk"></div></div>';
+  box.innerHTML = '<div class="card"><h2>Qabul qilingan sut, kg, 14 kun</h2><div id="trMilk"></div></div><div class="card"><h2>Ishlab chiqarishga ketgan sut, kg, 14 kun</h2><div id="trUsed"></div></div>';
   const first = v.querySelector('.card');
   if (first) first.before(box); else v.append(box);
   const cats = tr.map((d) => ({ key: d.day, label: `${d.day.slice(8, 10)}.${d.day.slice(5, 7)}` }));
-  Charts.stackedBars($('#trSales', box), { categories: cats, series: [{ key: 'sales', name: 'Sof sotuv' }], value: (d) => Math.max(0, tr.find((x) => x.day === d)?.sales ?? 0), unit: "so'm" });
   Charts.stackedBars($('#trMilk', box), { categories: cats, series: [{ key: 'milk', name: 'Sut' }], value: (d) => tr.find((x) => x.day === d)?.milk ?? 0, unit: 'kg' });
+  Charts.stackedBars($('#trUsed', box), { categories: cats, series: [{ key: 'milk_used', name: 'Ishlatilgan sut' }], value: (d) => tr.find((x) => x.day === d)?.milk_used ?? 0, unit: 'kg' });
 };

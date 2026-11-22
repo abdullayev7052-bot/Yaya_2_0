@@ -8,7 +8,7 @@ const finApi = (method, path, body) => api(method, path, body, '/api/erp/finance
 const uuid = () => crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 const signed = (v) => { const n = Math.abs(v) < 0.005 ? 0 : v; return `<span style="color:${n > 0 ? 'var(--ok)' : n < 0 ? 'var(--err)' : 'inherit'}">${n > 0 ? '+' : ''}${fmtMoney(n)}</span>`; };
 async function finMeta() {
-  const [boxes, cats, methods] = await Promise.all([finApi('GET', '/cashboxes'), api('GET', '/pnl-categories', null, '/api/erp'), api('GET', '/meta', null, '/api/erp/sales').then((m) => m.methods)]);
+  const [boxes, cats, methods] = await Promise.all([finApi('GET', '/cashboxes'), api('GET', '/pnl-categories', null, '/api/erp'), finApi('GET', '/methods')]);
   return { boxes: boxes.filter((b) => b.active), cats: cats.filter((c) => c.active !== 0), methods: methods.filter((m) => m.active) };
 }
 const boxOpts = (m) => m.boxes.map((b) => [b.id, `${b.name} (${fmtMoney(b.balance)})`]);
@@ -28,23 +28,44 @@ async function cashForm(kind, preset = {}) {
 }
 
 views.finance = async (v) => {
-  const [sum, boxes] = await Promise.all([finApi('GET', '/summary'), finApi('GET', '/cashboxes')]);
+  const [sum, boxes, methods] = await Promise.all([finApi('GET', '/summary'), finApi('GET', '/cashboxes'), finApi('GET', '/methods')]);
   const c = can('finance.cash');
   v.innerHTML = `<div class="tiles">
       <div class="tile"><div class="k">Kassalarda jami</div><div class="v">${fmtMoney(sum.cash)}</div></div>
-      <div class="tile"><div class="k">Mijozlar bizga qarz</div><div class="v">${fmtMoney(sum.customers_owe)}</div><div class="s"><a href="#customers">mijozlar</a></div></div>
       <div class="tile"><div class="k">Biz xonadonlarga qarz (sut)</div><div class="v">${fmtMoney(sum.we_owe_households)}</div><div class="s"><a href="#debts">batafsil</a></div></div>
       <div class="tile"><div class="k">Biz yetkazib beruvchilarga qarz</div><div class="v">${fmtMoney(sum.we_owe_vendors)}</div><div class="s"><a href="#vendors">batafsil</a></div></div>
       <div class="tile"><div class="k">Biz xodimlarga qarz (oylik, ishbay)</div><div class="v">${fmtMoney(sum.we_owe_staff)}</div><div class="s">xodimlar bizga: ${fmtMoney(sum.staff_owe)}</div></div>
     </div>
     ${c ? `<div class="row" style="margin-bottom:12px"><button data-k="expense">− Xarajat</button><button data-k="income" class="ghost">+ Boshqa kirim</button>
       <button data-k="move" class="ghost">⇄ Kassadan kassaga</button><button data-k="count" class="ghost">Kassani sanash</button><button data-k="open" class="ghost">Boshlang'ich qoldiq</button></div>` : ''}
-    <div class="card table-wrap"><table><thead><tr><th>Kassa</th><th>Mas'ullar</th><th class="num">Qoldiq</th></tr></thead><tbody>
+    <div class="card table-wrap"><table><thead><tr><th>Kassa</th><th>Mas'ullar</th><th class="num">Qoldiq</th>${c ? '<th></th>' : ''}</tr></thead><tbody>
       ${boxes.map((b) => `<tr class="${b.active ? '' : 'voided'}"><td><a href="#cashbox?id=${b.id}">${esc(b.name)}</a>${b.is_main ? ' <span class="muted">(asosiy)</span>' : ''}</td>
-        <td class="muted">${b.keepers.map((k) => esc(k.name)).join(', ')}</td><td class="num"><b>${fmtMoney(b.balance)}</b></td></tr>`).join('')}
-    </tbody></table><p class="muted">Sotuvchi sotsa pul uning o'z kassasiga tushadi; u ilovadan yoki shu yerdan "Kassadan kassaga" bilan asosiy kassaga topshiradi.
-      Kassalar ro'yxati va mas'ullar — Savdo → Sozlamalar.</p></div>`;
+        <td class="muted">${b.keepers.map((k) => esc(k.name)).join(', ')}</td><td class="num"><b>${fmtMoney(b.balance)}</b></td>${c ? `<td><button class="ghost small" data-cb="${b.id}">Tahrirlash</button></td>` : ''}</tr>`).join('')}
+    </tbody></table>${c ? '<button class="small" id="newCb" style="margin-top:8px">+ Kassa</button>' : ''}
+      <p class="muted">Sut yig'uvchi xonadonga dalada to'lasa, pul uning o'z kassasidan chiqadi; mas'ul "Kassadan kassaga" bilan asosiy kassadan oladi yoki unga topshiradi.</p></div>
+    <div class="card"><h2>To'lov turlari</h2><table><tbody>${methods.map((x) => `<tr class="${x.active ? '' : 'voided'}"><td>${esc(x.name)}</td><td>${c ? `<button class="ghost small" data-pm="${x.id}">Tahrirlash</button>` : ''}</td></tr>`).join('')}</tbody></table>
+      ${c ? '<button class="small" id="newPm" style="margin-top:8px">+ To\'lov turi</button>' : ''}</div>`;
   $$('[data-k]', v).forEach((b) => { b.onclick = act(() => (b.dataset.k === 'count' ? cashCount() : cashForm(b.dataset.k))); });
+  const pmForm = (x = null) => openForm({ title: x ? "To'lov turi" : "Yangi to'lov turi",
+    fields: [{ name: 'name', label: 'Nomi', value: x?.name, required: true }, ...(x ? [{ name: 'active', label: 'Faol', type: 'checkbox', value: !!x.active }] : [])],
+    onSubmit: (d) => (x ? finApi('PATCH', `/methods/${x.id}`, d) : finApi('POST', '/methods', d)) });
+  $('#newPm', v)?.addEventListener('click', () => pmForm());
+  $$('[data-pm]', v).forEach((b) => { b.onclick = () => pmForm(methods.find((x) => x.id === Number(b.dataset.pm))); });
+  const cbForm = async (cb = null) => {
+    const staff = (await loadMeta()).staff;
+    const dlg = $('#dlg'); const keep = new Set((cb?.keepers ?? []).map((k) => k.id));
+    dlg.innerHTML = `<form method="dialog"><h2>${cb ? 'Kassa' : 'Yangi kassa'}</h2><label>Nomi<input name="name" required value="${esc(cb?.name ?? '')}"></label>
+      <div><div class="muted" style="font-size:13px">Mas'ullar</div><div class="checks">${staff.map((u) => `<label><input type="checkbox" name="k" value="${u.id}" ${keep.has(u.id) ? 'checked' : ''}> ${esc(u.name)}</label>`).join('')}</div></div>
+      ${cb ? `<label style="display:flex;gap:8px;color:var(--text)"><input type="checkbox" name="active" ${cb.active ? 'checked' : ''}> Faol</label>` : ''}
+      <p class="err" id="dlgErr"></p><div class="actions"><button type="button" class="ghost" value="cancel">Bekor</button><button value="ok">Saqlash</button></div></form>`;
+    const form = $('form', dlg); $('button[value=cancel]', dlg).onclick = () => dlg.close();
+    form.onsubmit = async (e) => { e.preventDefault();
+      const body = { name: form.elements.name.value, keepers: $$('input[name=k]:checked', form).map((x) => Number(x.value)), ...(cb ? { active: form.elements.active.checked } : {}) };
+      try { await (cb ? finApi('PATCH', `/cashboxes/${cb.id}`, body) : finApi('POST', '/cashboxes', body)); dlg.close(); route(); } catch (ex) { $('#dlgErr').textContent = ex.message; } };
+    dlg.showModal();
+  };
+  $('#newCb', v)?.addEventListener('click', act(() => cbForm()));
+  $$('[data-cb]', v).forEach((b) => { b.onclick = act(() => cbForm(boxes.find((x) => x.id === Number(b.dataset.cb)))); });
 };
 
 // Kassa nazorati: count the money; the difference is booked, a shortage asks who pays.
@@ -91,7 +112,7 @@ views.cashbox = async (v) => {
   const f = { from: q.get('from') || addDays(todayLocal(), -30), to: q.get('to') || todayLocal() };
   const id = q.get('id');
   const c = await finApi('GET', `/cashboxes/${id}?from=${f.from}&to=${f.to}`);
-  const TYPE = { sale: 'Sotuv', payment: "Mijoz to'lovi", expense: 'Xarajat', income: 'Boshqa kirim', cash_move: "O'tkazma", cash_open: "Boshlang'ich", purchase: 'Xarid', vendor_pay: "Yetkazib beruvchiga", staff_pay: "Xodimga to'lov", cash_count: "Kassa sanog'i" };
+  const TYPE = { sale: 'Sotuv (eski)', payment: "Mijoz to'lovi (eski)", expense: 'Xarajat', income: 'Boshqa kirim', cash_move: "O'tkazma", cash_open: "Boshlang'ich", purchase: 'Xarid', vendor_pay: "Yetkazib beruvchiga", staff_pay: "Xodimga to'lov", cash_count: "Kassa sanog'i" };
   const KIND = { household: "Xonadonga to'lov (sut)", household_void: "Xonadon to'lovi bekor qilindi" };
   v.innerHTML = `<p><a href="#finance">← Kassalar</a></p>
     <div class="card"><div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">${esc(c.name)}</h2>
@@ -111,8 +132,8 @@ views.cashbox = async (v) => {
 // Balanslar: who owes whom across the whole company, with the people behind each total.
 views.balances = async (v) => {
   const d = await finApi('GET', '/balances');
-  const LINK = { customers: (r) => `#customer?id=${r.id}`, households: (r) => `#supplier?id=${r.id}`, vendors: (r) => `#vendor?id=${r.id}`, staff: (r) => `#staff-fin?id=${r.id}`, cashboxes: (r) => `#cashbox?id=${r.id}` };
-  const REV = { customers: 'Biz mijozlarga qarz (oldindan to\'langan)', households: 'Xonadonlar bizga qarz', vendors: 'Yetkazib beruvchilar bizga qarz', staff: 'Xodimlar bizga qarz' };
+  const LINK = { households: (r) => `#supplier?id=${r.id}`, vendors: (r) => `#vendor?id=${r.id}`, staff: (r) => `#staff-fin?id=${r.id}`, cashboxes: (r) => `#cashbox?id=${r.id}` };
+  const REV = { households: 'Xonadonlar bizga qarz', vendors: 'Yetkazib beruvchilar bizga qarz', staff: 'Xodimlar bizga qarz' };
   const card = (k) => {
     const g = d[k];
     return `<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">${esc(g.title)}</h2><b style="font-size:20px">${fmtMoney(g.total)}</b></div>
@@ -120,14 +141,14 @@ views.balances = async (v) => {
       <table style="margin-top:8px"><tbody>${g.rows.slice(0, 15).map((r) => `<tr><td><a href="${LINK[k](r)}">${esc(r.name)}</a></td><td class="num" style="color:${r.balance < 0 ? 'var(--muted)' : 'inherit'}">${fmtMoney(r.balance)}</td></tr>`).join('') || '<tr><td class="muted">Yo\'q</td></tr>'}
       ${g.rows.length > 15 ? `<tr><td class="muted" colspan="2">va yana ${g.rows.length - 15} ta</td></tr>` : ''}</tbody></table></div>`;
   };
-  const net = d.cashboxes.total + d.customers.total - d.customers.reverse - d.households.total + d.households.reverse - d.vendors.total + d.vendors.reverse - d.staff.total + d.staff.reverse;
+  const net = d.cashboxes.total - d.households.total + d.households.reverse - d.vendors.total + d.vendors.reverse - d.staff.total + d.staff.reverse;
   v.innerHTML = `<div class="tiles">
       <div class="tile"><div class="k">Kassalarda</div><div class="v">${fmtMoney(d.cashboxes.total)}</div></div>
-      <div class="tile"><div class="k">Bizga qarzlar</div><div class="v" style="color:var(--ok)">${fmtMoney(d.customers.total + d.households.reverse + d.vendors.reverse + d.staff.reverse)}</div><div class="s">mijozlar, xodimlar va boshqalar</div></div>
-      <div class="tile"><div class="k">Bizning qarzlarimiz</div><div class="v" style="color:var(--err)">${fmtMoney(d.households.total + d.vendors.total + d.staff.total + d.customers.reverse)}</div><div class="s">xonadonlar, yetkazib beruvchilar, xodimlar</div></div>
+      <div class="tile"><div class="k">Bizga qarzlar</div><div class="v" style="color:var(--ok)">${fmtMoney(d.households.reverse + d.vendors.reverse + d.staff.reverse)}</div><div class="s">xodimlar, xonadonlar, yetkazib beruvchilar</div></div>
+      <div class="tile"><div class="k">Bizning qarzlarimiz</div><div class="v" style="color:var(--err)">${fmtMoney(d.households.total + d.vendors.total + d.staff.total)}</div><div class="s">xonadonlar, yetkazib beruvchilar, xodimlar</div></div>
       <div class="tile"><div class="k">Pul + bizga qarz − bizning qarz</div><div class="v">${fmtMoney(net)}</div><div class="s">ombordagi mahsulotsiz</div></div>
     </div>
-    <div class="grid2">${['cashboxes', 'customers', 'households', 'vendors', 'staff'].map(card).join('')}</div>`;
+    <div class="grid2">${['cashboxes', 'households', 'vendors', 'staff'].map(card).join('')}</div>`;
 };
 
 views['fin-docs'] = async (v) => {

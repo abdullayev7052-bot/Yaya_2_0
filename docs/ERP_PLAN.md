@@ -7,7 +7,15 @@ Hali aniqlanadigan joylar 13-bo'limda.
 Sexdagi butun zanjir bitta tizimda:
 
 **sut xaridi → xom sut ombori → texnolog → quyish → issiqxona → qopqoq yopish → tayyor mahsulot ombori →
-sotuv → qaytarish → muddati o'tganni qayta ishlash**, ustida moliya, kassa, oylik, hisobotlar.
+muddati o'tganni qayta ishlash**, ustida moliya, kassa, oylik, hisobotlar.
+
+> **2026-11-22 o'zgarish:** loyiha **omborgacha** bo'lgan jarayonga qaratildi. Sotuv, qaytarish, mijozlar, narxlar,
+> sotuvchi roli, savdo hisobotlari va analitikasi olib tashlandi (7-bo'lim va 4-bosqich — tarix uchun qoldirildi).
+> Ular 11–12-bosqichlarda yangi uslubda qaytadi: distributsiya, agentlar va vositachilar, har bir do'kon joylashuvi,
+> agent do'konda turib buyurtma oladi va buyurtma to'g'ridan-to'g'ri sexga tushadi. Bazadagi eski savdo jadvallari
+> (mijozlar, sotuvlar, qaytarishlar, narxlar) o'chirilmadi — faqat kod va ekranlar olib tashlandi.
+> Muddati o'tgan mahsulot endi oddiy **topshirish** bilan tayyor mahsulot omboridan "Muddati o'tganlar" omboriga,
+> u yerdan qayta ishlovchiga o'tadi.
 
 | Qilinadi (10 kun) | Keyinga qoldirildi |
 |---|---|
@@ -186,7 +194,8 @@ Qoidalar:
   3 × 800 = 2 400 so'm kompaniya xarajati, sof foydani kamaytiradi.
 - Usul keyinroq kengaytiriladigan qilib quriladi.
 
-## 7. Savdo
+## 7. Savdo — olib tashlandi (2026-11-22), 11–12-bosqichlarda qayta loyihalanadi
+Quyidagi eski reja tarix uchun qoldirildi.
 - **Mijoz turlari** sozlamada (do'kon, diler, chakana...), har bir mijozga **alohida narx** bo'lishi mumkin.
 - Sotuv FIFO bo'yicha (eng avval ishlab chiqarilgan partiya birinchi).
 - Chek (80 mm printer): kompaniya nomi va logo, chek turi (**Sotuv** yoki **Qaytarish** + qaytarish turi, masalan
@@ -253,12 +262,14 @@ Bitta server, bitta kod:
 | 1 | **Ombor asosi:** nomenklatura (vazn, hajm, shakl, muddatlar), omborlar va mas'ullar, manfiy qoldiq sozlamasi, partiyalar va FIFO, topshirish-qabul, hisobdan chiqarish (xodim hisobiga ham), boshlang'ich qoldiq, inventarizatsiya, Excel import; qabul qilingan yog'li + yog'siz sut → bitta "Xom sut" (smena o'rtacha tannarxi); kamomadni taqsimlash; eski zaxira mosligi; panelda "Ombor" bo'limi, ilovada "Ombor" tabi | ✅ |
 | 2 | **Ishlab chiqarish:** tarkiblar va alternativlar, texnolog smenasi va sut sarfi, qaynatishdagi yo'qotishni (va yutishni) taqsimlash — keyingi bosqichga o'tgan partiyalarga ham, separatsiya (qat'iy / foiz / qolgan), nisbatdagi limitlar, bo'lim sabablari va ta'siri, rahbar tasdig'i, taxminiy va haqiqiy tannarx; panelda umumiy "Bosh panel" va bo'limlar bo'yicha guruhlangan menyu, shartli limit ("shu xomashyolar bo'lsa X–Y", eng aniqi tanlanadi) | ✅ |
 | 3 | **Quyish zanjiri:** quyish va qopqoq yopish tarkiblari (1 dona uchun), ishbay haq (ko'p xodimga teng bo'linadi, bekor qilinsa qaytadi), mahsulotni keyingi joyga (issiqxona, tayyor ombor) topshirish, issiqxonada turish vaqti va kechikkan topshiriq ogohlantirishlari (xodim ismi bilan, ilovada ovozli banner); idish berish/qaytarish va ortgan quyma — oddiy topshirish orqali; Quyuvchi va Qopqoq yopuvchi rollari | ✅ (telefonga push — yig'ishda) |
-| 4 | **Savdo:** mijozlar va turlari, narxlar (umumiy / mijoz turi / mijoz), FIFO sotuv (tushum va tannarx), sotuvchining o'z kassasi, qisman to'lov va qarz, 80 mm chek (oldingi va keyingi qarz bilan), qaytarish turlari → omborlar, qaytgan tannarx (oxirgi partiya / o'rtacha N kun), muddati o'tgan siyosati, mijozdan to'lov, akt-sverka, bekor qilish; Sotuvchi roli | ✅ (Android printer — yig'ishda) |
+| 4 | **Savdo:** mijozlar va turlari, narxlar (umumiy / mijoz turi / mijoz), FIFO sotuv (tushum va tannarx), sotuvchining o'z kassasi, qisman to'lov va qarz, 80 mm chek (oldingi va keyingi qarz bilan), qaytarish turlari → omborlar, qaytgan tannarx (oxirgi partiya / o'rtacha N kun), muddati o'tgan siyosati, mijozdan to'lov, akt-sverka, bekor qilish; Sotuvchi roli | ❌ olib tashlandi (2026-11-22) — 11–12-bosqichlarda yangi uslubda |
 | 5 | **Qayta ishlash** (6-bo'lim): "Qayta ishlash" tarkibi 1 dona uchun — chiqadigan mahsulotlar (1 donadan miqdor yoki netto vazndan, chegara, qat'iy tannarx yoki 0, idish belgisi); qolgan tannarx "Qayta ishlashda yo'qotilgan tannarx" xarajatiga; chiqmagan idish uchun "N ta chiqishi kerak edi..." savoli va sabablar (singan / yo'qolgan, aralash) → idish yo'qotilishi xarajati; chegaradan tashqari — rahbar tasdig'i; Qayta ishlovchi roli | ✅ |
 | 6 | **Moliya va oylik:** kassalar va ularning hisob varag'i, xarajat va boshqa kirim (moddalar bilan), kassadan kassaga o'tkazma (sotuvchi o'z kassasini asosiy kassaga topshiradi), kassa boshlang'ich qoldig'i; yetkazib beruvchilar — xarid (kirim omborga), to'lov, akt-sverka; oylik — har oy belgilangan kuni avtomatik oklad (o'tgan oylar uchun emas), bonus, jarima (sabab bilan), xodimga to'lov, boshlang'ich balans, hisob varag'i; foyda-zarar hisoboti; umumiy balanslar (kim kimga qarz) va "Balanslar" sahifasi; xonadonlarga to'lov kassadan (panelda tanlanadi, yig'uvchida — o'z kassasi, bekor qilinsa qaytadi); kassa nazorati — sanash, ortiqcha kirimga, kamomad kim hisobiga | ✅ |
 | 7 | **Ish joyi ilovasi:** monoblok rejimi (paneldan bir martalik kod bilan ulanadi; xodim ismini tanlab 4 xonali PIN bilan kiradi, qurilma joyi ishlatilmaydi; bo'sh tursa ismlar ro'yxatiga qaytadi; "Almashish" tugmasi; ismli ogohlantirishlar hammaga ko'rinadi), PIN — panelda yoki xodim o'zi telefondan; internetsiz navbat — sotuv, qaytarish, to'lov, topshirish, hisobdan chiqarish, qabul/rad, kassa topshirish internet chiqqanda o'zi ketadi (har biri muallifi nomidan), oxirgi ma'lumotlar internetsiz ko'rinadi, "⏳ / ⚠" belgisi va yuborilmaganlar ro'yxati | ✅ (ishlab chiqarish topshiriqlari va inventarizatsiya — internet bilan; push — yig'ishda) |
-| 8 | **Hisobotlar va dashboardlar:** savdo (mahsulot, mijoz, sotuvchi, kunlar — sof tushum, tannarx, yalpi foyda, marja), ishlab chiqarish (mahsulot, xodim — topshiriq, sut, ishbay haq), ombor harakati (boshi, kirim, chiqim, oxiri; ombor bo'yicha), yo'qotishlar va kamomadlar (kim hisobiga), muddati yaqin partiyalar, xodimlar hisob-kitobi; har biri Excel'ga; tannarx ustunlari faqat ruxsati borlarga; Bosh panelda 14 kunlik sotuv va sut grafigi | ✅ |
+| 8 | **Hisobotlar va dashboardlar:** savdo (mahsulot, mijoz, sotuvchi, kunlar — sof tushum, tannarx, yalpi foyda, marja), ishlab chiqarish (mahsulot, xodim — topshiriq, sut, ishbay haq), ombor harakati (boshi, kirim, chiqim, oxiri; ombor bo'yicha), yo'qotishlar va kamomadlar (kim hisobiga), muddati yaqin partiyalar, xodimlar hisob-kitobi; har biri Excel'ga; tannarx ustunlari faqat ruxsati borlarga; Bosh panelda 14 kunlik sotuv va sut grafigi | ✅ (savdo hisobotlari va sotuv grafigi 2026-11-22 da olib tashlandi) |
 | 9 | Sinov, tuzatish, so'ng Android va Desktop yig'ish | ⏳ sinov va tuzatish tugadi (butun zanjir testi, muvozanat, summa sizishi, zaxira); ishga tushirish qo'llanmasi — docs/QOLLANMA.md; **yig'ish — keyin** |
+| 10 | **Omborgacha jarayonni qayta ko'rib chiqish va takomillashtirish:** sut kelishi, xomashyo qo'shilishi, xodimlar orasida topshirish, ishlab chiqarish, qayta ishlash, omborlar nazorati — to'liq qulay avtomatlashtirish. Birinchi qadam: sotuv va qaytarish olib tashlandi | ⏳ boshlandi |
+| 11–12 | **Distributsiya:** agentlar, vositachilar, do'konlar joylashuvi, agent do'konda buyurtma oladi → buyurtma sexga tushadi; yangi uslubda sotuv, qaytarish va mijozlar | keyin |
 
 Har bir bosqich serverda testlar bilan yoziladi va panel/ilovada sinab ko'riladigan holga keltiriladi.
 

@@ -289,6 +289,8 @@ CREATE TABLE IF NOT EXISTS lot_sources (
 CREATE INDEX IF NOT EXISTS idx_lot_sources_src ON lot_sources(source_lot_id);
 
 -- ---------------------------------------------------------------- sales (stage 4)
+-- Sales and returns were taken out of Yaya 2.0 (they return in stages 11-12 with
+-- distribution). The tables stay so old data is kept; nothing writes to them now.
 CREATE TABLE IF NOT EXISTS customer_types (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
@@ -554,10 +556,7 @@ export function seedErp(db) {
     const ins = db.prepare('INSERT INTO payment_methods (name, sort) VALUES (?, ?)');
     ['Naqd', 'Karta', "O'tkazma"].forEach((n, i) => ins.run(n, i));
   }
-  if (!db.prepare('SELECT 1 FROM customer_types LIMIT 1').get()) {
-    const ins = db.prepare('INSERT INTO customer_types (name, sort) VALUES (?, ?)');
-    ["Do'kon", 'Diler', 'Chakana'].forEach((n, i) => ins.run(n, i));
-  }
+  retireSellers(db);
   if (!db.prepare('SELECT 1 FROM cashboxes WHERE is_main = 1').get()) db.prepare("INSERT INTO cashboxes (name, is_main) VALUES ('Asosiy kassa', 1)").run();
   // Reprocessing: what happened to containers that did not come out.
   if (!db.prepare("SELECT 1 FROM stock_reasons WHERE section = 'reprocess'").get()) {
@@ -574,6 +573,24 @@ export function seedErp(db) {
     ins.run('Oxladitelda', 'company', wo, 1, 'cost', null, null);
     ins.run("To'kildi", 'company', wo, 2, 'company', null, null);
   }
+}
+
+// Sales were taken out: the seller role goes. Its people keep their history but
+// cannot sign in (an admin may give them another role and switch them back on);
+// the role row is removed once nobody has it.
+function retireSellers(db) {
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'roles'").get()) return;
+  const role = db.prepare("SELECT id FROM roles WHERE code = 'seller'").get();
+  if (!role) return;
+  db.prepare('UPDATE users SET active = 0 WHERE role_id = ? AND active = 1').run(role.id);
+  // Their own cashboxes close too when empty (with money left they stay for the hand-over).
+  for (const c of db.prepare(`SELECT c.id FROM cashboxes c WHERE c.active = 1 AND c.is_main = 0
+    AND EXISTS (SELECT 1 FROM cashbox_keepers k JOIN users u ON u.id = k.user_id WHERE k.cashbox_id = c.id AND u.role_id = ?)
+    AND NOT EXISTS (SELECT 1 FROM cashbox_keepers k JOIN users u ON u.id = k.user_id WHERE k.cashbox_id = c.id AND u.role_id <> ?)`).all(role.id, role.id)) {
+    const bal = db.prepare('SELECT COALESCE(SUM(amount), 0) a FROM cash_entries WHERE cashbox_id = ?').get(c.id).a;
+    if (Math.abs(bal) < 0.005) db.prepare('UPDATE cashboxes SET active = 0 WHERE id = ?').run(c.id);
+  }
+  if (!db.prepare('SELECT 1 FROM users WHERE role_id = ?').get(role.id)) db.prepare('DELETE FROM roles WHERE id = ?').run(role.id);
 }
 
 // Every table the warehouse part adds.

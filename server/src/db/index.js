@@ -293,9 +293,8 @@ const NEW_ROLE_PERMS = {
 NEW_ROLE_PERMS.manager.push('stock.view_all', 'stock.costs', 'stock.transfer', 'stock.inventory', 'stock.writeoff', 'stock.cancel', 'alerts.view');
 // Production (stage 2): the manager sees all shifts and approves over-limit tasks.
 NEW_ROLE_PERMS.manager.push('prod.view', 'prod.approve');
-// Sales (stage 4): the manager sees and corrects sales, customers and prices.
+// Finance (stage 6): the manager sees money and runs cashboxes and vendors.
 NEW_ROLE_PERMS.manager.push('finance.view', 'finance.cash', 'finance.vendors');
-NEW_ROLE_PERMS.manager.push('sales.view_all', 'sales.cancel', 'sales.price_edit', 'customers.manage', 'sales.prices');
 function backfillNewPermissions(db) {
   for (const [code, keys] of Object.entries(NEW_ROLE_PERMS)) {
     const row = db.prepare('SELECT id, permissions FROM roles WHERE code = ?').get(code);

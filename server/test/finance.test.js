@@ -25,11 +25,11 @@ test('cashboxes: opening, expense (not beyond the balance), other income, hand-o
   assert.equal(bal(db, main), 850000);
   assert.equal(pnl(db, 'other_expense'), 200000);
   // the storekeeper's own cashbox: they may hand it over to the main cashbox, nothing else
-  const own = (await call(app, 'POST', '/api/erp/sales/cashboxes', b, { name: 'Omborchi kassasi', keepers: [ids.store] })).body.id;
+  const own = (await call(app, 'POST', '/api/erp/finance/cashboxes', b, { name: 'Omborchi kassasi', keepers: [ids.store] })).body.id;
   await call(app, 'POST', `${F}/cash-openings`, b, { cashboxId: own, amount: 30000 });
   const s = await login(app, 'store', 'store123');
   assert.equal((await call(app, 'POST', `${F}/expenses`, s, { cashboxId: own, categoryId: cat('other_expense'), amount: 1000, note: 'x' })).status, 403);
-  const other = (await call(app, 'POST', '/api/erp/sales/cashboxes', b, { name: 'Boshqa kassa' })).body.id;
+  const other = (await call(app, 'POST', '/api/erp/finance/cashboxes', b, { name: 'Boshqa kassa' })).body.id;
   assert.equal((await call(app, 'POST', `${F}/cash-moves`, s, { fromId: own, toId: other, amount: 10000 })).status, 403);
   assert.equal((await call(app, 'POST', `${F}/cash-moves`, s, { fromId: own, toId: main, amount: 30000 })).status, 200);
   assert.equal(bal(db, own), 0);
@@ -92,4 +92,25 @@ test('payroll: salary earned on its day (no back pay, never twice), bonus and fi
   const pl = (await call(app, 'GET', `${F}/pnl?from=2026-01-01&to=2030-12-31`, b)).body;
   assert.equal(pl.expense, 3200000);
   assert.equal(pl.income, 50000);
+});
+
+test('sales are out: the seller role retires (its people kept but switched off), sales routes are gone, cashboxes live in finance', async () => {
+  const { app, db } = setup();
+  const { setupErp } = await import('../src/erp/schema.js');
+  const role = Number(db.prepare("INSERT INTO roles (code, name, permissions) VALUES ('seller', 'Sotuvchi', '[]')").run().lastInsertRowid);
+  const jasur = Number(db.prepare("INSERT INTO users (login, name, password_hash, role_id) VALUES ('jasur', 'Jasur', 'x', ?)").run(role).lastInsertRowid);
+  const box = Number(db.prepare("INSERT INTO cashboxes (name) VALUES ('Jasur kassasi')").run().lastInsertRowid);
+  db.prepare('INSERT INTO cashbox_keepers (cashbox_id, user_id) VALUES (?, ?)').run(box, jasur);
+  setupErp(db, () => {});
+  assert.equal(db.prepare('SELECT active FROM users WHERE id = ?').get(jasur).active, 0, 'the seller cannot sign in');
+  assert.equal(db.prepare('SELECT active FROM cashboxes WHERE id = ?').get(box).active, 0, 'their empty cashbox closes');
+  assert.ok(db.prepare("SELECT 1 FROM roles WHERE code = 'seller'").get(), 'kept while someone has it');
+  db.prepare('DELETE FROM users WHERE id = ?').run(jasur);
+  setupErp(db, () => {});
+  assert.equal(db.prepare("SELECT 1 FROM roles WHERE code = 'seller'").get(), undefined, 'removed once nobody has it');
+  const b = await boss(app);
+  assert.equal((await call(app, 'GET', '/api/erp/sales/customers', b)).status, 404);
+  const id = (await call(app, 'POST', '/api/erp/finance/cashboxes', b, { name: 'Bank' })).body.id;
+  assert.ok((await call(app, 'GET', '/api/erp/finance/cashboxes', b)).body.some((c) => c.id === id));
+  assert.ok((await call(app, 'GET', '/api/erp/finance/methods', b)).body.length >= 3);
 });

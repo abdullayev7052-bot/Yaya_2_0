@@ -7,11 +7,11 @@ import { runChecks } from '../src/erp/watch.js';
 
 // The whole chain on one database: milk collection → raw milk warehouse →
 // technologist (cook, boiling loss) → pouring → incubator → capping → finished
-// goods → sale and return → reprocessing → finance → reports. At the end the
+// goods → expired goods to reprocessing → finance → reports. At the end the
 // books must balance:
 //
 //   stock value now = what came in (opening, milk, purchases) + piece wages
-//     + inventory surplus − cost of goods sold − losses booked as expenses
+//     + inventory surplus − losses booked as expenses
 //     − goods charged to staff − cost variances
 //
 // i.e. no cost appears or disappears anywhere along the way.
@@ -24,10 +24,10 @@ test('whole chain: every step works together and the books balance', async () =>
     return id;
   };
   const u = { tech: add('tech', 'technologist', 'Dilnoza'), pour: add('pour', 'pourer', 'Malika'), cap: add('cap', 'capper', 'Bobur'),
-    sell: add('sell', 'seller', 'Jasur'), rep: add('rep', 'reprocessor', 'Nodir'), keep: add('keep', 'storekeeper', 'Aziz') };
+    rep: add('rep', 'reprocessor', 'Nodir'), keep: add('keep', 'storekeeper', 'Aziz') };
   const b = await boss(app);
   const L = (n) => login(app, n, 'pass1234');
-  const T = { tech: await L('tech'), pour: await L('pour'), cap: await L('cap'), sell: await L('sell'), rep: await L('rep'), keep: await L('keep') };
+  const T = { tech: await L('tech'), pour: await L('pour'), cap: await L('cap'), rep: await L('rep'), keep: await L('keep') };
   const ok = async (p, what) => { const r = await p; assert.ok(r.status === 200, `${what}: ${r.status} ${JSON.stringify(r.body)}`); return r.body; };
   const post = (h, url, body, what) => ok(call(app, 'POST', url, h, body), what ?? url);
 
@@ -36,7 +36,7 @@ test('whole chain: every step works together and the books balance', async () =>
   const raw = await W({ name: 'Xom sut ombori', kind: 'raw_milk', allowNegative: true, keepers: [u.keep] });
   const pack = await W({ name: 'Idish ombori', kind: 'pack', keepers: [u.keep] });
   const inc = await W({ name: 'Issiqxona', kind: 'incubator', keepers: [u.keep] });
-  const fin = await W({ name: 'Tayyor mahsulot', kind: 'finished', keepers: [u.keep, u.sell] });
+  const fin = await W({ name: 'Tayyor mahsulot', kind: 'finished', keepers: [u.keep] });
   const exp = await W({ name: "Muddati o'tganlar", kind: 'expired', keepers: [u.keep] });
   await ok(call(app, 'PUT', '/api/erp/settings/milk-warehouse', b, { warehouseId: raw }), 'milk warehouse');
   const P = async (body) => (await post(b, '/api/erp/products', body)).id;
@@ -109,16 +109,10 @@ test('whole chain: every step works together and the books balance', async () =>
   const toFin = db.prepare("SELECT id FROM docs WHERE type = 'transfer' AND status = 'sent' AND to_wh = ?").get(fin).id;
   await post(T.keep, `/api/erp/docs/${toFin}/accept`, {});
 
-  // ---- 6. sales: 200 sold, 10 come back expired
-  const cust = (await post(b, '/api/erp/sales/customers', { name: 'Ahmad' })).id;
-  await ok(call(app, 'PUT', '/api/erp/sales/prices', b, { productId: p.qatiq, scope: 'base', price: 6000 }), 'price');
-  const rtExp = (await post(b, '/api/erp/sales/return-types', { name: "Muddati o'tgan", warehouseId: exp, expired: true })).id;
-  const sale = await post(T.sell, '/api/erp/sales/sales', { customerId: cust, from: { warehouseId: fin }, lines: [{ productId: p.qatiq, qty: 200 }], paid: 1000000 });
-  assert.equal(sale.total, 1200000);
-  await post(T.sell, '/api/erp/sales/returns', { customerId: cust, returnTypeId: rtExp, costMode: 'last', lines: [{ productId: p.qatiq, qty: 10 }] });
-  // the seller hands the day's money to the main cashbox
-  const own = db.prepare('SELECT cashbox_id FROM cashbox_keepers WHERE user_id = ?').get(u.sell).cashbox_id;
-  await post(T.sell, '/api/erp/finance/cash-moves', { fromId: own, toId: main, amount: 1000000 });
+  // ---- 6. 10 jars went past their date: an ordinary hand-over to the expired store
+  // (sales and returns are out of Yaya 2.0 for now)
+  await give({ warehouseId: fin }, { warehouseId: exp }, [{ productId: p.qatiq, qty: 10 }], T.keep);
+  assert.equal(db.prepare('SELECT ROUND(SUM(qty), 3) q FROM stock_moves WHERE product_id = ? AND warehouse_id = ?').get(p.qatiq, exp).q, 10);
 
   // ---- 7. reprocessing the 10 expired jars: 9 jars back, 1 broken; 4 kg of content
   await give({ warehouseId: exp }, { userId: u.rep }, [{ productId: p.qatiq, qty: 10 }], T.rep);
@@ -130,7 +124,7 @@ test('whole chain: every step works together and the books balance', async () =>
   await post(T.rep, `/api/erp/prod/tasks/${t4.id}/complete`, { outputs: [{ productId: p.jar, qty: 9 }], shortfall: [{ reasonId: broken, qty: 1 }] });
 
   // ---- 8. a stock count in the finished warehouse finds 2 jars missing; the keeper pays
-  const inv = await post(b, '/api/erp/docs', { type: 'inventory', to: { warehouseId: fin }, lines: [{ productId: p.qatiq, qty: 38 }] }, 'count');
+  const inv = await post(b, '/api/erp/docs', { type: 'inventory', to: { warehouseId: fin }, lines: [{ productId: p.qatiq, qty: 228 }] }, 'count');
   await post(b, `/api/erp/docs/${inv.id}/post`, { charges: [{ userId: u.keep, amount: 1000 }] }, 'post count');
 
   // ---- 9. payroll and an expense
@@ -147,28 +141,23 @@ test('whole chain: every step works together and the books balance', async () =>
   const pnl = (code) => one('SELECT ROUND(SUM(e.amount), 2) v FROM pnl_entries e JOIN pnl_categories c ON c.id = e.category_id WHERE c.code = ?', code);
   const losses = ['stock_loss', 'writeoff', 'production_loss', 'reprocess_loss', 'container_loss'].reduce((s0, c) => s0 + pnl(c), 0);
   const staffGoods = one("SELECT ROUND(SUM(amount), 2) v FROM party_entries WHERE party_type = 'staff' AND kind IN ('writeoff','inventory','production','reprocess')");
-  const expected = came + wages + pnl('stock_surplus') - pnl('cogs') - losses - staffGoods - pnl('cost_variance');
+  const expected = came + wages + pnl('stock_surplus') - losses - staffGoods - pnl('cost_variance');
   assert.ok(Math.abs(stockValue - expected) < 1, `stock ${stockValue} vs books ${expected}`);
 
   // no place is below zero where that is not allowed
   const negatives = db.prepare(`SELECT m.warehouse_id, m.holder_id, m.product_id, SUM(m.qty) q FROM stock_moves m LEFT JOIN warehouses w ON w.id = m.warehouse_id
     GROUP BY m.warehouse_id, m.holder_id, m.product_id HAVING SUM(m.qty) < -0.0005 AND COALESCE(w.allow_negative, 0) = 0`).all();
   assert.deepEqual(negatives, []);
-  // money: cashbox = opening − vendor payment + sale cash − expense − payout
-  assert.equal(one('SELECT ROUND(SUM(amount), 2) v FROM cash_entries WHERE cashbox_id = ?', main), 1000000 - 135000 + 1000000 - 300000 - 20400);
-  // customer: 1 200 000 − 1 000 000 paid − 60 000 returned (policy: reduce)
-  assert.equal((await ok(call(app, 'GET', `/api/erp/sales/customers/${cust}`, b), 'card')).balance, 140000);
+  // money: cashbox = opening − vendor payment − expense − payout
+  assert.equal(one('SELECT ROUND(SUM(amount), 2) v FROM cash_entries WHERE cashbox_id = ?', main), 1000000 - 135000 - 300000 - 20400);
 
   // ================================================================ reports agree with the documents
   const today = new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10);
   const rep = (k) => ok(call(app, 'GET', `/api/erp/reports/${k}?from=2026-01-01&to=${today}`, b), k);
-  const sp = (await rep('sales_by_product')).rows.find((r) => r.product === '5% qatiq 400 g');
-  assert.equal(sp.net, 1200000 - 60000);
-  assert.ok(Math.abs(sp.cost - pnl('cogs')) < 1, 'report cost = booked cost of goods sold');
   const mv = await rep('stock_movement');
   assert.ok(Math.abs(mv.totals.close_value - stockValue) < 1, 'closing stock value = ledger');
   const pl = await ok(call(app, 'GET', `/api/erp/finance/pnl?from=2026-01-01&to=${today}`, b), 'pnl');
-  assert.ok(pl.income > 0 && pl.expense > 0);
+  assert.ok(pl.expense > 0);
   const workers = (await rep('production_by_worker')).rows;
   // 240 × 170 shared by two, 240 × 90 to the capper
   assert.equal(workers.find((w) => w.worker === 'Malika').wages, 20400);
@@ -176,7 +165,7 @@ test('whole chain: every step works together and the books balance', async () =>
 
   // ================================================================ no costs reach ordinary staff
   // Every screen a worker can open, after a full day of real data: none may carry a
-  // cost, value or profit field. (Sellers do see prices, totals and debts — on the receipt.)
+  // cost, value or profit field.
   const FORBIDDEN = new Set(['cost', 'unit_cost', 'total_cost', 'cogs', 'profit', 'margin', 'open_value', 'close_value', 'loss', 'surplus', 'spread', 'spread_cost', 'value']);
   const found = [];
   const scan = (v, path) => {
@@ -191,9 +180,7 @@ test('whole chain: every step works together and the books balance', async () =>
     `/api/erp/stock?warehouseId=${fin}`, `/api/erp/stock/lots?warehouseId=${fin}&productId=${p.qatiq}`,
     '/api/erp/prod/shift', '/api/erp/prod/shifts', '/api/erp/prod/recipes', '/api/erp/prod/recipes?mine=1',
     ...docIds.map((id) => `/api/erp/docs/${id}`), ...taskIds.map((id) => `/api/erp/prod/tasks/${id}`), ...shiftIds.map((id) => `/api/erp/prod/shifts/${id}`),
-    '/api/erp/sales/meta', '/api/erp/sales/customers', `/api/erp/sales/customers/${cust}`, '/api/erp/sales/docs', ...docIds.map((id) => `/api/erp/sales/docs/${id}`),
-    '/api/erp/sales/my-cashbox', `/api/erp/sales/prices?customerId=${cust}`,
-    ...['sales_by_product', 'sales_by_customer', 'sales_daily', 'production_by_product', 'stock_movement', 'losses', 'expiry'].map((k) => `/api/erp/reports/${k}?from=2026-01-01&to=${today}`),
+    ...['production_by_product', 'stock_movement', 'losses', 'expiry'].map((k) => `/api/erp/reports/${k}?from=2026-01-01&to=${today}`),
   ];
   for (const [who, h] of Object.entries(T)) {
     for (const url of urls) {
@@ -213,9 +200,7 @@ test('whole chain: every step works together and the books balance', async () =>
   const wiped = counts();
   assert.equal(wiped.docs + wiped.stock_moves + wiped.cash_entries + wiped.prod_tasks, 0, 'history cleared');
   assert.equal(wiped.recipes, before.recipes, 'recipes are kept');
-  assert.equal(wiped.customers, before.customers, 'customers are kept');
   restore(db, decrypt(file, 'zaxira-parol'));
   assert.deepEqual(counts(), before, 'everything back from the backup');
   assert.ok(Math.abs(one('SELECT ROUND(SUM(cost), 2) v FROM stock_moves') - stockValue) < 0.01);
-  assert.equal((await ok(call(app, 'GET', `/api/erp/sales/customers/${cust}`, b), 'card after restore')).balance, 140000);
 });

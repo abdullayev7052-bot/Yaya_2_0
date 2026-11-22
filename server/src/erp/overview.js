@@ -53,19 +53,6 @@ export function overview(db, perms, day = todayLocal()) {
     };
   }
 
-  if (can('sales.view_all')) {
-    const docs = db.prepare(`SELECT type, meta FROM docs WHERE type IN ('sale','return','payment') AND status = 'posted' AND date(doc_date, '+5 hours') = ?`).all(day)
-      .map((d) => ({ type: d.type, m: d.meta ? JSON.parse(d.meta) : {} }));
-    const sum = (t, k) => r2(docs.filter((d) => d.type === t).reduce((a, d) => a + (d.m[k] ?? 0), 0));
-    const debts = db.prepare(`SELECT c.id, c.opening_balance + COALESCE((SELECT SUM(amount) FROM party_entries WHERE party_type = 'customer' AND party_id = c.id), 0) AS b
-      FROM customers c WHERE c.active = 1`).all();
-    out.sales = {
-      count: docs.filter((d) => d.type === 'sale').length, total: sum('sale', 'total'), paid: r2(sum('sale', 'paid') + sum('payment', 'total')),
-      returns: sum('return', 'total'), returns_count: docs.filter((d) => d.type === 'return').length,
-      customers_debt: r2(debts.filter((d) => d.b > 0).reduce((a, d) => a + d.b, 0)), debtors: debts.filter((d) => d.b > 0.005).length,
-    };
-  }
-
   if (can('finance.view')) out.finance = balancesSummary(db);
 
   if (can('alerts.view')) {

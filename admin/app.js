@@ -1497,7 +1497,7 @@ function importFlow(box) {
 
 const route = act(async () => {
   if (!me) return;
-  // Section scripts (stock, prod, sales, finance) add their groups as they load: redraw each time.
+  // Section scripts (stock, prod, finance, reports) add their groups as they load: redraw each time.
   drawNav();
   const name = location.hash.slice(1).split('?')[0] || 'overview';
   const parent = PAGE_PARENT[name] ?? name;

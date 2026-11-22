@@ -6,9 +6,9 @@ ilovada (telefon, planshet yoki monoblokdagi brauzer: `/app/`) ishlaydi.
 
 ## 0. Sinov ma'lumotlarini tozalash (ishga tushirishdan oldin)
 1. **Boshqaruv → Sozlamalar → Zaxira:** avval zaxira faylini yuklab oling (parol bilan).
-2. Shu joyda **"Tarixni tozalash"**: barcha hujjatlar, qoldiqlar, sotuvlar, kassa va ish haqi yozuvlari
-   o'chadi; xodimlar, mahsulotlar, omborlar, tarkiblar, mijozlar, narxlar va sozlamalar qoladi.
-3. Sinov uchun yaratilgan ortiqcha mahsulot, mijoz yoki xodimlarni "nofaol" qiling.
+2. Shu joyda **"Tarixni tozalash"**: barcha hujjatlar, qoldiqlar, kassa va ish haqi yozuvlari
+   o'chadi; xodimlar, mahsulotlar, omborlar, tarkiblar va sozlamalar qoladi.
+3. Sinov uchun yaratilgan ortiqcha mahsulot yoki xodimlarni "nofaol" qiling.
 4. Xato bo'lsa, tozalashdan oldingi holat 3 kun saqlanadi ("Avtomatik nusxalar").
 
 ## 1. Xodimlar va rollar
@@ -17,13 +17,12 @@ ilovada (telefon, planshet yoki monoblokdagi brauzer: `/app/`) ishlaydi.
 | Rol | Kim | Ilovada nimani ko'radi |
 |---|---|---|
 | Admin | rahbar | hammasi (summalar bilan) |
-| Menejer | boshqaruvchi | ombor, ishlab chiqarish nazorati, tasdiqlash, savdo, moliya (oyliksiz) |
+| Menejer | boshqaruvchi | ombor, ishlab chiqarish nazorati, tasdiqlash, moliya (oyliksiz) |
 | Omborchi | ombor mas'uli | topshirish/qabul, inventarizatsiya, hisobdan chiqarish (summasiz) |
 | Texnolog | texnolog | smena, quyma va separatsiya topshiriqlari |
 | Quyuvchi | quyuvchi | quyish topshiriqlari (ishbay haq) |
 | Qopqoq yopuvchi | qopqoqchi | qopqoq yopish topshiriqlari (ishbay haq) |
 | Qayta ishlovchi | qayta ishlovchi | muddati o'tganlarni qayta ishlash |
-| Sotuvchi | sotuvchi | sotuv, qaytarish, to'lov, chek, o'z kassasi |
 | Buxgalter, Sut yig'uvchi, Laborant | — | avvalgidek |
 
 Rol ruxsatlarini **Boshqaruv → Rollar va ruxsatlar**da o'zgartirasiz. Muhim ruxsatlar:
@@ -47,7 +46,6 @@ Rol ruxsatlarini **Boshqaruv → Rollar va ruxsatlar**da o'zgartirasiz. Muhim ru
 - **Qoldiqlar:** Ombor → Excel import → "Boshlang'ich qoldiqlar" (ombor, mahsulot, miqdor, tannarx, yaroqlilik)
   yoki Ombor → Qoldiqlar → "+ Boshlang'ich qoldiq". Keyin kerak bo'lsa **inventarizatsiya** (to'liq yoki qisman).
 - **Kassalar:** Moliya → Kassalar → "Boshlang'ich qoldiq" (har bir kassadagi pul).
-- **Mijozlar:** Savdo → Mijozlar → mijoz kartochkasida "Boshlang'ich qarz".
 - **Yetkazib beruvchilar:** Moliya → Yetkazib beruvchilar → "Boshlang'ich qarz".
 - **Xodimlar:** Moliya → Oylik → xodim → "Boshlang'ich balans" (musbat — xodim qarzdor, manfiy — kompaniya qarzdor).
 - **Xonadonlar:** avvalgidek, Sut yig'ish → Qarzlar.
@@ -66,11 +64,10 @@ Rol ruxsatlarini **Boshqaruv → Rollar va ruxsatlar**da o'zgartirasiz. Muhim ru
 **Ishlab chiqarish → Yo'qotish sabablari:** texnolog sabablari (Qaynatishda, Oxladitelda, To'kildi) — ta'siri
 (tannarxga / kompaniya xarajatiga / xodim hisobiga) va limit (masalan 1000 kg sutga 100 kg).
 
-## 6. Savdo sozlamalari
-**Savdo → Sozlamalar:** mijoz turlari, **qaytarish turlari → omborlar** ("Toza" → tayyor ombor,
-"Muddati o'tgan" → muddati o'tganlar ombori, belgisi bilan), to'lov turlari, kassalar va mas'ullari,
-chekda vazn/hajm, "o'rtacha" qaytarish tannarxi uchun kunlar soni.
-**Savdo → Narxlar:** umumiy, mijoz turi va mijozning o'z narxi. **Sotuvchini** tayyor mahsulot omboriga mas'ul qiling.
+## 6. Savdo — hozircha yo'q
+Sotuv, qaytarish va mijozlar olib tashlandi; ular 11–12-bosqichlarda distributsiya (agentlar, vositachilar, do'konlar,
+buyurtmalar) bilan qaytadi. Avval "Sotuvchi" rolida bo'lgan xodimlar tizimga kira olmaydi (tarixi saqlangan) — kerak
+bo'lsa Boshqaruv → Xodimlar'da boshqa rol berib, qayta faol qiling. Kassalar va to'lov turlari endi **Moliya → Kassalar**da.
 
 ## 7. Moliya va oylik
 **Moliya → Oylik:** har bir xodimga oklad va kun (1–28) — shu kuni avtomatik yoziladi. Bonus va jarima — sabab bilan.
@@ -96,11 +93,11 @@ kamomad — kim hisobiga ekani so'raladi (xodim(lar)ga summa, qolgani "Kassa kam
 4. **Quyuvchi** quyadi (kim bilan birga — ishbay haq bo'linadi), mahsulot **issiqxonaga** ketadi;
    turish vaqti o'tsa, mas'ul ismi bilan ogohlantirish chiqadi.
 5. **Qopqoq yopuvchi** issiqxonadan oladi, qopqoqlaydi → **tayyor mahsulot ombori**.
-6. **Sotuvchi** sotadi, chek chop etadi, qaytarib oladi, kun oxirida o'z kassasini **asosiy kassaga topshiradi**.
+6. Muddati o'tgan mahsulotni **omborchi** tayyor mahsulot omboridan **"Muddati o'tganlar" omboriga topshiradi**.
 7. Muddati o'tgan qaytgan mahsulotni **qayta ishlovchi** qayta ishlaydi.
 8. **Rahbar** Bosh panelda kunlik holatni, "Tasdiqlash"da limitdan chiqqanlarni, hisobotlarda natijani ko'radi.
 
-Internet bo'lmasa: sotuv, qaytarish, to'lov, topshirish, hisobdan chiqarish va qabul qilish navbatga tushadi
+Internet bo'lmasa: to'lov, topshirish, hisobdan chiqarish va qabul qilish navbatga tushadi
 va internet chiqqanda o'zi ketadi (ilova tepasida "⏳"). Ishlab chiqarish topshiriqlari, inventarizatsiya va
 monoblokka kirish uchun internet kerak.
 
