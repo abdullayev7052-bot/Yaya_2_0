@@ -74,15 +74,28 @@ Shuning uchun **har bir mahsulotda "Ishlab chiqarish xaritasi"** bo'ladi. Bosqic
 - Maqsad: keyinchalik hisobotlarda va real vaqtli dashboardlarda **har bir mahsulot ayni damda qaysi bosqichda**
   ekanini ko'rish.
 
-## 7. Ochiq savollar (ish boshlashdan oldin aniqlanadi)
+## 7. Bosqichlar — ombor sifatida (javoblar, 2026-11-25)
+7.1. **Har bir bosqichning o'z ombori bor**, lekin u "ombor" emas, **"Bosqich"** deb nomlanadi. U **Omborlar bo'limida**
+     ombor sifatida ochiladi (masalan "Quyish" bosqichi, "Issiqxona" bosqichi). "Mening qo'limda"dagi qoldiqlar
+     tegishli bosqichga o'tadi.
+7.2. Har bir bosqichga **mas'ul shaxslar** tanlanadi. Ular shu bosqichdagi topshiriqni boshqaradi:
+     oldingi bosqichdan **qabul qiladi** → **miqdor kiritadi** (tarkib bo'yicha) → **kimlar qatnashganini** tanlaydi →
+     **yopadi** → **keyingi bosqichga o'tkazadi**.
+7.3. Har bir amal **jurnalga** yoziladi: nima qilindi va **qaysi profildan**.
+7.4. **Ishbay haq — "Bu ishni kim bilan qildingiz?"**: amalni bajarayotgan profil egasi **avtomatik belgilangan**
+     bo'ladi; xohlasa o'zini olib tashlaydi, xohlasa yana bir nechta xodimni qo'shadi. Ish haqi **aynan tanlangan
+     xodimlarga** yoziladi (tarkibdagi stavka bo'yicha, teng bo'linadi — hozirgidek).
+7.5. **Qadoqlash** — quyishga o'xshash amal: tarkib tanlanadi, tarkib bo'yicha xodimga ish haqi yoziladi. Faqat bir-ikki
+     mahsulotda yoqiladi. Odatda bunday mahsulotlarda **Ishlab chiqarish bosqichi o'chiq**: kg lik mahsulot tashqaridan
+     **xarid qilinadi** (omborga kirim) → faqat **Qadoqlash**dan o'tadi → **Tayyor mahsulot ombori**ga tushadi.
+
+## 8. Ochiq savollar (ish boshlashdan oldin aniqlanadi)
 1. Variantlar: variant qiymati faqat raqam/nommi (499, 505) yoki variantning o'z birligi va xossalari (vazn, muddat)
    ham alohida bo'ladimi? Tarkibda "Zakvaska" yozilsa, texnolog istalgan mavjud variantni tanlay oladimi?
 2. Laboratoriya: eski laboratoriya yozuvlari bazada saqlanib qolsinmi (savdodagi kabi — kod o'chadi, ma'lumot qoladi)?
-3. "Mening qo'limda" ketgach: hozir xodimlar qo'lidagi qoldiqlar (agar bo'lsa) qaysi omborga o'tkaziladi?
-   Har bir quyuvchining o'z ombori bo'ladimi yoki bitta umumiy "Quyuvchi" ombori va unga bir nechta mas'ulmi?
-4. Ishbay haq: ombor umumiy bo'lsa, quyish topshirig'ini kim bajarganini (haq kimga) qanday belgilaymiz — bajargan
-   xodim(lar) tanlanadimi (hozirgidek, teng bo'linadi)?
-5. Qadoqlash (3-bosqich) quyishdan nimasi bilan farq qiladi — misol kerak.
+3. ✅ Javob berildi — 7.1–7.2 (har bir bosqichning o'z ombori, bir nechta mas'ul).
+4. ✅ Javob berildi — 7.4 ("Bu ishni kim bilan qildingiz?", o'zi avtomatik belgilangan).
+5. ✅ Javob berildi — 7.5 (xarid qilingan kg lik mahsulotni qadoqlash).
 6. Qopqoq yopish: ishbay haq qoladimi (hozir 90 so'm/dona)? Qopqoqning o'zi (idish ombori) ham ayrilmaydimi?
 7. Xaritadagi tarkiblar: hozirgi tarkiblar (tayyorlash, separatsiya, quyish, qopqoq, qayta ishlash) xaritaga
    bog'lanadimi yoki tarkiblar to'liq xarita ichiga ko'chadimi?
