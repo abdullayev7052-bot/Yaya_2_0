@@ -89,15 +89,82 @@ Shuning uchun **har bir mahsulotda "Ishlab chiqarish xaritasi"** bo'ladi. Bosqic
      mahsulotda yoqiladi. Odatda bunday mahsulotlarda **Ishlab chiqarish bosqichi o'chiq**: kg lik mahsulot tashqaridan
      **xarid qilinadi** (omborga kirim) → faqat **Qadoqlash**dan o'tadi → **Tayyor mahsulot ombori**ga tushadi.
 
-## 8. Ochiq savollar (ish boshlashdan oldin aniqlanadi)
-1. Variantlar: variant qiymati faqat raqam/nommi (499, 505) yoki variantning o'z birligi va xossalari (vazn, muddat)
-   ham alohida bo'ladimi? Tarkibda "Zakvaska" yozilsa, texnolog istalgan mavjud variantni tanlay oladimi?
-2. Laboratoriya: eski laboratoriya yozuvlari bazada saqlanib qolsinmi (savdodagi kabi — kod o'chadi, ma'lumot qoladi)?
-3. ✅ Javob berildi — 7.1–7.2 (har bir bosqichning o'z ombori, bir nechta mas'ul).
-4. ✅ Javob berildi — 7.4 ("Bu ishni kim bilan qildingiz?", o'zi avtomatik belgilangan).
-5. ✅ Javob berildi — 7.5 (xarid qilingan kg lik mahsulotni qadoqlash).
-6. Qopqoq yopish: ishbay haq qoladimi (hozir 90 so'm/dona)? Qopqoqning o'zi (idish ombori) ham ayrilmaydimi?
-7. Xaritadagi tarkiblar: hozirgi tarkiblar (tayyorlash, separatsiya, quyish, qopqoq, qayta ishlash) xaritaga
-   bog'lanadimi yoki tarkiblar to'liq xarita ichiga ko'chadimi?
-8. Separatsiya xaritaning qaysi bosqichiga kiradi (1-bosqich ichidami)?
-9. Vozvrat ombori: savdo hozir yo'q — hozircha faqat tayyor mahsulot omboridan transfer bilan to'ldiriladi, to'g'rimi?
+## 8. Javoblar (2026-11-25, ikkinchi qism)
+
+### 8.1. Variantli mahsulotlar
+- Mahsulot **yaratilayotganda** "variantlimi?" so'raladi; keyin **o'zgartirib bo'lmaydi**.
+- Har bir variantning tannarxi **alohida yoki bir xil** bo'lishi mumkin (har biri o'z partiyalari bilan yuradi).
+- **Xaridda** (yetkazib beruvchidan) variantlar **alohida mahsulot** sifatida kiritiladi ("Zakvaska / 499").
+- **Texnolog** xomashyo tanlaganda **ichma-ich oyna**: avval "Zakvaska" → oyna ochiladi → 499, 505...
+
+### 8.2. Bosqich turlari: "O'zgaradigan" va "O'zgarmas"
+Bosqich ochishda yoki tahrirlashda turi tanlanadi:
+- **O'zgaradigan** — mahsulot jismi o'zgaradi: masalan kg li yarim tayyor "Quyma 5%" → donali "5% 400 g qatiq".
+  Tarkib bor: bir nechta xomashyo (idish, etiketka va h.k.) va **ish haqi**; **limit va chegaralar** bor.
+- **O'zgarmas** — mahsulot jismi o'zgarmaydi: xodim oldingi bosqichda turgan mahsulotdan ma'lum miqdorni kiritadi.
+  - **Ishbay haq** so'raladi (masalan qopqoq yopish — kiritilgan stavka yoziladi) yoki **yo'q** (issiqxona, sovuqxona).
+  - Oxirida "Bu ishni kim bilan qildingiz?" (odatda qopqoqni ilovada amalni bajarayotgan xodimning o'zi yopadi).
+  - Miqdor **kam** kiritilsa — qolgani oldingi bosqichda qoladi; **ko'p** kiritilsa — oldingi bosqich (ombor)
+    **manfiyga** ketadi (va adminga ogohlantirish — 5.4).
+- Bosqichlar tartibi: yangi bosqichni **qaysi bosqichlar orasiga** qo'yishni **qo'lda surib** belgilash mumkin.
+
+### 8.3. Laboratoriya
+- Laboratoriya **butunlay** o'chiriladi: kod, ekranlar, ruxsatlar, rol **va bazadagi barcha yozuvlar** — go'yo hech
+  qachon bo'lmagandek. (Ehtiyot uchun: o'chirishdan oldin avtomatik zaxira olinadi — tizimdagi odatiy tartib.)
+
+### 8.4. Tarkiblar va xarita
+- Bosqich ochishda yoki tahrirlashda **shu bosqichda qaysi tarkiblar amal qilishi** belgilanadi; amal bajarilayotganda
+  ro'yxatda **faqat o'sha tarkiblar** chiqadi.
+- **Bitta mahsulotga bitta tarkib** — xodim tarkib tanlab ovora bo'lmaydi: oldingi bosqichdan o'tgan mahsulotni
+  belgilaydi va ishlab ketaveradi.
+- Keyinchalik **reja** (buyurtmaga bog'liq) bo'yicha topshiriqlar — rahbar keyingi o'zgarishlarda aytadi.
+
+### 8.5. Separatsiya
+- Texnolog tomonda; **texnolog ekranida tepada alohida ajralib** turadi (u uchun juda muhim).
+- Texnolog xom sut miqdorini va chiqqan **yog'siz sut** va **qaymoq** miqdorini kiritadi — yangi quyma ishlab
+  chiqarishga o'xshaydi; ko'pincha barcha mahsulotlardan keyin bajariladi.
+- Chiqqan qaymoq ham, yog'siz sut ham **xomashyo** sifatida **Xomashyo omboriga** qo'shiladi.
+- Texnolog **smenadagi umumiy sut sarfini** ekranning tepasida doim ko'rib turadi.
+- Muammo: texnolog quymalarni tarozida o'lchaydi, **qaymoqni biladi**, lekin separatsiyaga ketgan sutni va chiqqan
+  yog'siz sutni darhol aniq bilmaydi — smena davomida turli miqdorda separatsiya qilib, qaymoq va yog'siz sutni darrov
+  xomashyo sifatida ishlatib yuboradi; aniq miqdor smena oxirida ma'lum bo'ladi. Yechim — 9-bo'lim (taklif).
+
+### 8.6. Qaytgan mahsulot
+- "Toza" qaytgan → **Tayyor mahsulot ombori**; "Vozvrat" → **Vozvrat ombori**. Qaytarish turlari keyingi versiyalarda.
+- Hozirgi asosiy maqsad: **omborga kirguncha** barcha jarayonlarni optimallashtirish — **real tannarxni buzmasdan**
+  hisoblash, **xodimlar ish haqini to'g'ri** hisoblash, omborlar va bosqichlarni **real vaqtda** to'g'ri nazorat qilish.
+
+## 9. Taklif: separatsiyada yog'siz sut va qaymoqni "oldindan ishlatish" (tasdiqlash kerak)
+Maqsad — texnolog smena davomida bemalol ishlatsin, tannarx esa oxirida aniq va to'g'ri bo'lsin, moliya qoidalari
+buzilmasin (hech bir xarajat yo'qolmaydi yoki ikki marta yozilmaydi).
+
+1. **Smena davomida.** Yog'siz sut va qaymoq (separatsiya mahsulotlari) Xomashyo omborida **shu smena ichida vaqtincha
+   manfiyga** tushishi mumkin. Texnolog ularni boshqa tarkiblarda ishlataveradi; sarf **taxminiy tannarxda** yoziladi
+   (oxirgi separatsiyadagi 1 kg tannarxi; birinchi marta — tarkibdagi rejaviy tannarx). Ekranda tepada: "Yog'siz sut:
+   −85 kg (smena yakunida aniqlanadi)".
+2. **Qaymoq** — texnolog bilgani uchun, qaymoqni chiqqan zahoti kiritishi mumkin (yoki oxirida).
+3. **Smena oxirida — "Separatsiya yakuni"**. Texnolog faqat bilganini kiritadi:
+   - chiqqan **qaymoq** (agar avval kiritilmagan bo'lsa);
+   - **qolgan yog'siz sut** (ishlatilmay qolgani; bo'lmasa 0).
+   Tizim qolganini o'zi hisoblaydi:
+   - **chiqqan yog'siz sut** = smenada ishlatilgani + qolgani;
+   - **separatsiyaga ketgan sut** = smenada olingan sut − boshqa topshiriqlarda ishlatilgan sut − qaytarilgan sut −
+     yo'qotishlar (hozirgi smena yopishdagi sut hisobi bilan bir xil).
+   Agar separatsiyaga ketgan sut yoki yog'siz sut tarkibdagi nisbatdan (limit) chiqib ketsa — rahbar tasdig'iga boradi.
+4. **Hujjat va tannarx.** Yakunda bitta "Separatsiya" hujjati yoziladi: sut chiqimi → qaymoq va yog'siz sut kirimi
+   **haqiqiy tannarxda** (hozirgi qoida: qaymoq qat'iy / foiz, yog'siz sut — qolgan tannarx). Bu kirim manfiyni yopadi.
+5. **Farqni to'g'rilash.** Taxminiy va haqiqiy tannarx orasidagi farq **yog'siz sut ishlatilgan partiyalarga qayta
+   taqsimlanadi** (hozir qaynatishdagi yo'qotishni taqsimlashda ishlatilayotgan mexanizm — partiya manbalari orqali,
+   keyingi bosqichga o'tgan partiyalarga ham). Mahsulot sotilib yoki hisobdan chiqib bo'lgan bo'lsa — farq
+   "Tannarx farqi" moddasiga. Natija: har bir mahsulotning tannarxi — haqiqiy.
+6. **Himoya.** Smena yopilmaguncha manfiy qoldiq faqat shu smenaning separatsiya mahsulotlarida ruxsat etiladi; smena
+   yopilganda manfiy qolishi mumkin emas (yakun kiritilmasa smena yopilmaydi). Ogohlantirish rahbarga ko'rinadi.
+
+## 10. Ochiq savollar (ish boshlashdan oldin aniqlanadi)
+1. ✅ 8.1 (variantlar). 2. ✅ 8.3 (laboratoriya — butunlay o'chiriladi). 3. ✅ 7.1–7.2. 4. ✅ 7.4. 5. ✅ 7.5.
+6. ✅ 8.2 (qopqoq — "O'zgarmas" bosqich, stavka bosqichda yoziladi). 7. ✅ 8.4. 8. ✅ 8.5. 9. ✅ 8.6.
+10. **9-bo'limdagi separatsiya taklifi** — ma'qulmi?
+11. Qopqoq yopishda qopqoqning o'zi (idish omboridagi "Qopqoq" mahsuloti) ayrilmaydimi? 5.4 da "xomashyo, idish
+    ishlatilmaydi" deyilgan — qopqoq tannarxi bu holda mahsulot tannarxiga qo'shilmaydi. Shundaymi?
+12. Variantlar: variantlar birligi, vazni va yaroqlilik muddati asosiy mahsulotdan meros oladimi (faqat nomi va
+    tannarxi farq qiladi)?
