@@ -9,7 +9,6 @@ import { balances, statement, supplierBalance } from '../ledger.js';
 import { templateXlsx, importSuppliers, exportSuppliersXlsx } from '../importer.js';
 import { CONFIRM_KEYS, confirmFlags, diffFlags, getSetting, setSetting } from '../settings.js';
 import { ShiftError, acceptShift, cancelShift, copyShift, listShifts, shiftCopyText, shiftDetail, shiftLabel } from '../shifts.js';
-import { labFields, labList, labDetail, saveLab, acceptLab } from '../lab.js';
 import { purchaseList, purchaseBreakdown, purchaseRows } from '../purchases.js';
 import { intg, setIntg, reloadBots, sendBackup, checkToken, notifyHousehold } from '../integrations.js';
 import { decrypt, encrypt, listSafety, loadSafety, restore, saveSafety, snapshot, wipeHistory } from '../backup.js';
@@ -492,72 +491,6 @@ export default async function adminRoutes(app, { db }) {
       log(req, 'shift.copy', { from: from && shiftLabel(from), to: shiftLabel(s) });
       return { id: s.id, label: shiftLabel(s) };
     } catch (e) { return shiftErr(reply, e); }
-  });
-
-  // ---------------------------------------------------------------- laboratory
-  // Field configuration (panel only in practice — needs lab.fields).
-  app.get('/lab/fields', need('lab.view'), async () => labFields(db));
-  app.post('/lab/fields', need('lab.fields'), async (req, reply) => {
-    const b = req.body ?? {};
-    const name = str(b.name, 60);
-    if (!name) return bad(reply, 'Nom shart');
-    const type = b.type === 'variant' ? 'variant' : 'number';
-    const numOrNull = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
-    const bad_option = type === 'variant' && (b.badOption === 'bor' || b.badOption === 'yoq') ? b.badOption : null;
-    const sort = Number(b.sort) || (db.prepare('SELECT COALESCE(MAX(sort), 0) + 1 AS n FROM lab_fields').get().n);
-    const amountOn = type === 'variant' && (b.amountOn === true || b.amountOn === 1 || b.amountOn === '1') ? 1 : 0;
-    const amountMax = amountOn ? numOrNull(b.amountMax) : null;
-    const id = db.prepare('INSERT INTO lab_fields (name, type, limit_min, limit_max, bad_option, amount_on, amount_max, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(name, type, type === 'number' ? numOrNull(b.limitMin) : null, type === 'number' ? numOrNull(b.limitMax) : null, bad_option, amountOn, amountMax, sort).lastInsertRowid;
-    log(req, 'lab.field.create', { id: Number(id), name });
-    return { id: Number(id) };
-  });
-  app.patch('/lab/fields/:id', need('lab.fields'), async (req, reply) => {
-    const id = Number(req.params.id);
-    const f = db.prepare('SELECT * FROM lab_fields WHERE id = ?').get(id);
-    if (!f) return reply.code(404).send({ error: 'Topilmadi' });
-    const b = req.body ?? {};
-    const numOrNull = (v) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
-    const type = b.type === 'variant' || b.type === 'number' ? b.type : f.type;
-    const wantOn = b.amountOn !== undefined ? (b.amountOn === true || b.amountOn === 1 || b.amountOn === '1') : !!f.amount_on;
-    const amOn = type === 'variant' && wantOn ? 1 : 0;
-    db.prepare(`UPDATE lab_fields SET name = COALESCE(?, name), type = ?,
-      limit_min = CASE WHEN ? THEN ? ELSE limit_min END, limit_max = CASE WHEN ? THEN ? ELSE limit_max END,
-      bad_option = CASE WHEN ? THEN ? ELSE bad_option END,
-      amount_on = CASE WHEN ? THEN ? ELSE amount_on END, amount_max = CASE WHEN ? THEN ? ELSE amount_max END,
-      sort = COALESCE(?, sort) WHERE id = ?`)
-      .run(b.name !== undefined ? str(b.name, 60) : null, type,
-        Number(b.limitMin !== undefined), type === 'number' ? numOrNull(b.limitMin) : null,
-        Number(b.limitMax !== undefined), type === 'number' ? numOrNull(b.limitMax) : null,
-        Number(b.badOption !== undefined), type === 'variant' && (b.badOption === 'bor' || b.badOption === 'yoq') ? b.badOption : null,
-        Number(b.amountOn !== undefined || type === 'number'), amOn,
-        Number(b.amountOn !== undefined || b.amountMax !== undefined || type === 'number'), amOn ? numOrNull(b.amountMax !== undefined ? b.amountMax : f.amount_max) : null,
-        b.sort !== undefined ? Number(b.sort) : null, id);
-    log(req, 'lab.field.update', { id, name: b.name ?? f.name });
-    return { ok: true };
-  });
-  app.delete('/lab/fields/:id', need('lab.fields'), async (req) => {
-    db.prepare('UPDATE lab_fields SET active = 0 WHERE id = ?').run(Number(req.params.id));
-    log(req, 'lab.field.delete', { id: Number(req.params.id) });
-    return { ok: true };
-  });
-
-  // Lab worklist and one shift's report.
-  app.get('/lab', need('lab.view'), async () => labList(db, {}));
-  app.get('/lab/:id', need('lab.view'), async (req, reply) => labDetail(db, Number(req.params.id)) ?? reply.code(404).send({ error: 'Topilmadi' }));
-  app.put('/lab/:id', need('lab.edit'), async (req, reply) => {
-    try {
-      const r = saveLab(db, Number(req.params.id), req.body?.values ?? {}, req.actor);
-      log(req, 'lab.save', { shiftId: Number(req.params.id), overLimit: r.overLimit });
-      return { ok: true, overLimit: r.overLimit };
-    } catch (e) { return bad(reply, e.message); }
-  });
-  app.post('/lab/:id/accept', need('lab.accept'), async (req, reply) => {
-    try {
-      acceptLab(db, Number(req.params.id), req.actor);
-      log(req, 'lab.accept', { shiftId: Number(req.params.id) });
-      return { ok: true };
-    } catch (e) { return bad(reply, e.message); }
   });
 
   // ---------------------------------------------------------------- payments & debts

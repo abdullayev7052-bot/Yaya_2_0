@@ -35,11 +35,6 @@ export const PERMISSIONS = [
   { key: 'payments.create', group: 'Qarzlar va to\'lovlar', label: 'Xonadonga to\'lov qilish' },
   { key: 'payments.void', group: 'Qarzlar va to\'lovlar', label: 'To\'lovni bekor qilish' },
 
-  // --- laboratory
-  { key: 'lab.view', group: 'Laboratoriya', label: 'Laborant bo\'limini ko\'rish (narx va xonadonlarsiz)' },
-  { key: 'lab.edit', group: 'Laboratoriya', label: 'Laboratoriya qiymatlarini kiritish va saqlash' },
-  { key: 'lab.accept', group: 'Laboratoriya', label: 'Limitdan o\'tgan smenani qabul qilish (laborantga ko\'rinmaydi)' },
-  { key: 'lab.fields', group: 'Laboratoriya', label: 'Laboratoriya maydonlari va limitlarini sozlash' },
 
   // --- warehouse (Yaya 2.0)
   { key: 'stock.view_all', group: 'Ombor', label: "Barcha omborlar va xodimlar zimmasidagi qoldiqlarni ko'rish", hint: "O'chirilsa, faqat o'z zimmasidagi va o'zi mas'ul omborlar ko'rinadi" },
@@ -104,13 +99,12 @@ export const BUILTIN_ROLES = [
       ...COLLECT_PERMS].includes(k)) },
   { code: 'storekeeper', name: 'Omborchi', locked: 0,
     perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'shifts.copy', 'diff.view', 'suppliers.view', 'debts.view', 'payments.create', 'reports.view',
-      'lab.view', 'lab.accept', ...STOCK_WORKER_PERMS] },
+      ...STOCK_WORKER_PERMS] },
   { code: 'viewer', name: 'Buxgalter', locked: 0,
     perms: ['shifts.view_all', 'shifts.accept', 'shifts.cancel', 'diff.view', 'suppliers.view', 'suppliers.edit', 'suppliers.location',
-      'prices.view', 'prices.manage', 'debts.view', 'payments.create', 'payments.void', 'reports.view', 'reports.export', 'lab.view', 'lab.accept'] },
+      'prices.view', 'prices.manage', 'debts.view', 'payments.create', 'payments.void', 'reports.view', 'reports.export'] },
   { code: 'collector', name: 'Sut yig\'uvchi', locked: 0,
     perms: [...COLLECT_PERMS, 'suppliers.card_own', 'suppliers.location', 'payments.create'] },
-  { code: 'lab', name: 'Laborant', locked: 0, perms: ['lab.view', 'lab.edit'] },
   { code: 'technologist', name: 'Texnolog', locked: 0, perms: ['prod.work', 'stock.transfer', 'stock.writeoff'] },
   { code: 'pourer', name: 'Quyuvchi', locked: 0, perms: ['prod.pour', 'stock.transfer', 'stock.writeoff'] },
   { code: 'reprocessor', name: 'Qayta ishlovchi', locked: 0, perms: ['prod.reprocess', 'stock.transfer', 'stock.writeoff'] },

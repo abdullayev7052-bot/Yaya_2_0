@@ -227,7 +227,7 @@ const PAGES = [
   ['overview', 'Bosh panel', ['reports.view', 'stock.view_all'], 'home'],
   ['dashboard', 'Kunlik', 'reports.view', 'milk'], ['shifts', 'Smenalar', 'shifts.view_all', 'milk'], ['purchases', 'Xaridlar', 'reports.view', 'milk'],
   ['suppliers', 'Xonadonlar', 'suppliers.view', 'milk'], ['debts', "Qarzlar va to'lovlar", 'debts.view', 'milk'],
-  ['catalog', 'Sut mahsulotlari', 'catalog.manage', 'milk'], ['lab', 'Laboratoriya', 'lab.fields', 'milk'],
+  ['catalog', 'Sut mahsulotlari', 'catalog.manage', 'milk'],
   ['reports', "Sut yig'ish hisobotlari", 'reports.view', 'reports'],
   ['staff', 'Xodimlar', 'staff.manage', 'admin'], ['roles', 'Rollar va ruxsatlar', 'staff.manage', 'admin'], ['devices', 'Qurilmalar', 'staff.manage', 'admin'],
   ['integrations', 'Integratsiya', 'integrations.manage', 'admin'], ['tester', 'Ilovani sinash', 'tester.use', 'admin'], ['settings', 'Sozlamalar', null, 'admin'],
@@ -1168,44 +1168,7 @@ const views = {
     });
   },
 
-  // ------------------------------------------------------------------ laboratory fields
-  async lab(v) {
-    const fields = await api('GET', '/lab/fields');
-    const typeLabel = (f) => (f.type === 'variant' ? 'Variant (Bor/Yo\'q)' : 'Raqam');
-    const limitText = (f) => {
-      if (f.type === 'variant') {
-        const a = f.amount_on ? `Bor: ${f.amount_max != null ? `max ${f.amount_max} kg` : 'miqdor erkin'}` : '';
-        if (a) return a;
-        return f.bad_option ? `"${f.bad_option === 'bor' ? 'Bor' : 'Yo\'q'}" bo'lsa limitdan o'tgan` : 'erkin';
-      }
-      const p = [];
-      if (f.limit_min != null) p.push(`min ${f.limit_min}`);
-      if (f.limit_max != null) p.push(`max ${f.limit_max}`);
-      return p.length ? p.join(' · ') : 'erkin';
-    };
-    v.innerHTML = `
-      <div class="card"><div class="row" style="justify-content:space-between"><h2>Laboratoriya maydonlari</h2><button id="add">+ Yangi maydon</button></div>
-        <p class="muted">Laborant har bir <b>qabul qilingan</b> smenaga shu qiymatlarni ilovadagi "Laborant" bo'limida kiritadi. Limitdan o'tsa — smena qizil ramkada belgilanadi va admin ko'rib qabul qilmaguncha shunday turadi. Bu yerda faqat maydonlar sozlanadi, kunlik ma'lumot kiritilmaydi.</p>
-        <div class="table-wrap"><table>
-          <tr><th>Maydon</th><th>Turi</th><th>Limit</th><th></th></tr>
-          ${fields.map((f) => `<tr><td><b>${esc(f.name)}</b></td><td>${typeLabel(f)}</td><td>${limitText(f)}</td>
-            <td class="row"><button class="small ghost" data-edit="${f.id}">Tahrirlash</button><button class="small ghost" data-del="${f.id}">O'chirish</button></td></tr>`).join('')
-            || '<tr><td colspan="4" class="muted">Hali maydon yo\'q. Masalan: Жир, Вода, Кислотист (raqam) yoki Антибиотик, Мастит (Bor/Yo\'q).</td></tr>'}
-        </table></div></div>`;
-    const form = (f = {}) => [
-      { name: 'name', label: 'Nomi', value: f.name, required: true },
-      { name: 'type', label: 'Turi', type: 'select', value: f.type || 'number', options: [['number', 'Raqam (masalan 3.65)'], ['variant', 'Variant (Bor / Yo\'q)']] },
-      { name: 'limitMin', label: 'Limit — eng kam (ixtiyoriy, faqat raqam uchun)', type: 'number', step: 'any', value: f.limit_min },
-      { name: 'limitMax', label: 'Limit — eng ko\'p (ixtiyoriy, faqat raqam uchun)', type: 'number', step: 'any', value: f.limit_max },
-      { name: 'badOption', label: 'Variant uchun: qaysi javob "limitdan o\'tgan" hisoblansin', type: 'select', value: f.bad_option || '', options: [['', 'Erkin (limit yo\'q)'], ['bor', '"Bor" bo\'lsa'], ['yoq', '"Yo\'q" bo\'lsa']] },
-      { name: 'amountOn', label: 'Variant uchun: "Bor" tanlanganda miqdor (kg) kiritilsinmi', type: 'select', value: f.amount_on ? '1' : '0', options: [['0', 'Yo\'q'], ['1', 'Ha — miqdor maydoni ochilsin']] },
-      { name: 'amountMax', label: 'Miqdor limiti — eng ko\'p kg (bo\'sh = cheklovsiz)', type: 'number', step: 'any', value: f.amount_max },
-    ];
-    $('#add', v).onclick = () => openForm({ title: 'Yangi laboratoriya maydoni', fields: form(), onSubmit: async (d) => { await api('POST', '/lab/fields', d); flash('Qo\'shildi'); } });
-    $$('[data-edit]', v).forEach((b) => { b.onclick = () => { const f = fields.find((x) => String(x.id) === b.dataset.edit); openForm({ title: 'Maydonni tahrirlash', fields: form(f), onSubmit: async (d) => { await api('PATCH', `/lab/fields/${f.id}`, d); flash('Saqlandi'); } }); }; });
-    $$('[data-del]', v).forEach((b) => { b.onclick = act(async () => { if (!confirm('Bu maydon o\'chirilsinmi? Eski yozuvlarga ta\'sir qilmaydi.')) return; await api('DELETE', `/lab/fields/${b.dataset.del}`); flash('O\'chirildi'); route(); }); });
-  },
-
+  // ------------------------------------------------------------------ settings
   async settings(v) {
     const st = can('settings.manage') ? await api('GET', '/settings') : null;
     const safety = can('data.backup') ? await api('GET', '/data/safety') : [];

@@ -146,34 +146,6 @@ CREATE TABLE IF NOT EXISTS shift_accepts (
   PRIMARY KEY (shift_id, product_id)
 );
 
--- Laboratory report fields, configured in the panel. A field is a number
--- (flagged when outside limit_min..limit_max, either bound optional) or a
--- variant (answer 'bor'/'yoq'; bad_option names the flagged answer, NULL = free).
-CREATE TABLE IF NOT EXISTS lab_fields (
-  id INTEGER PRIMARY KEY,
-  name TEXT NOT NULL,
-  type TEXT NOT NULL DEFAULT 'number' CHECK (type IN ('number','variant')),
-  limit_min REAL,
-  limit_max REAL,
-  bad_option TEXT CHECK (bad_option IN ('bor','yoq') OR bad_option IS NULL),
-  sort INTEGER NOT NULL DEFAULT 0,
-  active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- One lab report per accepted shift. values is JSON { "<fieldId>": number|"bor"|"yoq" }.
--- over_limit is cached at save time; a flagged report waits for an accept.
-CREATE TABLE IF NOT EXISTS lab_reports (
-  shift_id INTEGER PRIMARY KEY REFERENCES shifts(id) ON DELETE CASCADE,
-  vals TEXT NOT NULL,
-  over_limit INTEGER NOT NULL DEFAULT 0,
-  created_by TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT,
-  accepted_by TEXT,
-  accepted_at TEXT
-);
-
 -- One pickup. price is stamped when the shift is accepted.
 CREATE TABLE IF NOT EXISTS collections (
   id INTEGER PRIMARY KEY,
@@ -284,10 +256,10 @@ function seedRoles(db) {
 const NEW_ROLE_PERMS = {
   collector: ['suppliers.location', 'collect.view_own_shifts', 'collect.detail_own'],
   // Accountants set prices and edit household data from the app now.
-  viewer: ['suppliers.edit', 'suppliers.location', 'prices.manage', 'diff.view', 'lab.view', 'lab.accept'],
-  // Whoever accepts shifts may see the accepted-quantity difference and the lab.
-  manager: ['diff.view', 'lab.view', 'lab.accept', 'lab.fields'],
-  storekeeper: ['diff.view', 'lab.view', 'lab.accept', 'stock.transfer', 'stock.inventory', 'stock.writeoff'],
+  viewer: ['suppliers.edit', 'suppliers.location', 'prices.manage', 'diff.view'],
+  // Whoever accepts shifts may see the accepted-quantity difference.
+  manager: ['diff.view'],
+  storekeeper: ['diff.view', 'stock.transfer', 'stock.inventory', 'stock.writeoff'],
 };
 // Yaya 2.0 warehouse permissions for the manager (everything but structure and opening stock).
 NEW_ROLE_PERMS.manager.push('stock.view_all', 'stock.costs', 'stock.transfer', 'stock.inventory', 'stock.writeoff', 'stock.cancel', 'alerts.view');
@@ -304,6 +276,18 @@ function backfillNewPermissions(db) {
     for (const k of keys) perms.add(k);
     if (perms.size !== before) db.prepare('UPDATE roles SET permissions = ? WHERE id = ?').run(JSON.stringify([...perms]), row.id);
   }
+}
+
+// A built-in role that was taken out: its people go (or, if other records point at
+// them, are switched off), and the role goes once nobody has it.
+export function retireRole(db, code) {
+  const role = db.prepare('SELECT id FROM roles WHERE code = ?').get(code);
+  if (!role) return;
+  for (const u of db.prepare('SELECT id FROM users WHERE role_id = ?').all(role.id)) {
+    db.prepare('DELETE FROM devices WHERE user_id = ?').run(u.id);
+    try { db.prepare('DELETE FROM users WHERE id = ?').run(u.id); } catch { db.prepare('UPDATE users SET active = 0 WHERE id = ?').run(u.id); }
+  }
+  if (!db.prepare('SELECT 1 FROM users WHERE role_id = ?').get(role.id)) db.prepare('DELETE FROM roles WHERE id = ?').run(role.id);
 }
 
 export const roleIdByCode = (db, code) => db.prepare('SELECT id FROM roles WHERE code = ?').get(code)?.id;
@@ -411,9 +395,9 @@ export function openDb(file) {
   addColumn('suppliers', 'address2', 'TEXT');
   addColumn('suppliers', 'lat2', 'REAL');
   addColumn('suppliers', 'lng2', 'REAL');
-  // Variant lab fields can ask "how many kg?" when the answer is "bor", with an optional max.
-  addColumn('lab_fields', 'amount_on', 'INTEGER NOT NULL DEFAULT 0');
-  addColumn('lab_fields', 'amount_max', 'REAL');
+  // The laboratory was taken out (stage 10): its data goes too. Old backups still
+  // restore — their lab tables are simply not read.
+  db.exec('DROP TABLE IF EXISTS lab_reports; DROP TABLE IF EXISTS lab_fields;');
   // Sequential, stable payment number (independent of shifts). Backfilled once by paid_at order.
   addColumn('payments', 'number', 'INTEGER');
   if (db.prepare('SELECT 1 FROM payments WHERE number IS NULL LIMIT 1').get()) {
@@ -425,6 +409,7 @@ export function openDb(file) {
   // Production / warehouse tables (Yaya 2.0).
   setupErp(db, addColumn);
   seedRoles(db);
+  retireRole(db, 'lab');
   backfillNewPermissions(db);
   db.pragma(`user_version = ${SCHEMA_VERSION}`);
   return db;

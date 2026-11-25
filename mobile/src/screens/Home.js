@@ -4,7 +4,7 @@ import * as api from '../api';
 import { Logo } from '../components';
 import Collector from './Collector';
 import Profile from './Profile';
-import { Debts, Lab, LabDetail, MyPayments, Payments, ShiftDetail, Shifts, Today } from './Office';
+import { Debts, MyPayments, Payments, ShiftDetail, Shifts, Today } from './Office';
 import { PaymentForm, SupplierCard } from './Supplier';
 import { InventoryForm, Stock, StockForm, canStock } from './Stock';
 import { CloseShift, NewTask, Production, TaskScreen, canProduce } from './Production';
@@ -19,7 +19,6 @@ const TABS = [
   ['collect', 'Smena', () => api.can('collect.shift')],
   ['today', 'Kun', () => api.can('reports.view')],
   ['shifts', 'Smenalar', () => api.can('shifts.view_all')],
-  ['lab', 'Laborant', () => api.can('lab.view')],
   ['prod', 'Ishlab chiqarish', canProduce],
   ['stock', 'Ombor', canStock],
   ['debts', 'Qarzlar', () => api.can('debts.view')],
@@ -36,24 +35,12 @@ export default function Home({ tick, refresh, onLogout }) {
   // Detail screens opened from the office tabs.
   const [shiftId, setShiftId] = useState(null);
   const [cardId, setCardId] = useState(null);
-  const [labId, setLabId] = useState(null);
   const [payFor, setPayFor] = useState(null);
-  const [labFlag, setLabFlag] = useState(false);
   // Warehouse form: { type, docId } (hand over / write off / count).
   const [stockForm, setStockForm] = useState(null);
   // Technologist screens: { screen: 'new' | 'task' | 'close', id }.
   const [prodView, setProdView] = useState(null);
-  // Seller screens: { screen: 'form', type } or { screen: 'view', id }.
   const [toast, setToast] = useState('');
-  // Red dot on the Laborant tab while any accepted shift is flagged (over a limit).
-  useEffect(() => {
-    if (!api.can('lab.view')) return undefined;
-    let alive = true;
-    const check = () => api.admin('GET', '/lab').then((d) => { if (alive) setLabFlag((d.flagged || 0) > 0); }).catch(() => {});
-    check();
-    const t = setInterval(check, 30000);
-    return () => { alive = false; clearInterval(t); };
-  }, [tick]);
   // Long-pressing the "Smena" tab (2s) opens the collector's own shift history,
   // even while a shift is open. Bumping this counter signals the request.
   const [histReq, setHistReq] = useState(0);
@@ -80,12 +67,9 @@ export default function Home({ tick, refresh, onLogout }) {
     body = <SupplierCard id={cardId} onBack={() => setCardId(null)} onPay={setPayFor} />;
   } else if (shiftId) {
     body = <ShiftDetail id={shiftId} onBack={() => setShiftId(null)} onChanged={refresh} onCard={setCardId} />;
-  } else if (labId) {
-    body = <LabDetail id={labId} onBack={() => setLabId(null)} onChanged={refresh} />;
   } else if (current === 'collect') body = <Collector tick={tick} refresh={refresh} setFull={setFull} histReq={histReq} />;
   else if (current === 'today') body = <Today onShift={setShiftId} />;
   else if (current === 'shifts') body = <Shifts onShift={setShiftId} tick={tick} />;
-  else if (current === 'lab') body = <Lab onOpen={setLabId} />;
   else if (current === 'prod') body = <Production tick={tick} onNew={() => setProdView({ screen: 'new' })} onTask={(id) => setProdView({ screen: 'task', id })} onClose={() => setProdView({ screen: 'close' })} />;
   else if (current === 'stock') body = <Stock tick={tick} onForm={(type, docId) => setStockForm({ type, docId })} />;
   else if (current === 'debts') body = <Debts onOpen={setCardId} onPay={setPayFor} tick={tick} />;
@@ -93,7 +77,7 @@ export default function Home({ tick, refresh, onLogout }) {
   else if (current === 'mypays') body = <MyPayments />;
   else body = <Profile tick={tick} onLogout={onLogout} setFull={setFull} />;
 
-  const detail = !!(prodView || stockForm || payFor || cardId || shiftId || labId);
+  const detail = !!(prodView || stockForm || payFor || cardId || shiftId);
   const chrome = !full && !detail;
   return (
     <View style={{ flex: 1 }}>
@@ -124,7 +108,6 @@ export default function Home({ tick, refresh, onLogout }) {
               style={{ flexGrow: 1, minWidth: 68, paddingVertical: 13, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' }}>
               <View>
                 <Text numberOfLines={1} style={{ fontSize: 13.5, fontWeight: current === k ? '700' : '500', color: current === k ? C.accent : C.muted }}>{t}</Text>
-                {k === 'lab' && labFlag && <View style={{ position: 'absolute', top: -2, right: -10, width: 9, height: 9, borderRadius: 5, backgroundColor: C.err }} />}
               </View>
             </Pressable>
           ))}
