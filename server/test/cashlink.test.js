@@ -76,21 +76,21 @@ test('conditional limit: with the alternative starter the output must be 315–3
   const st1 = await P({ name: 'Zakvaska A', kind: 'raw', unit: 'g' });
   const st2 = await P({ name: 'Zakvaska B', kind: 'raw', unit: 'g' });
   const siyro = await P({ name: '5% siyro', kind: 'semi', unit: 'kg' });
-  const wh = (await call(app, 'POST', '/api/erp/warehouses', b, { name: 'Xom', kind: 'raw_milk' })).body.id;
-  await call(app, 'POST', '/api/erp/docs', b, { type: 'opening', to: { warehouseId: wh }, lines: [{ productId: milk, qty: 1000, unitCost: 5000 }, { productId: st1, qty: 50, unitCost: 10 }, { productId: st2, qty: 50, unitCost: 10 }] });
   const tech = Number(db.prepare("INSERT INTO users (login, name, password_hash, role_id) VALUES ('tech', 'T', ?, (SELECT id FROM roles WHERE code = 'technologist'))")
     .run((await import('bcryptjs')).default.hashSync('pass1234', 4)).lastInsertRowid);
   db.prepare("INSERT INTO devices (user_id, name) VALUES (?, 'Q')").run(tech);
-  const tr = (await call(app, 'POST', '/api/erp/docs', b, { type: 'transfer', from: { warehouseId: wh }, to: { userId: tech }, lines: [{ productId: milk, qty: 1000 }, { productId: st1, qty: 50 }, { productId: st2, qty: 50 }] })).body;
+  // the technologist keeps the warehouse and runs the production stage
+  const wh = (await call(app, 'POST', '/api/erp/warehouses', b, { name: 'Xom', kind: 'raw_milk', keepers: [tech] })).body.id;
+  await call(app, 'PUT', '/api/erp/settings/milk-warehouse', b, { warehouseId: wh });
+  await call(app, 'PUT', `/api/erp/prod/stages/${db.prepare("SELECT id FROM warehouses WHERE stage_code = 'produce'").get().id}`, b, { keepers: [tech] });
+  await call(app, 'POST', '/api/erp/docs', b, { type: 'opening', to: { warehouseId: wh }, lines: [{ productId: milk, qty: 1000, unitCost: 5000 }, { productId: st1, qty: 50, unitCost: 10 }, { productId: st2, qty: 50, unitCost: 10 }] });
   const t = await login(app, 'tech', 'pass1234');
-  await call(app, 'POST', `/api/erp/docs/${tr.id}/accept`, t, {});
   const r = (await call(app, 'POST', '/api/erp/prod/recipes', b, {
     name: '5%', kind: 'cook', productId: siyro, outMin: 320, outMax: 335,
     lines: [{ productId: milk, qty: 320 }, { productId: st1, qty: 4, alts: [{ productId: st2 }] }],
     limits: [{ name: 'B zakvaska bilan', productIds: [st2], outMin: 315, outMax: 330 }],
   })).body;
   assert.equal(r.limits[0].products[0], 'Zakvaska B');
-  await call(app, 'POST', '/api/erp/prod/shift', t, {});
   // with starter A: the recipe's own range — 333 is fine
   const a = (await call(app, 'POST', '/api/erp/prod/tasks', t, { recipeId: r.id, milkQty: 320 })).body;
   assert.equal((await call(app, 'POST', `/api/erp/prod/tasks/${a.id}/complete`, t, { outputQty: 333 })).body.task.status, 'done');

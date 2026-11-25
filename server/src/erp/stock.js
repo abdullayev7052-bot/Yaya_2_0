@@ -5,9 +5,14 @@
 // - an outgoing quantity takes the oldest lots at that holder first (FIFO), at the
 //   lot's own unit cost; a fully used lot takes its whole remaining cost, so no
 //   rounding crumbs stay behind;
-// - a holder may go below zero only if it is a warehouse with allow_negative; the
-//   shortage is booked at the product's last known unit cost and settled by the
-//   next receipt (the price gap goes to "tannarx farqi");
+// - a holder may go below zero only if it is a warehouse with allow_negative (stage
+//   warehouses do); the shortage is booked at the product's last known unit cost and
+//   settled by the next receipt. What was made from that shortage is linked to it
+//   (neg_links), so the gap between the real and the estimated cost is passed on to
+//   those lots — every product ends at its real cost (FIFO); only a gap nobody can
+//   carry goes to "tannarx farqi";
+// - goods are always in a warehouse (or a stage); "in a person's hands" is gone
+//   (stage 10). Old documents that named a person still read correctly;
 // - a posted document never changes; cancelling it writes the exact opposite moves
 //   (and reverses its money entries), and is refused if that would leave a lot
 //   below zero where that is not allowed.
@@ -34,6 +39,7 @@ export const DOC_TYPES = {
   writeoff: { label: 'Hisobdan chiqarish', prefix: 'HC' },
   production: { label: 'Ishlab chiqarish', prefix: 'IC' },
   shift_close: { label: 'Texnolog smenasi yakuni', prefix: 'TS' },
+  stage_move: { label: 'Bosqich amali', prefix: 'BA' },
   sale: { label: 'Sotuv', prefix: 'S' },
   return: { label: 'Qaytarish', prefix: 'Q' },
   payment: { label: "Mijozdan to'lov", prefix: 'TL' },
@@ -109,7 +115,7 @@ export function insertMove(db, ctx, { lineId = null, productId, lotId = null, h,
   if (h.warehouseId) ctx.touched.add(`${h.warehouseId}:${productId}`);
 }
 
-function newLot(db, ctx, { productId, qty, unitCost, expiresAt, producedAt, seq, provisional = 0, shiftId = null }) {
+export function newLot(db, ctx, { productId, qty, unitCost, expiresAt, producedAt, seq, provisional = 0, shiftId = null }) {
   const p = db.prepare('SELECT shelf_life_hours FROM products WHERE id = ?').get(productId);
   const produced = producedAt ?? ctx.at;
   const expires = expiresAt ?? (p?.shelf_life_hours ? new Date(Date.parse(produced) + p.shelf_life_hours * 3600e3).toISOString() : null);
@@ -130,7 +136,7 @@ export function chargeStaff(db, ctx, userId, amount, kind, note = null) {
 }
 
 // Take qty of a product out of a holder, oldest lots first. Returns what was taken.
-export function takeOut(db, ctx, { productId, h, qty, lineId = null, kind = null }) {
+export function takeOut(db, ctx, { productId, h, qty, lineId = null, kind = null, allowNeg = false }) {
   let need = r3(qty);
   const taken = [];
   const lots = lotBalances(db, h, productId);
@@ -142,18 +148,18 @@ export function takeOut(db, ctx, { productId, h, qty, lineId = null, kind = null
     const unit = l.lot_id ? l.unit_cost : l.cost / l.qty;
     const cost = exhausted ? l.cost : r2(q * unit);
     insertMove(db, ctx, { lineId, productId, lotId: l.lot_id, h, qty: -q, cost: -cost, kind });
-    taken.push({ lotId: l.lot_id, qty: q, cost });
+    taken.push({ lotId: l.lot_id, qty: q, cost, h });
     need = r3(need - q);
   }
   if (need > EPS) {
-    if (!allowNegative(db, h)) {
+    if (!allowNeg && !allowNegative(db, h)) {
       const have = productBalance(db, h, productId);
       throw new StockError(`${productName(db, productId)}: "${holderName(db, h)}" da yetarli emas (bor: ${Math.max(0, r3(have + r3(qty) - need))}, kerak: ${r3(qty)})`,
         { productId, holder: h, available: r3(r3(qty) - need), required: r3(qty) });
     }
     const cost = r2(need * lastUnitCost(db, productId));
     insertMove(db, ctx, { lineId, productId, lotId: null, h, qty: -need, cost: -cost, kind });
-    taken.push({ lotId: null, qty: need, cost });
+    taken.push({ lotId: null, qty: need, cost, h, productId });
   }
   return taken;
 }
@@ -181,7 +187,65 @@ function settleNegative(db, ctx, h, productId, lotId) {
   const realCost = r2(s * lot.unit_cost);
   insertMove(db, ctx, { productId, lotId, h, qty: -s, cost: -realCost, kind: 'settle' });
   insertMove(db, ctx, { productId, lotId: null, h, qty: s, cost: estCost, kind: 'settle' });
-  pnl(db, ctx, 'cost_variance', realCost - estCost, `${productName(db, productId)}: manfiy qoldiq yopildi`);
+  // The lots made from the shortage take the gap (oldest shortage first).
+  let left = s; let gap = r2(realCost - estCost);
+  if (h.warehouseId) {
+    for (const link of db.prepare(`SELECT * FROM neg_links WHERE warehouse_id = ? AND product_id = ? AND open_qty > ${EPS} ORDER BY id`).all(h.warehouseId, productId)) {
+      if (left <= EPS) break;
+      const q = r3(Math.min(left, link.open_qty));
+      const d = r2(q * lot.unit_cost - (q * link.est_cost) / link.qty);
+      if (link.lot_id) {
+        revalueLot(db, ctx, link.lot_id, d);
+        gap = r2(gap - d);
+        // From now on the settling lot is a source of what was made: a later change
+        // to its cost (e.g. the shift's boiling loss) reaches that lot too.
+        db.prepare('INSERT INTO lot_sources (lot_id, source_lot_id, qty, doc_id) VALUES (?, ?, ?, ?)').run(link.lot_id, lotId, q, ctx.doc.id);
+      }
+      db.prepare('UPDATE neg_links SET open_qty = ? WHERE id = ?').run(r3(link.open_qty - q), link.id);
+      if (link.lot_id && !db.prepare(`SELECT 1 FROM neg_links WHERE lot_id = ? AND open_qty > ${EPS}`).get(link.lot_id)) {
+        db.prepare('UPDATE lots SET provisional = 0 WHERE id = ? AND (shift_id IS NULL OR shift_id NOT IN (SELECT id FROM prod_shifts WHERE status <> ?))').run(link.lot_id, 'closed');
+      }
+      left = r3(left - q);
+    }
+  }
+  pnl(db, ctx, 'cost_variance', gap, `${productName(db, productId)}: manfiy qoldiq yopildi`);
+}
+
+// Something was made (lot `lotId`, or a share of it) from stock taken below zero:
+// remember it, so the real cost reaches that lot when the shortage is settled.
+export function linkNegative(db, ctx, chunk, lotId, share = 1) {
+  if (chunk.lotId || !chunk.h?.warehouseId || !(chunk.qty > EPS)) return;
+  const q = r3(chunk.qty * share);
+  if (!(q > EPS)) return;
+  db.prepare('INSERT INTO neg_links (warehouse_id, product_id, qty, open_qty, est_cost, lot_id, doc_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(chunk.h.warehouseId, chunk.productId, q, q, r2(chunk.cost * share), lotId, ctx.doc.id);
+  db.prepare('UPDATE lots SET provisional = 1 WHERE id = ?').run(lotId);
+}
+
+// Change a lot's cost by `amount`: the part still on hand is revalued where it is,
+// the part already used is passed to the lots made from it, and the part that left
+// the company (sold, written off) becomes a cost variance.
+export function revalueLot(db, ctx, lotId, amount, depth = 0) {
+  if (Math.abs(amount) < 0.005 || depth > 20) return;
+  const lot = db.prepare('SELECT * FROM lots WHERE id = ?').get(lotId);
+  const qty0 = lot.qty0 ?? db.prepare('SELECT COALESCE(MAX(qty), 0) AS q FROM stock_moves WHERE lot_id = ? AND doc_id = ?').get(lotId, lot.doc_id).q;
+  if (!(qty0 > EPS)) { pnl(db, ctx, 'cost_variance', amount, `Partiya ${lot.number}`); return; }
+  const per = amount / qty0;
+  const onHand = db.prepare(`SELECT warehouse_id, holder_id, SUM(qty) AS q FROM stock_moves WHERE lot_id = ? GROUP BY warehouse_id, holder_id HAVING SUM(qty) > ${EPS}`).all(lotId);
+  const children = db.prepare('SELECT lot_id, SUM(qty) AS q FROM lot_sources WHERE source_lot_id = ? GROUP BY lot_id').all(lotId);
+  let rest = amount;
+  for (const x of onHand) {
+    const c = r2(per * x.q);
+    insertMove(db, ctx, { productId: lot.product_id, lotId, h: x.warehouse_id ? { warehouseId: x.warehouse_id } : { userId: x.holder_id }, qty: 0, cost: c, kind: 'reval' });
+    rest -= c;
+  }
+  for (const ch of children) {
+    const c = r2(per * ch.q);
+    revalueLot(db, ctx, ch.lot_id, c, depth + 1);
+    rest -= c;
+  }
+  if (Math.abs(rest) >= 0.005) pnl(db, ctx, 'cost_variance', rest, `Partiya ${lot.number}: chiqib ketgan qismi`);
+  db.prepare('UPDATE lots SET unit_cost = unit_cost + ? WHERE id = ?').run(per, lotId);
 }
 
 // Move qty from one holder to another, keeping lot identity and cost.
@@ -192,7 +256,7 @@ export function moveStock(db, ctx, { productId, from, to, qty, lineId = null, ki
 }
 
 // After posting: warn about warehouses that went below zero (if they ask for it).
-function negativeAlerts(db, ctx) {
+export function negativeAlerts(db, ctx) {
   for (const key of ctx.touched) {
     const [wh, productId] = key.split(':').map(Number);
     const w = db.prepare('SELECT name, warn_negative FROM warehouses WHERE id = ?').get(wh);
@@ -223,8 +287,9 @@ function cleanLines(db, lines, { needCost = false, allowZero = false } = {}) {
   if (lines.length > 2000) throw new StockError('Juda ko\'p qator');
   return lines.map((l, i) => {
     const productId = Number(l?.productId);
-    const p = Number.isInteger(productId) && db.prepare('SELECT id, name FROM products WHERE id = ?').get(productId);
+    const p = Number.isInteger(productId) && db.prepare('SELECT id, name, has_variants FROM products WHERE id = ?').get(productId);
     if (!p) throw new StockError(`${i + 1}-qator: mahsulot topilmadi`);
+    if (p.has_variants) throw new StockError(`${p.name}: variantini tanlang (masalan "${p.name} / ...")`);
     const qty = r3(l.qty);
     if (!Number.isFinite(qty) || qty < 0 || (!allowZero && qty <= 0)) throw new StockError(`${p.name}: miqdor noto'g'ri`);
     let unitCost = null;
@@ -254,6 +319,7 @@ export function createDoc(db, input, { actor, userId = null }) {
   }
   const from = parseHolder(db, input.from);
   const to = parseHolder(db, input.to);
+  if (from?.userId || to?.userId) throw new StockError("Mahsulot faqat ombor yoki bosqichda turadi — xodim qo'liga topshirish yo'q");
   const date = input.date && !Number.isNaN(Date.parse(input.date)) ? new Date(input.date).toISOString() : nowIso();
   const doc = { type, mode: null, reason_id: null, charge_user: null };
   let lines;

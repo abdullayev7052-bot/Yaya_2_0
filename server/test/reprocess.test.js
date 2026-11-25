@@ -18,11 +18,16 @@ async function plant() {
     jar: await P({ name: 'V idish smetana 400 g', kind: 'pack', unit: 'dona' }),
     back: await P({ name: 'Vozvrat qatiq', kind: 'returned', unit: 'kg' }),
   };
-  const exp = (await call(app, 'POST', '/api/erp/warehouses', b, { name: "Muddati o'tganlar", kind: 'expired' })).body.id;
-  await call(app, 'POST', '/api/erp/docs', b, { type: 'opening', to: { warehouseId: exp }, lines: [{ productId: p.smetana, qty: 17, unitCost: 7000 }] });
-  const tr = (await call(app, 'POST', '/api/erp/docs', b, { type: 'transfer', from: { warehouseId: exp }, to: { userId: id }, lines: [{ productId: p.smetana, qty: 17 }] })).body;
+  // Stage model: the expired goods are in the returns stage ("Vozvrat ombori"); the
+  // reprocessor runs the "Yaroqsiz qayta ishlash" stage; jars go back to the jar warehouse.
+  const stage = (code) => db.prepare('SELECT id FROM warehouses WHERE stage_code = ?').get(code).id;
+  const ret = stage('returns'); const bad = stage('reprocess_bad');
+  ids.ret = ret; ids.bad = bad;
+  ids.pack = (await call(app, 'POST', '/api/erp/warehouses', b, { name: 'Idish ombori', kind: 'pack' })).body.id;
+  await call(app, 'PUT', `/api/erp/prod/stages/${bad}`, b, { keepers: [id] });
+  await call(app, 'PUT', `/api/erp/prod/map/${p.smetana}`, b, { stageIds: [stage('finished'), ret, bad] });
+  await call(app, 'POST', '/api/erp/docs', b, { type: 'opening', to: { warehouseId: ret }, lines: [{ productId: p.smetana, qty: 17, unitCost: 7000 }] });
   const r = await login(app, 'rep', 'pass1234');
-  assert.equal((await call(app, 'POST', `/api/erp/docs/${tr.id}/accept`, r, {})).status, 200);
   const recipe = (await call(app, 'POST', '/api/erp/prod/recipes', b, {
     name: 'Smetana 400 g — qayta ishlash', kind: 'reprocess', productId: p.smetana,
     outputs: [
@@ -30,11 +35,10 @@ async function plant() {
       { productId: p.back, minPerUnit: 0.37, maxPerUnit: 0.45, costValue: 0 },
     ],
   })).body;
-  await call(app, 'POST', '/api/erp/prod/shift', r, {});
   return { app, db, ids, b, r, p, recipe };
 }
 const pnl = (db, code) => db.prepare('SELECT COALESCE(ROUND(SUM(e.amount), 2), 0) a FROM pnl_entries e JOIN pnl_categories c ON c.id = e.category_id WHERE c.code = ?').get(code).a;
-const held = (db, productId, userId) => db.prepare('SELECT ROUND(SUM(qty), 3) q, ROUND(SUM(cost), 2) c FROM stock_moves WHERE product_id = ? AND holder_id = ?').get(productId, userId);
+const held = (db, productId, whId) => db.prepare('SELECT ROUND(SUM(qty), 3) q, ROUND(SUM(cost), 2) c FROM stock_moves WHERE product_id = ? AND warehouse_id = ?').get(productId, whId);
 
 test('reprocessing: containers at a fixed cost, content by netto weight at no cost, missing containers explained, the rest is an expense', async () => {
   const { app, db, ids, r, p, recipe } = await plant();
@@ -54,9 +58,9 @@ test('reprocessing: containers at a fixed cost, content by netto weight at no co
   });
   assert.equal(done.status, 200);
   assert.equal(done.body.task.status, 'done');
-  assert.deepEqual(held(db, p.jar, ids.rep), { q: 14, c: 14 * 800 });
-  assert.deepEqual(held(db, p.back, ids.rep), { q: 6.8, c: 0 });
-  assert.equal(held(db, p.smetana, ids.rep).q, 0);
+  assert.deepEqual(held(db, p.jar, ids.pack), { q: 14, c: 14 * 800 }, 'jars back in the jar warehouse');
+  assert.deepEqual(held(db, p.back, ids.bad), { q: 6.8, c: 0 }, 'content in the reprocessing stage');
+  assert.equal(held(db, p.smetana, ids.ret).q, 0, 'taken from the returns stage');
   assert.equal(pnl(db, 'container_loss'), 3 * 800);
   assert.equal(pnl(db, 'reprocess_loss'), 17 * 7000 - 14 * 800 - 3 * 800);
 });

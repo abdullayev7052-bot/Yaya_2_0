@@ -72,7 +72,8 @@ export function makeGuard(app, db) {
           // and the person still allowed on it (no personal device slot is used).
           const k = db.prepare('SELECT id FROM kiosks WHERE id = ? AND active = 1 AND token_hash IS NOT NULL').get(ksk);
           const listed = db.prepare('SELECT COUNT(*) AS n FROM kiosk_users WHERE kiosk_id = ?').get(ksk)?.n;
-          const allowed = !listed || db.prepare('SELECT 1 FROM kiosk_users WHERE kiosk_id = ? AND user_id = ?').get(ksk, u.id);
+          const allowed = db.prepare('SELECT kiosk FROM users WHERE id = ?').get(u.id)?.kiosk
+            && (!listed || db.prepare('SELECT 1 FROM kiosk_users WHERE kiosk_id = ? AND user_id = ?').get(ksk, u.id));
           if (!k || !allowed) return reply.code(401).send({ error: "Monoblokdan foydalanishga ruxsat yo'q" });
         } else if (!u.is_test && !rec) {
           const slot = db.prepare('SELECT id FROM devices WHERE user_id = ? AND device_id = ?').get(u.id, did ?? '');

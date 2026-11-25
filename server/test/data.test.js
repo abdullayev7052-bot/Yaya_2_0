@@ -143,7 +143,8 @@ test('migrates a v3 database (separate collectors, warehouses, approved shifts) 
   assert.equal(db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name = 'employees'").get().n, 0);
   // The v3 warehouses are gone; the table of that name now is the Yaya 2.0 one, empty.
   assert.ok(db.prepare('PRAGMA table_info(warehouses)').all().some((c) => c.name === 'allow_negative'));
-  assert.equal(db.prepare('SELECT COUNT(*) n FROM warehouses').get().n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM warehouses WHERE is_stage = 0').get().n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM warehouses WHERE is_stage = 1').get().n, 10, 'the production stages are created');
   assert.equal(db.prepare('SELECT COUNT(*) n FROM devices WHERE user_id = ?').get(ali.id).n, 1);
   assert.deepEqual(db.pragma('foreign_key_check'), []);
   const perms = JSON.parse(db.prepare("SELECT permissions FROM roles WHERE code = 'collector'").get().permissions);

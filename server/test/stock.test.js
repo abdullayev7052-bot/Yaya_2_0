@@ -52,20 +52,23 @@ test("accepted milk (yog'li + yog'siz) enters the warehouse as one Xom sut at th
   assert.ok(boot.products.every((p) => p.name.includes('sut')));
 });
 
-test('FIFO: the oldest lot goes first, at its own cost; a hand-over moves only when accepted', async () => {
+test('FIFO: the oldest lot goes first, at its own cost; a hand-over between warehouses moves only when accepted; nothing goes to a person', async () => {
   const { app, db, ids } = setup();
   const { b, fin, smetana } = await base(app, db, ids);
   await opening(app, b, fin, [{ productId: smetana, qty: 10, unitCost: 7000 }], { date: '2026-11-01T08:00:00Z' });
   await opening(app, b, fin, [{ productId: smetana, qty: 10, unitCost: 7600 }], { date: '2026-11-02T08:00:00Z' });
   const s = await store(app);
-
-  // storekeeper hands 12 to Ali; nothing moves until Ali accepts
-  const t = (await call(app, 'POST', '/api/erp/docs', s, { type: 'transfer', uuid: 'tr-1', from: { warehouseId: fin }, to: { userId: ids.ali }, lines: [{ productId: smetana, qty: 12 }] })).body;
+  // Ali keeps the shop warehouse
+  const shop = (await call(app, 'POST', '/api/erp/warehouses', b, { name: "Do'kon ombori", kind: 'general', keepers: [ids.ali] })).body.id;
+  // a hand-over to a person is refused (goods are always in a warehouse or a stage)
+  assert.equal((await call(app, 'POST', '/api/erp/docs', s, { type: 'transfer', from: { warehouseId: fin }, to: { userId: ids.ali }, lines: [{ productId: smetana, qty: 1 }] })).status, 400);
+  // storekeeper hands 12 to the shop; nothing moves until its keeper accepts
+  const t = (await call(app, 'POST', '/api/erp/docs', s, { type: 'transfer', uuid: 'tr-1', from: { warehouseId: fin }, to: { warehouseId: shop }, lines: [{ productId: smetana, qty: 12 }] })).body;
   assert.equal(t.status, 'sent');
   assert.equal(t.total_cost, undefined, 'storekeeper never receives costs');
   assert.equal((await qtyAt(app, b, { warehouseId: fin }))[0].qty, 20);
   // re-sending the same uuid does not create a second document
-  const again = (await call(app, 'POST', '/api/erp/docs', s, { type: 'transfer', uuid: 'tr-1', from: { warehouseId: fin }, to: { userId: ids.ali }, lines: [{ productId: smetana, qty: 12 }] })).body;
+  const again = (await call(app, 'POST', '/api/erp/docs', s, { type: 'transfer', uuid: 'tr-1', from: { warehouseId: fin }, to: { warehouseId: shop }, lines: [{ productId: smetana, qty: 12 }] })).body;
   assert.equal(again.id, t.id);
   // only the receiver (or a manager) may accept
   const acc = await login(app, 'acc', 'acc12345');
@@ -74,27 +77,25 @@ test('FIFO: the oldest lot goes first, at its own cost; a hand-over moves only w
   const role = db.prepare("SELECT id, permissions FROM roles WHERE code = 'collector'").get();
   db.prepare('UPDATE roles SET permissions = ? WHERE id = ?').run(JSON.stringify([...JSON.parse(role.permissions), 'stock.transfer']), role.id);
   const a = await ali(app);
-  const inbox = (await call(app, 'GET', '/api/erp/inbox', a)).body;
-  assert.equal(inbox.length, 1);
+  assert.equal((await call(app, 'GET', '/api/erp/inbox', a)).body.length, 1);
   assert.equal((await call(app, 'POST', `/api/erp/docs/${t.id}/accept`, a, {})).status, 200);
-
   const fRows = await qtyAt(app, b, { warehouseId: fin });
   assert.equal(fRows[0].qty, 8);
   assert.equal(fRows[0].cost, 8 * 7600, 'the older 7000 lot is gone first');
   const mine = (await call(app, 'GET', '/api/erp/stock/mine', a)).body;
-  assert.equal(mine.mine[0].qty, 12);
-  assert.equal(mine.mine[0].cost, undefined, 'no costs for staff');
-  const adminView = await qtyAt(app, b, { userId: ids.ali });
-  assert.equal(adminView[0].cost, 10 * 7000 + 2 * 7600, 'admin sees the sums');
-  // Ali hands it back; a rejected hand-over moves nothing
-  const back = (await call(app, 'POST', '/api/erp/docs', a, { type: 'transfer', from: { userId: ids.ali }, to: { warehouseId: fin }, lines: [{ productId: smetana, qty: 2 }] })).body;
+  assert.deepEqual(mine.mine, [], 'nothing in hands');
+  assert.equal(mine.warehouses[0].rows[0].qty, 12);
+  assert.equal(mine.warehouses[0].rows[0].cost, undefined, 'no costs for staff');
+  assert.equal((await qtyAt(app, b, { warehouseId: shop }))[0].cost, 10 * 7000 + 2 * 7600, 'admin sees the sums');
+  // Ali hands 2 back; a rejected hand-over moves nothing
+  const back = (await call(app, 'POST', '/api/erp/docs', a, { type: 'transfer', from: { warehouseId: shop }, to: { warehouseId: fin }, lines: [{ productId: smetana, qty: 2 }] })).body;
   assert.equal((await call(app, 'POST', `/api/erp/docs/${back.id}/reject`, s, { reason: 'Sanoq mos emas' })).status, 200);
-  assert.equal((await call(app, 'GET', '/api/erp/stock/mine', a)).body.mine[0].qty, 12);
+  assert.equal((await qtyAt(app, b, { warehouseId: shop }))[0].qty, 12);
   // Ali cannot hand over goods from a warehouse he does not keep
-  assert.equal((await call(app, 'POST', '/api/erp/docs', a, { type: 'transfer', from: { warehouseId: fin }, to: { userId: ids.ali }, lines: [{ productId: smetana, qty: 1 }] })).status, 403);
-  // and cannot hand over more than he holds
-  const tooMuch = await call(app, 'POST', '/api/erp/docs', a, { type: 'transfer', from: { userId: ids.ali }, to: { warehouseId: fin }, lines: [{ productId: smetana, qty: 13 }] });
-  assert.equal(tooMuch.status, 200, 'sending is allowed; the check happens on acceptance');
+  assert.equal((await call(app, 'POST', '/api/erp/docs', a, { type: 'transfer', from: { warehouseId: fin }, to: { warehouseId: shop }, lines: [{ productId: smetana, qty: 1 }] })).status, 403);
+  // and cannot hand over more than there is: sending is allowed, the check happens on acceptance
+  const tooMuch = await call(app, 'POST', '/api/erp/docs', a, { type: 'transfer', from: { warehouseId: shop }, to: { warehouseId: fin }, lines: [{ productId: smetana, qty: 13 }] });
+  assert.equal(tooMuch.status, 200);
   const fail = await call(app, 'POST', `/api/erp/docs/${tooMuch.body.id}/accept`, s, {});
   assert.equal(fail.status, 400);
   assert.match(fail.body.error, /yetarli emas/);
@@ -263,6 +264,15 @@ test('Excel: products and opening stock are checked first, then imported', async
   const q = db.prepare("SELECT * FROM products WHERE name = 'Qatiq 0,5 kg'").get();
   assert.equal(q.kind, 'finished');
   assert.equal(q.netto_g, 500);
+  // variants in one cell: a parent and its variants, each a product of its own
+  const vf = await xlsx([['Nomi (majburiy)', 'Turi', 'Birlik', 'Variantlar (vergul bilan)'], ['Zakvaska', 'Xomashyo', 'g', '499, 505']]);
+  assert.equal((await call(app, 'POST', '/api/erp/import/products', b, { file: vf, dryRun: false })).body.ok, true);
+  assert.equal(db.prepare("SELECT has_variants FROM products WHERE name = 'Zakvaska'").get().has_variants, 1);
+  assert.deepEqual(db.prepare("SELECT name, unit FROM products WHERE parent_id = (SELECT id FROM products WHERE name = 'Zakvaska') ORDER BY id").all(),
+    [{ name: 'Zakvaska / 499', unit: 'g' }, { name: 'Zakvaska / 505', unit: 'g' }]);
+  // an existing product without variants cannot get them
+  const bad = await xlsx([['Nomi (majburiy)', 'Turi', 'Birlik', 'Variantlar (vergul bilan)'], ["Tomizg'i", 'Xomashyo', 'kg', 'A']]);
+  assert.equal((await call(app, 'POST', '/api/erp/import/products', b, { file: bad })).body.ok, false);
 
   await call(app, 'POST', '/api/erp/warehouses', b, { name: 'Tayyor mahsulot ombori', kind: 'finished', keepers: [ids.store] });
   const op = await xlsx([['Ombor (majburiy)', 'Mahsulot (majburiy)', 'Miqdor (majburiy)', 'Tannarx (1 birlik, so\'m)', 'Yaroqlilik sanasi'],

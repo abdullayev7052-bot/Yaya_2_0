@@ -31,30 +31,34 @@ const REPORTS = {
     },
   },
   production_by_worker: {
-    title: 'Ishlab chiqarish — xodimlar bo\'yicha',
+    title: "Ishlab chiqarish — xodimlar bo'yicha",
     run(db, { from, to }) {
+      // One column per stage: how many tasks each person took part in there.
+      const stages = db.prepare('SELECT id, name FROM warehouses WHERE is_stage = 1 ORDER BY sort, id').all();
+      const blank = () => ({ tasks: 0, units: 0, milk: 0, ...Object.fromEntries(stages.map((st) => [`s${st.id}`, 0])) });
       const map = new Map();
-      for (const t of db.prepare(`SELECT t.*, r.kind, s.user_id FROM prod_tasks t JOIN recipes r ON r.id = t.recipe_id JOIN prod_shifts s ON s.id = t.shift_id
-        WHERE t.status = 'done' AND ${day('t.done_at')} BETWEEN ? AND ?`).all(from, to)) {
+      for (const t of db.prepare(`SELECT t.* FROM prod_tasks t WHERE t.status = 'done' AND ${day('t.done_at')} BETWEEN ? AND ?`).all(from, to)) {
         const res = J(t.result);
-        const people = res.workers?.length ? res.workers : [t.user_id];
+        const people = res.workers?.length ? res.workers : [t.user_id ?? db.prepare('SELECT user_id FROM prod_shifts WHERE id = ?').get(t.shift_id)?.user_id].filter(Boolean);
         const units = (res.outputs ?? []).reduce((a, o) => a + (o.qty ?? 0), 0);
         for (const u of people) {
-          const r = map.get(u) ?? { tasks: 0, cook: 0, pour: 0, cap: 0, reprocess: 0, units: 0, milk: 0 };
-          r.tasks += 1; r[t.kind === 'separation' ? 'cook' : t.kind] += 1; r.units += units / people.length; r.milk += (t.milk_qty ?? 0) / people.length;
+          const r = map.get(u) ?? blank();
+          r.tasks += 1; if (t.stage_id) r[`s${t.stage_id}`] = (r[`s${t.stage_id}`] ?? 0) + 1;
+          r.units += units / people.length; r.milk += (t.milk_qty ?? 0) / people.length;
           map.set(u, r);
         }
       }
       const wages = new Map(db.prepare(`SELECT e.party_id, -SUM(e.amount) AS w FROM party_entries e JOIN docs d ON d.id = e.doc_id
-        WHERE e.party_type = 'staff' AND d.type = 'production' AND ${day('e.at')} BETWEEN ? AND ? GROUP BY e.party_id`).all(from, to).map((x) => [x.party_id, x.w]));
+        WHERE e.party_type = 'staff' AND d.type IN ('production','stage_move') AND e.kind IN ('piece','reversal') AND ${day('e.at')} BETWEEN ? AND ? GROUP BY e.party_id`).all(from, to).map((x) => [x.party_id, x.w]));
+      const used = stages.filter((st) => [...map.values()].some((r) => r[`s${st.id}`] > 0));
       const rows = [...new Set([...map.keys(), ...wages.keys()])].map((id) => {
-        const r = map.get(id) ?? { tasks: 0, cook: 0, pour: 0, cap: 0, reprocess: 0, units: 0, milk: 0 };
-        return { worker: holderName(db, { userId: id }), tasks: r.tasks, cook: r.cook, pour: r.pour, cap: r.cap, reprocess: r.reprocess, milk: r3(r.milk), units: r3(r.units), wages: r2(wages.get(id) ?? 0) };
+        const r = map.get(id) ?? blank();
+        return { worker: holderName(db, { userId: id }), tasks: r.tasks, ...Object.fromEntries(used.map((st) => [`s${st.id}`, r[`s${st.id}`]])), milk: r3(r.milk), units: r3(r.units), wages: r2(wages.get(id) ?? 0) };
       }).sort((a, b) => b.tasks - a.tasks);
       return {
-        columns: [C('worker', 'Xodim'), C('tasks', 'Topshiriq', 'qty'), C('cook', 'Quyma/separatsiya', 'qty'), C('pour', 'Quyish', 'qty'), C('cap', 'Qopqoq', 'qty'), C('reprocess', 'Qayta ishlash', 'qty'),
+        columns: [C('worker', 'Xodim'), C('tasks', 'Topshiriq', 'qty'), ...used.map((st) => C(`s${st.id}`, st.name, 'qty')),
           C('milk', 'Sut, kg', 'qty'), C('units', 'Chiqim (ulushi)', 'qty'), C('wages', 'Ishbay haq', 'money')],
-        rows, totals: sumOf(rows, ['tasks', 'milk', 'wages']), note: 'Bir topshiriqni bir necha kishi bajargan bo\'lsa, chiqim va sut ulushi teng bo\'linadi.',
+        rows, totals: sumOf(rows, ['tasks', 'milk', 'wages']), note: "Bir ishni bir necha kishi bajargan bo'lsa, chiqim, sut va ish haqi teng bo'linadi.",
       };
     },
   },

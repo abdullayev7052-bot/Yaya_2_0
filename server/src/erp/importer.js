@@ -22,10 +22,11 @@ const KINDS = {
       { key: 'volume_unit', header: 'Hajm birligi', width: 12 },
       { key: 'shape', header: 'Shakl', width: 14 },
       { key: 'shelf_life_hours', header: 'Yaroqlilik (soat)', width: 16 },
-      { key: 'dwell_hours', header: 'Turish vaqti (soat)', width: 18 },
+      { key: 'variants', header: 'Variantlar (vergul bilan)', width: 24 },
     ],
     samples: [
-      { name: 'Smetana 20% 400 g', kind: 'Tayyor mahsulot', unit: 'dona', netto_g: 400, brutto_g: 425, volume: 0.0005, volume_unit: 'm3', shape: 'Dumaloq', shelf_life_hours: 168, dwell_hours: 6 },
+      { name: 'Smetana 20% 400 g', kind: 'Tayyor mahsulot', unit: 'dona', netto_g: 400, brutto_g: 425, volume: 0.0005, volume_unit: 'm3', shape: 'Dumaloq', shelf_life_hours: 168 },
+      { name: 'Zakvaska', kind: 'Xomashyo', unit: 'g', variants: '499, 505' },
       { name: 'V idish smetana 20% 400 g', kind: 'Idish / tara', unit: 'dona', brutto_g: 25, shape: 'Dumaloq' },
       { name: 'Tomizg\'i', kind: 'Xomashyo', unit: 'kg' },
     ],
@@ -156,14 +157,18 @@ function checkProducts(db, rows) {
     if (shape === undefined) { errors.push({ row: r.row, error: `Shakl noma'lum: "${text(r.shape)}"` }); continue; }
     const nums = {};
     let bad = null;
-    for (const k of ['netto_g', 'brutto_g', 'volume', 'shelf_life_hours', 'dwell_hours']) {
+    for (const k of ['netto_g', 'brutto_g', 'volume', 'shelf_life_hours']) {
       const n = number(r[k]);
       if (Number.isNaN(n) || (n != null && n < 0)) { bad = k; break; }
       nums[k] = n;
     }
     if (bad) { errors.push({ row: r.row, error: `${KINDS.products.columns.find((c) => c.key === bad).header}: son emas` }); continue; }
-    const existing = db.prepare('SELECT id FROM products WHERE lower(name) = lower(?)').get(name);
-    out.push({
+    const existing = db.prepare('SELECT id, has_variants FROM products WHERE lower(name) = lower(?)').get(name);
+    // Variants ("499, 505"): a new product becomes their parent; an existing one must
+    // already be variant-based (that is chosen once, when the product is created).
+    const variants = [...new Set(text(r.variants).split(',').map((v) => v.trim().slice(0, 40)).filter(Boolean))];
+    if (variants.length && existing && !existing.has_variants) { errors.push({ row: r.row, error: `"${name}" variantli emas — variantni faqat yangi mahsulotga qo'shish mumkin` }); continue; }
+    out.push({ variants,
       row: r.row, action: existing ? 'update' : 'create', id: existing?.id ?? null, name,
       kind: kind ?? (existing ? null : 'finished'), unit: text(r.unit).slice(0, 10) || null, sku: text(r.sku).slice(0, 40) || null,
       barcode: text(r.barcode).slice(0, 40) || null, category: text(r.category).slice(0, 60) || null,
@@ -203,16 +208,22 @@ export async function erpImport(db, kind, buffer, { dryRun = true, actor, userId
   const docs = [];
   db.transaction(() => {
     if (kind === 'products') {
-      const ins = db.prepare(`INSERT INTO products (name, kind, unit, sku, barcode, category, netto_g, brutto_g, volume, volume_unit, shape, shelf_life_hours, dwell_hours)
-        VALUES (@name, @kind, COALESCE(@unit, 'kg'), @sku, @barcode, @category, @netto_g, @brutto_g, @volume, @volume_unit, @shape, @shelf_life_hours, @dwell_hours)`);
+      const ins = db.prepare(`INSERT INTO products (name, kind, unit, sku, barcode, category, netto_g, brutto_g, volume, volume_unit, shape, shelf_life_hours, has_variants)
+        VALUES (@name, @kind, COALESCE(@unit, 'kg'), @sku, @barcode, @category, @netto_g, @brutto_g, @volume, @volume_unit, @shape, @shelf_life_hours, @has_variants)`);
+      const insV = db.prepare(`INSERT INTO products (name, kind, unit, category, netto_g, brutto_g, volume, volume_unit, shape, shelf_life_hours, parent_id, variant)
+        SELECT ?, kind, unit, category, netto_g, brutto_g, volume, volume_unit, shape, shelf_life_hours, id, ? FROM products WHERE id = ?`);
       const upd = db.prepare(`UPDATE products SET kind = COALESCE(@kind, kind), unit = COALESCE(@unit, unit), sku = COALESCE(@sku, sku), barcode = COALESCE(@barcode, barcode),
         category = COALESCE(@category, category), netto_g = COALESCE(@netto_g, netto_g), brutto_g = COALESCE(@brutto_g, brutto_g), volume = COALESCE(@volume, volume),
-        volume_unit = COALESCE(@volume_unit, volume_unit), shape = COALESCE(@shape, shape), shelf_life_hours = COALESCE(@shelf_life_hours, shelf_life_hours),
-        dwell_hours = COALESCE(@dwell_hours, dwell_hours) WHERE id = @id`);
+        volume_unit = COALESCE(@volume_unit, volume_unit), shape = COALESCE(@shape, shape), shelf_life_hours = COALESCE(@shelf_life_hours, shelf_life_hours) WHERE id = @id`);
       for (const p of out) {
-        const { row, action, ...data } = p;
+        const { row, action, variants, ...data } = p;
         void row;
-        if (action === 'create') ins.run(data); else upd.run(data);
+        let id = data.id;
+        if (action === 'create') { const { id: _x, ...d } = data; void _x; id = Number(ins.run({ ...d, has_variants: variants.length ? 1 : 0 }).lastInsertRowid); } else upd.run(data);
+        for (const v of variants) {
+          const vname = `${data.name} / ${v}`;
+          if (!db.prepare('SELECT 1 FROM products WHERE lower(name) = lower(?)').get(vname)) insV.run(vname, v, id);
+        }
       }
     } else {
       const byWh = new Map();

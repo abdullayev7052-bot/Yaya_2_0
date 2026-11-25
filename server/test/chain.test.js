@@ -5,9 +5,10 @@ import { setup, call, login, ali, boss, runShift } from './helpers.js';
 import { roleIdByCode, ensureDeviceSlots } from '../src/db/index.js';
 import { runChecks } from '../src/erp/watch.js';
 
-// The whole chain on one database: milk collection → raw milk warehouse →
-// technologist (cook, boiling loss) → pouring → incubator → capping → finished
-// goods → expired goods to reprocessing → finance → reports. At the end the
+// The whole chain on one database, on the stage model: milk collection → raw milk
+// warehouse → production stage (cook, boiling loss) → pouring → incubator → cold
+// room → capping → finished goods → returns → reprocessing → finance → reports.
+// At the end the
 // books must balance:
 //
 //   stock value now = what came in (opening, milk, purchases) + piece wages
@@ -33,20 +34,23 @@ test('whole chain: every step works together and the books balance', async () =>
 
   // ---- master data
   const W = async (body) => (await post(b, '/api/erp/warehouses', body)).id;
-  const raw = await W({ name: 'Xom sut ombori', kind: 'raw_milk', allowNegative: true, keepers: [u.keep] });
-  const pack = await W({ name: 'Idish ombori', kind: 'pack', keepers: [u.keep] });
-  const inc = await W({ name: 'Issiqxona', kind: 'incubator', keepers: [u.keep] });
-  const fin = await W({ name: 'Tayyor mahsulot', kind: 'finished', keepers: [u.keep] });
-  const exp = await W({ name: "Muddati o'tganlar", kind: 'expired', keepers: [u.keep] });
+  const raw = await W({ name: 'Xom sut ombori', kind: 'raw_milk', allowNegative: true, keepers: [u.keep, u.tech] });
+  const pack = await W({ name: 'Idish ombori', kind: 'pack', keepers: [u.keep, u.pour] });
+  // stages: who runs which
+  const S = Object.fromEntries((await ok(call(app, 'GET', '/api/erp/prod/stages', b), 'stages')).map((x) => [x.code, x.id]));
+  const runBy = { produce: [u.tech], pour: [u.pour], incubator: [u.pour], cold: [u.keep], cap: [u.cap], finished: [u.keep], returns: [u.keep], reprocess_bad: [u.rep] };
+  for (const [code, list] of Object.entries(runBy)) await ok(call(app, 'PUT', `/api/erp/prod/stages/${S[code]}`, b, { keepers: list }), code);
+  await ok(call(app, 'PUT', `/api/erp/prod/stages/${S.cap}`, b, { pieceRate: 90 }), 'cap rate');
+  const fin = S.finished;
   await ok(call(app, 'PUT', '/api/erp/settings/milk-warehouse', b, { warehouseId: raw }), 'milk warehouse');
   const P = async (body) => (await post(b, '/api/erp/products', body)).id;
   const p = {
     siyro: await P({ name: '5% siyro', kind: 'semi', unit: 'kg' }),
-    jar: await P({ name: 'V idish 400 g', kind: 'pack', unit: 'dona' }),
-    lid: await P({ name: 'Qopqoq', kind: 'pack', unit: 'dona' }),
+    jar: await P({ name: 'V idish 400 g (qopqoq bilan)', kind: 'pack', unit: 'dona' }),
     qatiq: await P({ name: '5% qatiq 400 g', kind: 'finished', unit: 'dona', netto_g: 400, dwell_hours: 6 }),
     back: await P({ name: 'Vozvrat qatiq', kind: 'returned', unit: 'kg' }),
   };
+  await ok(call(app, 'PUT', `/api/erp/prod/map/${p.qatiq}`, b, { stageIds: ['produce', 'pour', 'incubator', 'cold', 'cap', 'finished', 'returns', 'reprocess_bad'].map((c) => S[c]) }), 'map');
 
   // ---- 1. milk collection: 60 + 40 kg yog'li, 20 kg yog'siz → 120 kg "Xom sut"
   const a = await ali(app);
@@ -56,69 +60,43 @@ test('whole chain: every step works together and the books balance', async () =>
   const milkId = db.prepare("SELECT id FROM products WHERE kind = 'raw_milk'").get().id;
   assert.equal(db.prepare('SELECT ROUND(SUM(qty), 3) q FROM stock_moves WHERE product_id = ? AND warehouse_id = ?').get(milkId, raw).q, 120);
 
-  // ---- 2. a vendor sells us jars and lids (half paid)
+  // ---- 2. a vendor sells us jars (a jar and its lid as one pair; half paid)
   const main = db.prepare('SELECT id FROM cashboxes WHERE is_main = 1').get().id;
   await post(b, '/api/erp/finance/cash-openings', { cashboxId: main, amount: 1000000 });
   const v = (await post(b, '/api/erp/finance/vendors', { name: 'Plastik' })).id;
-  await post(b, '/api/erp/finance/purchases', { vendorId: v, warehouseId: pack, lines: [{ productId: p.jar, qty: 300, price: 800 }, { productId: p.lid, qty: 300, price: 100 }], paid: 135000, cashboxId: main });
+  await post(b, '/api/erp/finance/purchases', { vendorId: v, warehouseId: pack, lines: [{ productId: p.jar, qty: 300, price: 900 }], paid: 135000, cashboxId: main });
 
-  // ---- 3. technologist: 100 kg milk → 98 kg quyma; 20 kg left: 18 returned, 2 boiled away
-  // The one holding the goods hands them over: the keeper from a warehouse, a person from their hands.
-  const holderToken = (h) => (h.warehouseId ? T.keep : Object.entries(u).find(([, id]) => id === h.userId) && T[Object.entries(u).find(([, id]) => id === h.userId)[0]]);
-  const give = async (from, to, lines, receiver) => {
-    const d = await post(holderToken(from), '/api/erp/docs', { type: 'transfer', from, to, lines }, 'hand over');
-    await post(receiver, `/api/erp/docs/${d.id}/accept`, {}, 'accept hand-over');
-  };
-  await give({ warehouseId: raw }, { userId: u.tech }, [{ productId: milkId, qty: 120 }], T.tech);
+  // ---- 3. production stage: 100 kg milk (straight from the raw-milk warehouse) → 98 kg quyma;
+  // at the end 18 kg counted in the tank, 2 kg boiled away
   const cook = await post(b, '/api/erp/prod/recipes', { name: '5% siyro', kind: 'cook', productId: p.siyro, outMin: 95, outMax: 101, lines: [{ productId: milkId, qty: 100 }] });
-  await post(T.tech, '/api/erp/prod/shift', {});
   const t1 = await post(T.tech, '/api/erp/prod/tasks', { recipeId: cook.id, milkQty: 100 });
   await post(T.tech, `/api/erp/prod/tasks/${t1.id}/complete`, { outputQty: 98 });
   const boil = db.prepare("SELECT id FROM stock_reasons WHERE section = 'tech' AND name = 'Qaynatishda'").get().id;
   const ts = (await ok(call(app, 'GET', '/api/erp/prod/shift', T.tech), 'my shift')).shift;
-  await post(T.tech, `/api/erp/prod/shifts/${ts.id}/close`, { returned: 18, returnTo: raw, losses: [{ reasonId: boil, qty: 2 }] }, 'close tech shift');
-  const back18 = db.prepare("SELECT id FROM docs WHERE type = 'transfer' AND status = 'sent' AND to_wh = ?").get(raw).id;
-  await post(T.keep, `/api/erp/docs/${back18}/accept`, {}, 'milk back to the warehouse');
+  await post(T.tech, `/api/erp/prod/shifts/${ts.id}/close`, { milkLeft: 18, losses: [{ reasonId: boil, qty: 2 }] }, 'close tech shift');
 
-  // ---- 4. pouring 240 jars (0.4 kg + jar), two people, straight to the incubator
-  await give({ userId: u.tech }, { userId: u.pour }, [{ productId: p.siyro, qty: 98 }], T.pour);
-  await give({ warehouseId: pack }, { userId: u.pour }, [{ productId: p.jar, qty: 250 }], T.pour);
+  // ---- 4. pouring 240 jars (0.4 kg + jar) by two people: the quyma from the production
+  // stage and the jars from the jar warehouse are taken by themselves
   const pourR = await post(b, '/api/erp/prod/recipes', { name: 'quyish', kind: 'pour', productId: p.qatiq, lines: [{ productId: p.siyro, qty: 0.4 }, { productId: p.jar, qty: 1 }], rates: [{ name: 'Quyish', amount: 170 }] });
-  await post(T.pour, '/api/erp/prod/shift', {});
   const t2 = await post(T.pour, '/api/erp/prod/tasks', { recipeId: pourR.id, units: 240 });
-  await post(T.pour, `/api/erp/prod/tasks/${t2.id}/complete`, { workers: [u.pour, u.cap], sendTo: { warehouseId: inc } });
-  const toInc = db.prepare("SELECT id FROM docs WHERE type = 'transfer' AND status = 'sent' AND to_wh = ?").get(inc).id;
-  await post(T.keep, `/api/erp/docs/${toInc}/accept`, {});
-  // leftover 2 kg of quyma goes back to the technologist... as a spill by the pourer's fault
+  await post(T.pour, `/api/erp/prod/tasks/${t2.id}/complete`, { workers: [u.pour, u.cap] });
+  // 2 kg of quyma left in the production stage: spilt, the technologist pays
   const spill = db.prepare("SELECT id FROM stock_reasons WHERE section = 'warehouse' AND charge = 'staff'").get().id;
-  await post(T.pour, '/api/erp/docs', { type: 'writeoff', from: { userId: u.pour }, reasonId: spill, lines: [{ productId: p.siyro, qty: 2 }] }, 'spill');
-  // 7 hours in the incubator → alert, then out to the capper
-  db.prepare('UPDATE stock_moves SET at = datetime(\'now\', \'-7 hours\') WHERE warehouse_id = ?').run(inc);
-  runChecks(db);
-  assert.equal(db.prepare("SELECT COUNT(*) n FROM alerts WHERE type = 'dwell.over' AND resolved_at IS NULL").get().n, 1);
-  await give({ warehouseId: inc }, { userId: u.cap }, [{ productId: p.qatiq, qty: 240 }], T.cap);
-  await give({ warehouseId: pack }, { userId: u.cap }, [{ productId: p.lid, qty: 240 }], T.cap);
-  runChecks(db);
-  assert.equal(db.prepare("SELECT COUNT(*) n FROM alerts WHERE type = 'dwell.over' AND resolved_at IS NULL").get().n, 0);
+  await post(T.tech, '/api/erp/docs', { type: 'writeoff', from: { warehouseId: S.produce }, reasonId: spill, chargeUserId: u.tech, lines: [{ productId: p.siyro, qty: 2 }] }, 'spill');
 
-  // ---- 5. capping → finished goods
-  const capR = await post(b, '/api/erp/prod/recipes', { name: 'qopqoq', kind: 'cap', productId: p.qatiq, lines: [{ productId: p.qatiq, qty: 1 }, { productId: p.lid, qty: 1 }], rates: [{ name: 'Qopqoq', amount: 90 }] });
-  await post(T.cap, '/api/erp/prod/shift', {});
-  const t3 = await post(T.cap, '/api/erp/prod/tasks', { recipeId: capR.id, units: 240 });
-  await post(T.cap, `/api/erp/prod/tasks/${t3.id}/complete`, { sendTo: { warehouseId: fin } });
-  const toFin = db.prepare("SELECT id FROM docs WHERE type = 'transfer' AND status = 'sent' AND to_wh = ?").get(fin).id;
-  await post(T.keep, `/api/erp/docs/${toFin}/accept`, {});
+  // ---- 5. incubator → cold room → capping (90 per jar) → finished goods
+  await post(T.pour, '/api/erp/prod/moves', { stageId: S.incubator, productId: p.qatiq, qty: 240 }, 'incubator');
+  await post(T.keep, '/api/erp/prod/moves', { stageId: S.cold, productId: p.qatiq, qty: 240 }, 'cold room');
+  await post(T.cap, '/api/erp/prod/moves', { stageId: S.cap, productId: p.qatiq, qty: 240 }, 'capping');
+  await post(T.keep, '/api/erp/prod/moves', { stageId: S.finished, productId: p.qatiq, qty: 240 }, 'finished');
 
-  // ---- 6. 10 jars went past their date: an ordinary hand-over to the expired store
-  // (sales and returns are out of Yaya 2.0 for now)
-  await give({ warehouseId: fin }, { warehouseId: exp }, [{ productId: p.qatiq, qty: 10 }], T.keep);
-  assert.equal(db.prepare('SELECT ROUND(SUM(qty), 3) q FROM stock_moves WHERE product_id = ? AND warehouse_id = ?').get(p.qatiq, exp).q, 10);
+  // ---- 6. 10 jars went past their date: into the returns stage
+  await post(T.keep, '/api/erp/prod/moves', { stageId: S.returns, productId: p.qatiq, qty: 10 }, 'returns');
+  assert.equal(db.prepare('SELECT ROUND(SUM(qty), 3) q FROM stock_moves WHERE product_id = ? AND warehouse_id = ?').get(p.qatiq, S.returns).q, 10);
 
   // ---- 7. reprocessing the 10 expired jars: 9 jars back, 1 broken; 4 kg of content
-  await give({ warehouseId: exp }, { userId: u.rep }, [{ productId: p.qatiq, qty: 10 }], T.rep);
   const repR = await post(b, '/api/erp/prod/recipes', { name: 'qayta', kind: 'reprocess', productId: p.qatiq,
     outputs: [{ productId: p.jar, perUnit: 1, costValue: 800, isContainer: true }, { productId: p.back, minPerUnit: 0.37, maxPerUnit: 0.45, costValue: 0 }] });
-  await post(T.rep, '/api/erp/prod/shift', {});
   const t4 = await post(T.rep, '/api/erp/prod/tasks', { recipeId: repR.id, units: 10 });
   const broken = db.prepare("SELECT id FROM stock_reasons WHERE section = 'reprocess' AND name = 'Singan'").get().id;
   await post(T.rep, `/api/erp/prod/tasks/${t4.id}/complete`, { outputs: [{ productId: p.jar, qty: 9 }], shortfall: [{ reasonId: broken, qty: 1 }] });
@@ -179,6 +157,7 @@ test('whole chain: every step works together and the books balance', async () =>
     '/api/erp/meta', '/api/erp/stock/mine', '/api/erp/docs', '/api/erp/inbox', '/api/erp/products', '/api/erp/warehouses', '/api/erp/reasons', '/api/erp/overview', '/api/erp/alerts/mine',
     `/api/erp/stock?warehouseId=${fin}`, `/api/erp/stock/lots?warehouseId=${fin}&productId=${p.qatiq}`,
     '/api/erp/prod/shift', '/api/erp/prod/shifts', '/api/erp/prod/recipes', '/api/erp/prod/recipes?mine=1',
+    '/api/erp/prod/board', '/api/erp/prod/stages', '/api/erp/prod/journal', `/api/erp/prod/map/${p.qatiq}`,
     ...docIds.map((id) => `/api/erp/docs/${id}`), ...taskIds.map((id) => `/api/erp/prod/tasks/${id}`), ...shiftIds.map((id) => `/api/erp/prod/shifts/${id}`),
     ...['production_by_product', 'stock_movement', 'losses', 'expiry'].map((k) => `/api/erp/reports/${k}?from=2026-01-01&to=${today}`),
   ];

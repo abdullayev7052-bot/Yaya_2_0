@@ -6,9 +6,11 @@ const K = '/api/kiosk';
 const kh = (token) => ({ 'x-kiosk-token': token });
 
 test('monoblock: paired once with a one-time code; people sign in with name + PIN, no device slot; revoking stops it', async () => {
-  const { app, ids } = setup();
+  const { app, db, ids } = setup();
   const b = await boss(app);
-  const id = (await call(app, 'POST', `${K}/admin`, b, { name: 'Sex monobloki', idleMinutes: 3, users: [ids.store, ids.ali] })).body.id;
+  // only people marked "uses the monoblock" appear there (the accountant is not)
+  db.prepare('UPDATE users SET kiosk = 1 WHERE id IN (?, ?)').run(ids.store, ids.ali);
+  const id = (await call(app, 'POST', `${K}/admin`, b, { name: 'Sex monobloki', idleMinutes: 3, users: [ids.store, ids.ali, ids.acc] })).body.id;
   const code = (await call(app, 'POST', `${K}/admin/${id}/code`, b)).body.code;
   assert.match(code, /^\d{6}$/);
   assert.equal((await call(app, 'POST', `${K}/pair`, {}, { code: '000000' === code ? '111111' : '000000' })).status, 400);
@@ -46,8 +48,11 @@ test('monoblock: paired once with a one-time code; people sign in with name + PI
 });
 
 test('a person sets their own PIN from the phone with their password', async () => {
-  const { app } = setup();
+  const { app, db, ids } = setup();
   const s = await login(app, 'store', 'store123');
+  // not marked for the monoblock: no PIN needed
+  assert.equal((await call(app, 'PUT', `${K}/my-pin`, s, { pin: '5678', password: 'store123' })).status, 403);
+  db.prepare('UPDATE users SET kiosk = 1 WHERE id = ?').run(ids.store);
   assert.equal((await call(app, 'PUT', `${K}/my-pin`, s, { pin: '5678', password: 'wrong' })).status, 400);
   assert.equal((await call(app, 'PUT', `${K}/my-pin`, s, { pin: '56', password: 'store123' })).status, 400);
   assert.equal((await call(app, 'PUT', `${K}/my-pin`, s, { pin: '5678', password: 'store123' })).status, 200);

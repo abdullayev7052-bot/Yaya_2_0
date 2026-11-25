@@ -5,7 +5,7 @@
 import { audit } from '../db/index.js';
 import { makeGuard } from '../auth.js';
 import { getSetting, setSetting } from '../settings.js';
-import { PRODUCT_KINDS, REASON_EFFECTS, REASON_SECTIONS, SHAPES, WAREHOUSE_KINDS } from '../erp/schema.js';
+import { PRODUCT_KINDS, REASON_EFFECTS, REASON_SECTIONS, SHAPES, STAGE_TYPES, WAREHOUSE_KINDS } from '../erp/schema.js';
 import {
   DOC_TYPES, StockError, addAlert, cancelDoc, createDoc, docDetail, inbox, inventoryPreview, listDocs, lotReport, milkWarehouse, parseHolder, postDoc,
   rejectDoc, staffBalance, stockCard, stockReport, updateDraft,
@@ -42,8 +42,8 @@ export default async function erpRoutes(app, { db }) {
 
   // Warehouses this user is responsible for.
   const keeperOf = (userId) => db.prepare('SELECT warehouse_id FROM warehouse_keepers WHERE user_id = ?').all(userId).map((r) => r.warehouse_id);
-  // May the user act for this holder (hand out its goods, count it)? Their own hands,
-  // a warehouse they keep, or anything with stock.manage.
+  // May the user act for this place (hand out its goods, count it)? A warehouse or
+  // stage they keep, or anything with stock.manage. (Nothing is "in hands" any more.)
   const canActFor = (req, h) => !!h && (has(req, 'stock.manage') || (h.userId === req.me.id) || (h.warehouseId && keeperOf(req.me.id).includes(h.warehouseId)));
   const canSee = (req, h) => has(req, 'stock.view_all') || canActFor(req, h);
 
@@ -54,7 +54,8 @@ export default async function erpRoutes(app, { db }) {
     shapes: SHAPES,
     docTypes: Object.fromEntries(Object.entries(DOC_TYPES).map(([k, v]) => [k, v.label])),
     units: db.prepare('SELECT * FROM units WHERE active = 1 ORDER BY id').all(),
-    warehouses: db.prepare('SELECT id, name, kind FROM warehouses WHERE active = 1 ORDER BY sort, name').all(),
+    warehouses: db.prepare('SELECT id, name, kind, is_stage, stage_type FROM warehouses WHERE active = 1 ORDER BY is_stage, sort, name').all(),
+    stageTypes: STAGE_TYPES,
     staff: db.prepare('SELECT id, COALESCE(name, login) AS name FROM users WHERE active = 1 AND is_test = 0 ORDER BY name').all(),
     reasons: db.prepare("SELECT id, name, charge FROM stock_reasons WHERE active = 1 AND section = 'warehouse' ORDER BY sort, id").all(),
     techReasons: db.prepare("SELECT id, name, COALESCE(effect, 'company') AS effect, limit_qty, limit_base FROM stock_reasons WHERE active = 1 AND section = 'tech' ORDER BY sort, id").all(),
@@ -96,8 +97,11 @@ export default async function erpRoutes(app, { db }) {
     const where = []; const args = [];
     if (req.query.kind) { where.push('kind = ?'); args.push(String(req.query.kind)); }
     if (req.query.active !== 'all') where.push('active = 1');
+    // ?stock=1: only products that can hold stock (no variant parents).
+    if (req.query.stock === '1') where.push('has_variants = 0');
     return db.prepare(`SELECT * FROM products ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY active DESC, kind, name`).all(...args)
-      .map((p) => ({ ...p, kind_label: PRODUCT_KINDS[p.kind] ?? p.kind }));
+      .map((p) => ({ ...p, kind_label: PRODUCT_KINDS[p.kind] ?? p.kind,
+        stages: db.prepare('SELECT stage_id FROM product_stages WHERE product_id = ?').all(p.id).map((x) => x.stage_id) }));
   });
   const productData = (body, reply) => {
     const d = {};
@@ -119,16 +123,49 @@ export default async function erpRoutes(app, { db }) {
     }
     return d;
   };
+  // Variants: asked once, when the product is created ("Zakvaska" with 499, 505...).
+  // Each variant is a product of its own ("Zakvaska / 499", own stock and cost) with
+  // the parent's unit and settings. More variants can be added later; a product
+  // cannot become (or stop being) variant-based afterwards.
+  const cleanVariants = (list) => [...new Set((Array.isArray(list) ? list : String(list ?? '').split(','))
+    .map((v) => String(v ?? '').trim().slice(0, 40)).filter(Boolean))];
+  const insertVariants = (parent, variants) => {
+    const ids = [];
+    for (const v of variants) {
+      const vname = `${parent.name} / ${v}`;
+      if (db.prepare('SELECT 1 FROM products WHERE lower(name) = lower(?)').get(vname)) continue;
+      ids.push(Number(db.prepare(`INSERT INTO products (name, kind, unit, category, netto_g, brutto_g, volume, volume_unit, shape, shelf_life_hours, note, parent_id, variant)
+        SELECT ?, kind, unit, category, netto_g, brutto_g, volume, volume_unit, shape, shelf_life_hours, note, id, ? FROM products WHERE id = ?`).run(vname, v, parent.id).lastInsertRowid));
+    }
+    return ids;
+  };
   app.post('/products', need('catalog.manage'), async (req, reply) => {
     const name = str(req.body?.name, 120);
     if (!name) return bad(reply, 'Nomi shart');
     if (db.prepare('SELECT 1 FROM products WHERE lower(name) = lower(?)').get(name)) return bad(reply, 'Bunday nomli mahsulot bor');
     const d = productData({ kind: 'finished', ...req.body }, reply);
     if (reply.sent) return reply;
+    const variants = req.body?.hasVariants ? cleanVariants(req.body.variants) : [];
+    if (req.body?.hasVariants && !variants.length) return bad(reply, 'Variantlarni kiriting (masalan: 499, 505)');
+    if (variants.length) d.has_variants = 1;
     const cols = ['name', ...Object.keys(d)];
-    const id = db.prepare(`INSERT INTO products (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(name, ...Object.values(d)).lastInsertRowid;
-    log(req, 'products.create', { id, name });
+    const id = db.transaction(() => {
+      const pid = Number(db.prepare(`INSERT INTO products (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`).run(name, ...Object.values(d)).lastInsertRowid);
+      if (variants.length) insertVariants({ id: pid, name }, variants);
+      return pid;
+    })();
+    log(req, 'products.create', { id, name, variants });
     return { id };
+  });
+  app.post('/products/:id/variants', need('catalog.manage'), async (req, reply) => {
+    const p = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
+    if (!p) return reply.code(404).send({ error: 'Topilmadi' });
+    if (!p.has_variants) return bad(reply, "Bu mahsulot variantli emas (bu faqat yaratishda tanlanadi)");
+    const variants = cleanVariants(req.body?.variants);
+    if (!variants.length) return bad(reply, 'Variantlarni kiriting');
+    const ids = db.transaction(() => insertVariants(p, variants))();
+    log(req, 'products.variants', { id: p.id, variants });
+    return { ids };
   });
   app.patch('/products/:id', need('catalog.manage'), async (req, reply) => {
     const p = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
@@ -142,17 +179,25 @@ export default async function erpRoutes(app, { db }) {
       d.name = name;
     }
     if (req.body?.active !== undefined) d.active = Number(!!req.body.active);
-    if (Object.keys(d).length) db.prepare(`UPDATE products SET ${Object.keys(d).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...Object.values(d), p.id);
+    if (p.parent_id && (d.unit !== undefined || d.kind !== undefined)) return bad(reply, "Variantning birligi va turi asosiy mahsulotniki bilan bir xil");
+    db.transaction(() => {
+      if (Object.keys(d).length) db.prepare(`UPDATE products SET ${Object.keys(d).map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...Object.values(d), p.id);
+      // A parent's name, unit and kind carry over to its variants.
+      if (p.has_variants) {
+        if (d.name) for (const v of db.prepare('SELECT id, variant FROM products WHERE parent_id = ?').all(p.id)) db.prepare('UPDATE products SET name = ? WHERE id = ?').run(`${d.name} / ${v.variant}`, v.id);
+        if (d.unit !== undefined || d.kind !== undefined) db.prepare('UPDATE products SET unit = COALESCE(?, unit), kind = COALESCE(?, kind) WHERE parent_id = ?').run(d.unit ?? null, d.kind ?? null, p.id);
+      }
+    })();
     log(req, 'products.update', { id: p.id, name: d.name ?? p.name });
     return { ok: true };
   });
 
   // ---------------------------------------------------------------- warehouses
   const warehouseRow = (w) => ({
-    ...w, kind_label: WAREHOUSE_KINDS[w.kind] ?? w.kind,
+    ...w, kind_label: w.is_stage ? 'Bosqich' : WAREHOUSE_KINDS[w.kind] ?? w.kind, stage_type_label: w.is_stage ? STAGE_TYPES[w.stage_type] : null,
     keepers: db.prepare('SELECT u.id, COALESCE(u.name, u.login) AS name FROM warehouse_keepers k JOIN users u ON u.id = k.user_id WHERE k.warehouse_id = ? ORDER BY name').all(w.id),
   });
-  app.get('/warehouses', need(), async (req) => db.prepare('SELECT * FROM warehouses ORDER BY active DESC, sort, name').all()
+  app.get('/warehouses', need(), async (req) => db.prepare('SELECT * FROM warehouses ORDER BY active DESC, is_stage, sort, name').all()
     .filter((w) => canSee(req, { warehouseId: w.id }) || w.active).map(warehouseRow));
 
   const setKeepers = (id, list) => {
@@ -277,8 +322,11 @@ export default async function erpRoutes(app, { db }) {
   });
   // What I am holding and what is in the warehouses I keep, plus hand-overs waiting for me.
   app.get('/stock/mine', need(), async (req) => ({
-    mine: stockReport(db, { holder: { userId: req.me.id } }),
-    warehouses: keeperOf(req.me.id).map((id) => ({ id, name: db.prepare('SELECT name FROM warehouses WHERE id = ?').get(id)?.name, rows: stockReport(db, { holder: { warehouseId: id } }) })),
+    mine: [],
+    warehouses: keeperOf(req.me.id).map((id) => {
+      const w = db.prepare('SELECT name, is_stage, active FROM warehouses WHERE id = ?').get(id);
+      return { id, name: w?.name, is_stage: !!w?.is_stage, active: w?.active, rows: stockReport(db, { holder: { warehouseId: id } }) };
+    }).filter((w) => w.active),
     inbox: inbox(db, req.me.id),
     balance: staffBalance(db, req.me.id),
   }));

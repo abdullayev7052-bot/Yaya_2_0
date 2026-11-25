@@ -27,11 +27,12 @@ export default async function kioskRoutes(app, { db }) {
     if (k) db.prepare("UPDATE kiosks SET last_seen_at = datetime('now') WHERE id = ?").run(k.id);
     return k ?? null;
   };
-  // People allowed on this monoblock: those listed, or everyone active (not test).
+  // People allowed on this monoblock: those marked "uses the monoblock" — of them, the
+  // ones listed for this monoblock, or all when none are listed.
   const staffOf = (k) => {
     const listed = db.prepare('SELECT user_id FROM kiosk_users WHERE kiosk_id = ?').all(k.id).map((r) => r.user_id);
     return db.prepare(`SELECT u.id, COALESCE(u.name, u.login) AS name, r.name AS role, u.pin_hash IS NOT NULL AS has_pin FROM users u LEFT JOIN roles r ON r.id = u.role_id
-      WHERE u.active = 1 AND u.is_test = 0 ORDER BY name`).all().filter((u) => !listed.length || listed.includes(u.id))
+      WHERE u.active = 1 AND u.is_test = 0 AND u.kiosk = 1 ORDER BY name`).all().filter((u) => !listed.length || listed.includes(u.id))
       .map((u) => ({ id: u.id, name: u.name, role: u.role, hasPin: !!u.has_pin }));
   };
 
@@ -86,10 +87,17 @@ export default async function kioskRoutes(app, { db }) {
     return db.prepare("SELECT id, type, text, created_at FROM alerts WHERE resolved_at IS NULL AND type IN ('dwell.over','task.late') ORDER BY id DESC LIMIT 20").all();
   });
 
+  // No two people on the monoblock may share a PIN (PINs are hashed, so each is checked).
+  const pinTaken = (pin, userId) => db.prepare('SELECT id, pin_hash FROM users WHERE pin_hash IS NOT NULL AND id <> ? AND active = 1').all(userId)
+    .some((u) => bcrypt.compareSync(pin, u.pin_hash));
+  const PIN_TAKEN = "Bu PIN boshqa xodimda bor — boshqa 4 ta raqam tanlang";
+
   // ---------------------------------------------------------------- PIN for oneself (from the phone)
   app.put('/my-pin', need(), async (req, reply) => {
     const pin = String(req.body?.pin ?? '');
     if (!PIN_RE.test(pin)) return bad(reply, "PIN 4 ta raqam bo'lsin");
+    if (!db.prepare('SELECT kiosk FROM users WHERE id = ?').get(req.me.id)?.kiosk) return bad(reply, "Siz monoblokdan foydalanmaysiz — PIN kerak emas", 403);
+    if (pinTaken(pin, req.me.id)) return bad(reply, PIN_TAKEN);
     const row = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.me.id);
     if (!bcrypt.compareSync(String(req.body?.password ?? ''), row.password_hash)) return bad(reply, "Parol noto'g'ri");
     db.prepare('UPDATE users SET pin_hash = ? WHERE id = ?').run(bcrypt.hashSync(pin, 8), req.me.id);
@@ -105,7 +113,7 @@ export default async function kioskRoutes(app, { db }) {
   });
   app.get('/admin', need('staff.manage'), async () => ({
     kiosks: db.prepare('SELECT * FROM kiosks ORDER BY active DESC, name').all().map(kioskRow),
-    staff: db.prepare('SELECT u.id, COALESCE(u.name, u.login) AS name, r.name AS role, u.pin_hash IS NOT NULL AS has_pin, u.active FROM users u LEFT JOIN roles r ON r.id = u.role_id WHERE u.is_test = 0 ORDER BY u.active DESC, name').all()
+    staff: db.prepare('SELECT u.id, COALESCE(u.name, u.login) AS name, r.name AS role, u.pin_hash IS NOT NULL AS has_pin, u.active, u.kiosk FROM users u LEFT JOIN roles r ON r.id = u.role_id WHERE u.is_test = 0 ORDER BY u.active DESC, u.kiosk DESC, name').all()
       .map((u) => ({ ...u, has_pin: !!u.has_pin })),
   }));
   const setUsers = (id, list) => {
@@ -148,8 +156,10 @@ export default async function kioskRoutes(app, { db }) {
   app.put('/admin/pin/:userId', need('staff.manage'), async (req, reply) => {
     const pin = req.body?.pin == null || req.body.pin === '' ? null : String(req.body.pin);
     if (pin != null && !PIN_RE.test(pin)) return bad(reply, "PIN 4 ta raqam bo'lsin");
-    const u = db.prepare('SELECT id, login FROM users WHERE id = ?').get(Number(req.params.userId));
+    const u = db.prepare('SELECT id, login, kiosk FROM users WHERE id = ?').get(Number(req.params.userId));
     if (!u) return bad(reply, 'Xodim topilmadi', 404);
+    if (pin && !u.kiosk) return bad(reply, "Bu xodim monoblokdan foydalanmaydi (Xodimlar → \"Monoblokdan foydalanadi\")");
+    if (pin && pinTaken(pin, u.id)) return bad(reply, PIN_TAKEN);
     db.prepare('UPDATE users SET pin_hash = ? WHERE id = ?').run(pin ? bcrypt.hashSync(pin, 8) : null, u.id);
     audit(db, req.actor, 'kiosk.pin_set', { user: u.login, cleared: !pin });
     return { ok: true };

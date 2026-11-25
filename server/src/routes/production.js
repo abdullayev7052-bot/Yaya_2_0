@@ -1,14 +1,16 @@
-// Production API (Yaya 2.0, stage 2), under /api/erp/prod. The technologist works
-// on their own shift (prod.work); managers see everything (prod.view), approve
-// over-limit tasks and shifts (prod.approve) and set recipes and limits (prod.manage).
-// Sums are stripped for anyone without stock.costs, exactly as in the warehouse API.
+// Production API (Yaya 2.0), under /api/erp/prod. Work happens at stages: a stage's
+// keepers run it (see erp/stages.js). The technologist's production stage has a
+// shift (milk reconciled at its end). Managers see everything (prod.view), approve
+// over-limit tasks and shifts (prod.approve) and set stages, maps and recipes
+// (prod.manage). Sums are stripped for anyone without stock.costs.
 import { audit } from '../db/index.js';
 import { makeGuard } from '../auth.js';
 import { StockError } from '../erp/stock.js';
 import {
-  KIND_PERM, approvals, approveShift, approveTask, cancelTask, closeShift, completeTask, createTask, listRecipes, listShifts, myShift, openShift,
-  recipeDetail, rejectShiftApproval, rejectTaskApproval, saveRecipe, shiftDetail, taskDetail,
+  approvals, approveShift, approveTask, cancelTask, closeShift, completeTask, createTask, keepTask, listRecipes, listShifts, myShift, openShift,
+  recipeDetail, rejectShiftApproval, rejectTaskApproval, saveRecipe, shiftDetail, stageJournal, taskDetail,
 } from '../erp/production.js';
+import { getStage, isKeeper, keptWarehouses, productMap, saveStage, setProductMap, stageBoard, stageList } from '../erp/stages.js';
 import { stripCosts } from './erp.js';
 
 export default async function productionRoutes(app, { db }) {
@@ -23,22 +25,47 @@ export default async function productionRoutes(app, { db }) {
   app.addHook('preSerialization', async (req, reply, payload) => (req.me && !req.me.perms.has('stock.costs') ? stripCosts(payload) : payload));
 
   const viewAll = (req) => has(req, 'prod.view') || has(req, 'prod.approve') || has(req, 'prod.manage');
-  // Kinds of task this person may run: technologist (cook, separation), pourer, capper.
-  const myKinds = (req) => Object.entries(KIND_PERM).filter(([, p]) => has(req, p)).map(([k]) => k);
-  const worker = (req) => myKinds(req).length > 0;
-  const needWorker = async (req, reply) => { if (!worker(req)) return deny(reply); return undefined; };
-  const shiftOfTask = (id) => db.prepare('SELECT s.* FROM prod_tasks t JOIN prod_shifts s ON s.id = t.shift_id WHERE t.id = ?').get(id);
+  const manager = (req) => has(req, 'prod.manage') || has(req, 'stock.manage');
+  // A stage is run by its keepers (and managers).
+  const runs = (req, stageId) => manager(req) || isKeeper(db, req.me.id, Number(stageId));
+  const myStages = (req) => keptWarehouses(db, req.me.id).filter((id) => getStage(db, id));
+  const taskOf = (id) => db.prepare('SELECT * FROM prod_tasks WHERE id = ?').get(Number(id));
+
+  // ---------------------------------------------------------------- stages and maps
+  app.get('/stages', need(), async (req) => stageList(db, { all: req.query.all === '1' && manager(req) }));
+  app.post('/stages', need('prod.manage'), async (req, reply) => run(reply, () => {
+    const id = saveStage(db, null, req.body ?? {});
+    log(req, 'stage.create', { id, name: req.body?.name });
+    return stageList(db, { all: true }).find((s) => s.id === id);
+  }));
+  app.put('/stages/:id', need('prod.manage'), async (req, reply) => run(reply, () => {
+    const id = saveStage(db, Number(req.params.id), req.body ?? {});
+    log(req, 'stage.update', { id, name: req.body?.name });
+    return stageList(db, { all: true }).find((s) => s.id === id);
+  }));
+  // My stages with what is in them and what is waiting (managers: all with ?all=1).
+  app.get('/board', need(), async (req) => ({
+    stages: stageBoard(db, req.me.id, { all: req.query.all === '1' && viewAll(req) }),
+    shift: (() => { const s = myShift(db, req.me.id); return s ? shiftDetail(db, s.id) : null; })(),
+  }));
+  app.get('/map/:productId', need(), async (req) => productMap(db, Number(req.params.productId)));
+  app.put('/map/:productId', need('prod.manage'), async (req, reply) => run(reply, () => {
+    const map = setProductMap(db, Number(req.params.productId), req.body?.stageIds);
+    log(req, 'product.map', { productId: Number(req.params.productId), stages: map.map((s) => s.name) });
+    return map;
+  }));
+  app.get('/journal', need(), async (req, reply) => {
+    const stageId = Number(req.query.stageId) || null;
+    if (!viewAll(req) && !(stageId && runs(req, stageId))) return stageJournal(db, { userId: req.me.id, from: req.query.from || null, to: req.query.to || null });
+    return stageJournal(db, { stageId, userId: Number(req.query.userId) || null, from: req.query.from || null, to: req.query.to || null });
+  });
 
   // ---------------------------------------------------------------- recipes
   app.get('/recipes', need(), async (req, reply) => {
-    if (!worker(req) && !viewAll(req)) return deny(reply);
     if (viewAll(req) && req.query.mine !== '1') return listRecipes(db, { all: req.query.all === '1' && has(req, 'prod.manage') });
-    return listRecipes(db, { kinds: myKinds(req) });
+    return listRecipes(db, { stageIds: myStages(req) });
   });
-  app.get('/recipes/:id', need(), async (req, reply) => {
-    if (!worker(req) && !viewAll(req)) return deny(reply);
-    return recipeDetail(db, Number(req.params.id)) ?? reply.code(404).send({ error: 'Topilmadi' });
-  });
+  app.get('/recipes/:id', need(), async (req, reply) => recipeDetail(db, Number(req.params.id)) ?? reply.code(404).send({ error: 'Topilmadi' }));
   app.post('/recipes', need('prod.manage'), async (req, reply) => run(reply, () => {
     const id = saveRecipe(db, null, req.body ?? {});
     log(req, 'recipe.create', { id, name: req.body?.name });
@@ -50,12 +77,12 @@ export default async function productionRoutes(app, { db }) {
     return recipeDetail(db, id);
   }));
 
-  // ---------------------------------------------------------------- my shift (technologist)
-  app.get('/shift', { ...need(), preHandler: [need().preHandler, needWorker].flat() }, async (req) => {
+  // ---------------------------------------------------------------- the technologist's shift
+  app.get('/shift', need(), async (req) => {
     const s = myShift(db, req.me.id);
     return { shift: s ? shiftDetail(db, s.id) : null };
   });
-  app.post('/shift', { ...need(), preHandler: [need().preHandler, needWorker].flat() }, async (req, reply) => run(reply, () => {
+  app.post('/shift', need(), async (req, reply) => run(reply, () => {
     const s = openShift(db, { uuid: req.body?.uuid, userId: req.me.id });
     log(req, 'prod.shift.open', { id: s.id, number: s.number });
     return { shift: shiftDetail(db, s.id) };
@@ -63,7 +90,7 @@ export default async function productionRoutes(app, { db }) {
   app.post('/shifts/:id/close', need(), async (req, reply) => {
     const s = db.prepare('SELECT * FROM prod_shifts WHERE id = ?').get(Number(req.params.id));
     if (!s) return reply.code(404).send({ error: 'Topilmadi' });
-    if (s.user_id !== req.me.id || !worker(req)) return deny(reply);
+    if (s.user_id !== req.me.id) return deny(reply);
     return run(reply, () => {
       const r = closeShift(db, s.id, req.body ?? {}, { actor: req.actor });
       log(req, r.needApproval ? 'prod.shift.approval' : 'prod.shift.close', { id: s.id, number: s.number });
@@ -72,7 +99,7 @@ export default async function productionRoutes(app, { db }) {
   });
 
   // ---------------------------------------------------------------- shifts (managers)
-  app.get('/shifts', need(), async (req, reply) => {
+  app.get('/shifts', need(), async (req) => {
     if (!viewAll(req)) return listShifts(db, { userId: req.me.id });
     return listShifts(db, { status: req.query.status || null, from: req.query.from || null, to: req.query.to || null, userId: Number(req.query.userId) || null });
   });
@@ -94,38 +121,51 @@ export default async function productionRoutes(app, { db }) {
   }));
 
   // ---------------------------------------------------------------- tasks
-  app.post('/tasks', { ...need(), preHandler: [need().preHandler, needWorker].flat() }, async (req, reply) => {
-    const s = myShift(db, req.me.id);
-    if (!s) return bad(reply, 'Avval smena oching');
+  // A 'change' stage: start from its recipe, then complete with the real quantities.
+  app.post('/tasks', need(), async (req, reply) => {
+    const r = db.prepare('SELECT stage_id FROM recipes WHERE id = ?').get(Number(req.body?.recipeId));
+    const stageId = Number(req.body?.stageId) || r?.stage_id;
+    if (!stageId) return bad(reply, 'Bosqichni tanlang');
+    if (!runs(req, stageId)) return reply.code(403).send({ error: 'Siz bu bosqichga mas\'ul emassiz' });
     return run(reply, () => {
-      const t = createTask(db, { ...req.body, shiftId: s.id }, { actor: req.actor, allowedKinds: myKinds(req) });
-      log(req, 'prod.task.create', { id: t.id, number: t.number });
+      const t = createTask(db, { ...req.body, stageId }, { actor: req.actor, userId: req.me.id });
+      log(req, 'prod.task.create', { id: t.id, number: t.number, stageId });
       return taskDetail(db, t.id);
+    });
+  });
+  // A 'keep' stage: one step (move qty on from the previous stage).
+  app.post('/moves', need(), async (req, reply) => {
+    const stageId = Number(req.body?.stageId);
+    if (!runs(req, stageId)) return reply.code(403).send({ error: 'Siz bu bosqichga mas\'ul emassiz' });
+    return run(reply, () => {
+      const r = keepTask(db, req.body ?? {}, { actor: req.actor, userId: req.me.id });
+      log(req, 'prod.move', { id: r.task.id, stageId, productId: req.body?.productId, qty: req.body?.qty });
+      return r;
     });
   });
   app.get('/tasks/:id', need(), async (req, reply) => {
     const t = taskDetail(db, Number(req.params.id));
     if (!t) return reply.code(404).send({ error: 'Topilmadi' });
-    if (shiftOfTask(t.id)?.user_id !== req.me.id && !viewAll(req)) return deny(reply);
+    if (t.user_id !== req.me.id && !viewAll(req) && !(t.stage_id && runs(req, t.stage_id))) return deny(reply);
     return t;
   });
-  app.post('/tasks/:id/complete', { ...need(), preHandler: [need().preHandler, needWorker].flat() }, async (req, reply) => {
-    const s = shiftOfTask(Number(req.params.id));
-    if (!s) return reply.code(404).send({ error: 'Topilmadi' });
-    if (s.user_id !== req.me.id) return deny(reply);
+  app.post('/tasks/:id/complete', need(), async (req, reply) => {
+    const t = taskOf(req.params.id);
+    if (!t) return reply.code(404).send({ error: 'Topilmadi' });
+    if (t.user_id !== req.me.id && !manager(req)) return deny(reply);
     return run(reply, () => {
-      const r = completeTask(db, Number(req.params.id), req.body ?? {}, { actor: req.actor });
-      log(req, r.needApproval ? 'prod.task.approval' : 'prod.task.done', { id: Number(req.params.id) });
+      const r = completeTask(db, t.id, req.body ?? {}, { actor: req.actor });
+      log(req, r.needApproval ? 'prod.task.approval' : 'prod.task.done', { id: t.id });
       return r;
     });
   });
   app.post('/tasks/:id/cancel', need(), async (req, reply) => {
-    const s = shiftOfTask(Number(req.params.id));
-    if (!s) return reply.code(404).send({ error: 'Topilmadi' });
-    if (!(s.user_id === req.me.id && worker(req)) && !has(req, 'prod.approve')) return deny(reply);
+    const t = taskOf(req.params.id);
+    if (!t) return reply.code(404).send({ error: 'Topilmadi' });
+    if (t.user_id !== req.me.id && !has(req, 'prod.approve')) return deny(reply);
     return run(reply, () => {
-      const r = cancelTask(db, Number(req.params.id), req.actor, req.body?.reason);
-      log(req, 'prod.task.cancel', { id: Number(req.params.id), reason: req.body?.reason });
+      const r = cancelTask(db, t.id, req.actor, req.body?.reason);
+      log(req, 'prod.task.cancel', { id: t.id, reason: req.body?.reason });
       return r;
     });
   });

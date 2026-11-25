@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { BUILTIN_ROLES, V3_TO_V4, PERMISSION_KEYS } from '../permissions.js';
+import { moveHandsToStages } from '../erp/stages.js';
 import { upgradeToV3 } from './legacy.js';
 import { setupErp } from '../erp/schema.js';
 
@@ -408,6 +409,8 @@ export function openDb(file) {
   }
   // Production / warehouse tables (Yaya 2.0).
   setupErp(db, addColumn);
+  // Stage 10: nothing stays "in a person's hands" — it moves to the matching stage.
+  moveHandsToStages(db);
   seedRoles(db);
   retireRole(db, 'lab');
   backfillNewPermissions(db);

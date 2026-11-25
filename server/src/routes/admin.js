@@ -112,7 +112,7 @@ export default async function adminRoutes(app, { db }) {
   const roleExists = (id) => !!db.prepare('SELECT 1 FROM roles WHERE id = ?').get(id);
 
   app.get('/staff', need('staff.manage'), async () => db.prepare(`
-    SELECT u.id, u.login, u.name, u.phone, u.role_id, r.name AS role_name, u.is_test, u.active, u.created_at,
+    SELECT u.id, u.login, u.name, u.phone, u.role_id, r.name AS role_name, u.is_test, u.active, u.created_at, u.kiosk, u.pin_hash IS NOT NULL AS has_pin,
       (SELECT COUNT(*) FROM employee_hidden_suppliers eh WHERE eh.employee_id = u.id) AS hidden_count,
       (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id) AS device_slots,
       (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.device_id IS NOT NULL) AS devices_bound,
@@ -133,8 +133,9 @@ export default async function adminRoutes(app, { db }) {
     if (!b.password || String(b.password).length < 6) return bad(reply, 'Parol kamida 6 belgi bo\'lsin');
     if (!roleId || !roleExists(roleId)) return bad(reply, 'Rolni tanlang');
     if (db.prepare('SELECT 1 FROM users WHERE login = ?').get(login)) return bad(reply, 'Bu login band');
-    const id = Number(db.prepare('INSERT INTO users (login, name, phone, password_hash, role_id, is_test) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(login, str(b.name), str(b.phone, 30)?.replace(/[^\d+]/g, '') || null, bcrypt.hashSync(String(b.password), 10), roleId, Number(!!b.isTest)).lastInsertRowid);
+    // "Uses the monoblock": only then is a PIN asked for and the person shown there.
+    const id = Number(db.prepare('INSERT INTO users (login, name, phone, password_hash, role_id, is_test, kiosk) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(login, str(b.name), str(b.phone, 30)?.replace(/[^\d+]/g, '') || null, bcrypt.hashSync(String(b.password), 10), roleId, Number(!!b.isTest), Number(!!b.kiosk)).lastInsertRowid);
     ensureDeviceSlots(db, id);
     log(req, 'user.create', { id, login, name: b.name, roleId });
     return { id };
@@ -162,6 +163,8 @@ export default async function adminRoutes(app, { db }) {
       .run(login, str(b.name), b.phone == null ? null : str(b.phone, 30)?.replace(/[^\d+]/g, '') ?? '', roleId,
         b.password ? bcrypt.hashSync(String(b.password), 10) : null, b.active == null ? null : Number(!!b.active),
         b.isTest == null ? null : Number(!!b.isTest), id);
+    // Off the monoblock: the PIN goes too.
+    if (b.kiosk != null) db.prepare(`UPDATE users SET kiosk = ?${b.kiosk ? '' : ', pin_hash = NULL'} WHERE id = ?`).run(Number(!!b.kiosk), id);
     log(req, 'user.update', { id, login: login ?? target.login, name: b.name ?? target.name, roleId, active: b.active, passwordChanged: !!b.password });
     return { ok: true };
   });

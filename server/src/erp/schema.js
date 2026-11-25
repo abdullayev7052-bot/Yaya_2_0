@@ -196,7 +196,7 @@ CREATE INDEX IF NOT EXISTS idx_alerts_open ON alerts(resolved_at, created_at);
 CREATE TABLE IF NOT EXISTS recipes (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
-  kind TEXT NOT NULL DEFAULT 'cook' CHECK (kind IN ('cook','separation','pour','cap','reprocess')),
+  kind TEXT NOT NULL DEFAULT 'cook' CHECK (kind IN ('cook','separation','pour','pack','cap','reprocess')),
   product_id INTEGER REFERENCES products(id),
   out_min REAL,
   out_max REAL,
@@ -261,7 +261,7 @@ CREATE TABLE IF NOT EXISTS prod_tasks (
   id INTEGER PRIMARY KEY,
   uuid TEXT NOT NULL UNIQUE,
   number INTEGER NOT NULL,
-  shift_id INTEGER NOT NULL REFERENCES prod_shifts(id),
+  shift_id INTEGER REFERENCES prod_shifts(id),
   recipe_id INTEGER REFERENCES recipes(id),
   kind TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','approval','done','cancelled')),
@@ -287,6 +287,33 @@ CREATE TABLE IF NOT EXISTS lot_sources (
   doc_id INTEGER REFERENCES docs(id)
 );
 CREATE INDEX IF NOT EXISTS idx_lot_sources_src ON lot_sources(source_lot_id);
+
+-- ---------------------------------------------------------------- stages (stage 10)
+-- A stage is a warehouse (warehouses.is_stage = 1) with its own settings: type
+-- 'change' (the product changes: a recipe, materials, limits, piece rate) or 'keep'
+-- (the same product moves on, optionally with a piece rate per unit). The order of
+-- stages is warehouses.sort. Each product has a production map: the stages it goes
+-- through, in that order; a stage that is off is skipped.
+CREATE TABLE IF NOT EXISTS product_stages (
+  product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  stage_id INTEGER NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
+  PRIMARY KEY (product_id, stage_id)
+);
+-- Stock taken from below zero (at an estimated cost) and what was made from it.
+-- When the warehouse receives the real goods, the gap between the real and the
+-- estimated cost is passed on to that lot (and on down the chain), not left as a
+-- variance: every product ends at its real cost.
+CREATE TABLE IF NOT EXISTS neg_links (
+  id INTEGER PRIMARY KEY,
+  warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  qty REAL NOT NULL,
+  open_qty REAL NOT NULL,
+  est_cost REAL NOT NULL,
+  lot_id INTEGER REFERENCES lots(id),
+  doc_id INTEGER REFERENCES docs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_neg_links ON neg_links(warehouse_id, product_id, open_qty);
 
 -- ---------------------------------------------------------------- sales (stage 4)
 -- Sales and returns were taken out of Yaya 2.0 (they return in stages 11-12 with
@@ -428,6 +455,11 @@ export const PRODUCT_COLUMNS = [
   ['shelf_life_hours', 'REAL'],
   ['dwell_hours', 'REAL'],
   ['note', 'TEXT'],
+  // Variants (stage 10): a parent ("Zakvaska", has_variants = 1, holds no stock) and
+  // its variants ("Zakvaska / 499": parent_id, variant), each a product of its own.
+  ['parent_id', 'INTEGER REFERENCES products(id)'],
+  ['variant', 'TEXT'],
+  ['has_variants', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 
 // Added to lots: qty0 = quantity the lot was created with; provisional = cost not
@@ -462,7 +494,24 @@ export const WAREHOUSE_KINDS = {
   expired: 'Muddati o\'tganlar ombori',
   recycle: 'Qayta ishlash',
   general: 'Boshqa',
+  stage: 'Bosqich',
 };
+
+// The production map's stages, created once (names, order and settings can be
+// changed later; new stages can be added between them).
+export const STAGE_TYPES = { change: "O'zgaradigan", keep: "O'zgarmas" };
+export const STAGE_SEED = [
+  ['produce', 'Ishlab chiqarish', 'change'],
+  ['pour', 'Quyish', 'change'],
+  ['pack', 'Qadoqlash', 'change'],
+  ['incubator', 'Issiqxona', 'keep'],
+  ['cold', 'Sovuqxona', 'keep'],
+  ['cap', 'Qopqoq yopish', 'keep'],
+  ['finished', 'Tayyor mahsulot ombori', 'keep'],
+  ['returns', 'Vozvrat ombori', 'keep'],
+  ['reprocess_ok', 'Yaroqli qayta ishlash', 'change'],
+  ['reprocess_bad', 'Yaroqsiz qayta ishlash', 'change'],
+];
 
 export const SHAPES = { round: 'Dumaloq', rect: 'To\'rtburchak', other: 'Boshqa' };
 
@@ -511,6 +560,14 @@ export function setupErp(db, addColumn) {
   // Household payments (milk collection) leave a cashbox like any other payment.
   addColumn('payments', 'cashbox_id', 'INTEGER REFERENCES cashboxes(id)');
   addColumn('cash_entries', 'payment_id', 'INTEGER REFERENCES payments(id)');
+  // Stage 10: stages are warehouses; recipes belong to a stage; tasks name their
+  // stage and the person who did them; the monoblock is only for people marked so.
+  for (const [c, def] of [['is_stage', 'INTEGER NOT NULL DEFAULT 0'], ['stage_code', 'TEXT'], ['stage_type', 'TEXT'], ['piece_rate', 'REAL']]) addColumn('warehouses', c, def);
+  addColumn('recipes', 'stage_id', 'INTEGER REFERENCES warehouses(id)');
+  migrateProdTasks(db);
+  addColumn('prod_tasks', 'stage_id', 'INTEGER REFERENCES warehouses(id)');
+  addColumn('prod_tasks', 'user_id', 'INTEGER REFERENCES users(id)');
+  addColumn('users', 'kiosk', 'INTEGER NOT NULL DEFAULT 0');
   seedErp(db);
 }
 
@@ -519,7 +576,7 @@ export function setupErp(db, addColumn) {
 // is rebuilt once (same rows, same ids; the tables pointing to it keep working).
 function migrateRecipeKinds(db) {
   const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'recipes'").get()?.sql ?? '';
-  if (!sql || sql.includes("'reprocess'")) return;
+  if (!sql || sql.includes("'pack'")) return;
   const def = ERP_SCHEMA.slice(ERP_SCHEMA.indexOf('CREATE TABLE IF NOT EXISTS recipes ('), ERP_SCHEMA.indexOf('CREATE TABLE IF NOT EXISTS recipe_lines'));
   const fk = db.pragma('foreign_keys', { simple: true });
   db.pragma('foreign_keys = OFF');
@@ -535,6 +592,60 @@ function migrateRecipeKinds(db) {
   } finally {
     db.pragma(`foreign_keys = ${fk ? 'ON' : 'OFF'}`);
   }
+}
+
+// Stage 10: a task outside the technologist's stage has no shift, so prod_tasks.shift_id
+// becomes optional (the table is rebuilt once, same rows and ids).
+function migrateProdTasks(db) {
+  const col = db.prepare('PRAGMA table_info(prod_tasks)').all().find((c) => c.name === 'shift_id');
+  if (!col || !col.notnull) return;
+  const def = ERP_SCHEMA.slice(ERP_SCHEMA.indexOf('CREATE TABLE IF NOT EXISTS prod_tasks ('), ERP_SCHEMA.indexOf('CREATE INDEX IF NOT EXISTS idx_prod_tasks_shift'));
+  const fk = db.pragma('foreign_keys', { simple: true });
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.transaction(() => {
+      db.exec(def.replace('CREATE TABLE IF NOT EXISTS prod_tasks (', 'CREATE TABLE prod_tasks_v10 ('));
+      const keep = db.prepare('PRAGMA table_info(prod_tasks_v10)').all().map((c) => c.name);
+      const cols = db.prepare('PRAGMA table_info(prod_tasks)').all().map((c) => c.name).filter((c) => keep.includes(c)).join(', ');
+      db.exec(`INSERT INTO prod_tasks_v10 (${cols}) SELECT ${cols} FROM prod_tasks`);
+      db.exec('DROP TABLE prod_tasks');
+      db.exec('ALTER TABLE prod_tasks_v10 RENAME TO prod_tasks');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_prod_tasks_shift ON prod_tasks(shift_id)');
+    })();
+  } finally {
+    db.pragma(`foreign_keys = ${fk ? 'ON' : 'OFF'}`);
+  }
+}
+
+// Stage 10: the stages exist once. Warehouses that already play a stage's part
+// (incubator, finished goods, expired goods) become that stage, keeping their stock.
+// Stage warehouses may go below zero (and warn): a worker may move more than the
+// books say is there; the real goods settle it later at their real cost.
+export function seedStages(db) {
+  if (db.prepare('SELECT 1 FROM warehouses WHERE is_stage = 1 LIMIT 1').get()) return;
+  const adopt = { incubator: 'incubator', finished: 'finished', returns: 'expired' };
+  STAGE_SEED.forEach(([code, name, type], i) => {
+    const old = adopt[code] && db.prepare('SELECT id FROM warehouses WHERE kind = ? AND active = 1 AND is_stage = 0 ORDER BY sort, id LIMIT 1').get(adopt[code]);
+    if (old) {
+      db.prepare('UPDATE warehouses SET is_stage = 1, stage_code = ?, stage_type = ?, sort = ?, allow_negative = 1, warn_negative = 1 WHERE id = ?').run(code, type, (i + 1) * 10, old.id);
+    } else {
+      db.prepare("INSERT INTO warehouses (name, kind, is_stage, stage_code, stage_type, sort, allow_negative, warn_negative) VALUES (?, 'stage', 1, ?, ?, ?, 1, 1)")
+        .run(name, code, type, (i + 1) * 10);
+    }
+  });
+  const stage = (code) => db.prepare('SELECT id FROM warehouses WHERE stage_code = ?').get(code)?.id;
+  // Recipes go to their stage; capping has no recipe any more (it is a 'keep' stage).
+  for (const [kind, code] of [['cook', 'produce'], ['separation', 'produce'], ['pour', 'pour'], ['pack', 'pack'], ['reprocess', 'reprocess_bad']]) {
+    db.prepare('UPDATE recipes SET stage_id = ? WHERE kind = ? AND stage_id IS NULL').run(stage(code), kind);
+  }
+  db.prepare("UPDATE recipes SET active = 0 WHERE kind = 'cap'").run();
+  // A product that is poured gets the usual map: production, pouring, incubator, cold room, capping, finished goods.
+  const usual = ['produce', 'pour', 'incubator', 'cold', 'cap', 'finished'].map(stage);
+  for (const r of db.prepare("SELECT DISTINCT product_id FROM recipes WHERE kind = 'pour' AND product_id IS NOT NULL").all()) {
+    for (const st of usual) db.prepare('INSERT OR IGNORE INTO product_stages (product_id, stage_id) VALUES (?, ?)').run(r.product_id, st);
+  }
+  // The monoblock: whoever already has a PIN keeps using it.
+  db.prepare('UPDATE users SET kiosk = 1 WHERE pin_hash IS NOT NULL').run();
 }
 
 // Reference rows the warehouse part needs. Safe to run again at any time; it is
@@ -557,6 +668,7 @@ export function seedErp(db) {
     ['Naqd', 'Karta', "O'tkazma"].forEach((n, i) => ins.run(n, i));
   }
   retireSellers(db);
+  seedStages(db);
   if (!db.prepare('SELECT 1 FROM cashboxes WHERE is_main = 1').get()) db.prepare("INSERT INTO cashboxes (name, is_main) VALUES ('Asosiy kassa', 1)").run();
   // Reprocessing: what happened to containers that did not come out.
   if (!db.prepare("SELECT 1 FROM stock_reasons WHERE section = 'reprocess'").get()) {
