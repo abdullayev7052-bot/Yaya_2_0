@@ -882,6 +882,7 @@ const views = {
       { name: 'password', label: u.id ? 'Yangi parol (o\'zgartirmaslik uchun bo\'sh)' : 'Parol (kamida 6 belgi)', type: 'password', required: !u.id },
       { name: 'roleId', label: 'Rol (ruxsatlar)', type: 'select', options: roleOpts, value: u.role_id ?? roles.find((r) => r.code === 'collector')?.id },
       { name: 'isTest', label: 'Test xodim (hisobotlarga kirmaydi, qurilma cheklovi yo\'q)', type: 'checkbox', value: u.is_test },
+      { name: 'kiosk', label: 'Monoblokdan foydalanadi (PIN bilan kiradi). Belgilanmasa — faqat telefondagi ilovada ishlaydi, PIN so\'ralmaydi', type: 'checkbox', value: !!u.kiosk },
     ];
     const toBody = (d) => ({ ...d, roleId: Number(d.roleId), password: d.password || undefined });
     v.innerHTML = `
@@ -889,7 +890,7 @@ const views = {
       <div class="table-wrap"><table>
         <tr><th>Ism</th><th>Login</th><th>Rol</th><th class="num">Yashirilgan</th><th>Qurilmalar</th><th>Oxirgi faollik</th><th></th></tr>
         ${rows.map((u) => `<tr ${u.active ? '' : 'class="muted"'}>
-          <td>${esc(u.name)} ${u.is_test ? '<span class="badge test">test</span>' : ''}${u.active ? '' : ' (o\'chirilgan)'}<div class="muted">${esc(u.phone)}</div></td>
+          <td>${esc(u.name)} ${u.is_test ? '<span class="badge test">test</span>' : ''}${u.kiosk ? ' <span class="badge" title="Monoblokdan foydalanadi">🖥</span>' : ''}${u.active ? '' : ' (o\'chirilgan)'}<div class="muted">${esc(u.phone)}</div></td>
           <td><code>${esc(u.login)}</code></td><td>${esc(u.role_name)}</td>
           <td class="num">${collectRoles.has(u.role_id) ? (u.hidden_count || 0) : '—'}</td>
           <td><a href="#devices?user=${u.id}">${u.devices_bound} / ${u.device_slots}</a></td>

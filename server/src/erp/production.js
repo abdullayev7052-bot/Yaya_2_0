@@ -386,8 +386,8 @@ export function outputRange(db, r, inputs) {
 }
 
 // Where an input comes from, in order: the previous stage on the map (of the input
-// itself, then of what the recipe makes), the raw-milk warehouse for milk, then the
-// warehouses the worker keeps. The first with enough is used; with not enough
+// itself, then of what the recipe makes), the raw-milk warehouse for milk, the
+// warehouses the worker keeps, then the stage's own warehouse. The first with enough is used; with not enough
 // anywhere, a previous stage goes below zero; separation outputs may go below zero
 // during the technologist's shift; otherwise the shortage is refused.
 function inputSource(db, { t, r, productId, qty }) {
@@ -397,6 +397,8 @@ function inputSource(db, { t, r, productId, qty }) {
   if (product(db, productId)?.kind === 'raw_milk') add(milkWarehouse(db));
   for (const w of keptWarehouses(db, t.user_id)) if (w !== t.stage_id && !db.prepare('SELECT is_stage FROM warehouses WHERE id = ?').get(w)?.is_stage) add(w);
   for (const w of keptWarehouses(db, t.user_id)) if (w !== t.stage_id) add(w);
+  // Materials kept at the stage itself come last.
+  add(t.stage_id);
   for (const id of list) if (productBalance(db, { warehouseId: id }, productId) >= qty - EPS) return { h: { warehouseId: id } };
   for (const id of prevs) if (allowNegative(db, { warehouseId: id })) return { h: { warehouseId: id } };
   if (t.shift_id && sepProducts(db).has(productId)) return { h: { warehouseId: sepWarehouse(db, t.user_id) }, allowNeg: true };

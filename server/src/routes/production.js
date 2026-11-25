@@ -47,6 +47,8 @@ export default async function productionRoutes(app, { db }) {
   app.get('/board', need(), async (req) => ({
     stages: stageBoard(db, req.me.id, { all: req.query.all === '1' && viewAll(req) }),
     shift: (() => { const s = myShift(db, req.me.id); return s ? shiftDetail(db, s.id) : null; })(),
+    // My unfinished tasks (started, waiting for a manager, or sent back).
+    tasks: db.prepare("SELECT id FROM prod_tasks WHERE user_id = ? AND status IN ('open','approval') ORDER BY id DESC").all(req.me.id).map((t) => taskDetail(db, t.id)),
   }));
   app.get('/map/:productId', need(), async (req) => productMap(db, Number(req.params.productId)));
   app.put('/map/:productId', need('prod.manage'), async (req, reply) => run(reply, () => {

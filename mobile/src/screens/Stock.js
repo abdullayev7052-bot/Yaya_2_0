@@ -3,7 +3,7 @@ import { Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 're
 import { randomUUID } from 'expo-crypto';
 import * as api from '../api';
 import { ask, notify } from '../dialog';
-import { Btn, Chip, Err, Header, SearchBar, fmtDT, textMatch, toNumber, useLoad } from '../components';
+import { Btn, Chip, Err, Header, SearchBar, fmtDT, kioskField, textMatch, toNumber, useLoad } from '../components';
 import { C, fmtQty, s } from '../ui';
 
 // Warehouse part of the workplace app (Yaya 2.0, stage 1): what I hold, the
@@ -93,13 +93,14 @@ export function Stock({ onForm, tick }) {
         </View>
       )}
 
-      <View style={[s.card, { gap: 4 }]}>
-        <Text style={s.h2}>Mening qo'limda</Text>
-        <StockRows rows={mine?.mine} empty="Qo'lingizda mahsulot yo'q" />
-      </View>
+      {!(mine?.warehouses ?? []).length && (
+        <View style={[s.card, { gap: 4 }]}>
+          <Text style={s.muted}>Siz hech bir ombor yoki bosqichga mas'ul emassiz.</Text>
+        </View>
+      )}
       {(mine?.warehouses ?? []).map((w) => (
         <View key={w.id} style={[s.card, { gap: 4 }]}>
-          <Text style={s.h2}>{w.name}</Text>
+          <Text style={s.h2}>{w.name}{w.is_stage ? <Text style={s.muted}>  · bosqich</Text> : null}</Text>
           <StockRows rows={w.rows} empty="Omborda qoldiq yo'q" />
         </View>
       ))}
@@ -146,7 +147,7 @@ function QtyRow({ name, unit, hint, value, onChange }) {
         {!!hint && <Text style={{ fontSize: 13, color: C.muted }}>{hint}</Text>}
       </View>
       <TextInput style={[s.input, { width: 110, paddingVertical: 8, fontSize: 18, textAlign: 'right' }]} keyboardType="decimal-pad"
-        value={value} onChangeText={onChange} placeholder="0" placeholderTextColor={C.placeholder} />
+        value={value} {...kioskField(value, onChange)} placeholder="0" placeholderTextColor={C.placeholder} />
       <Text style={[s.muted, { width: 36 }]}>{unit}</Text>
     </View>
   );
@@ -157,13 +158,10 @@ export function StockForm({ type, onBack, onDone }) {
   const me = api.me();
   const { data, err } = useLoad(() => Promise.all([api.cachedGet('/api/erp/meta'), api.cachedGet('/api/erp/stock/mine')]), []);
   const [meta, mine] = data ?? [null, null];
-  const sources = useMemo(() => (!meta ? [] : [
-    { h: { userId: me.id }, label: 'Mening qo\'lim' },
-    ...meta.warehouses.filter((w) => meta.myWarehouses.includes(w.id)).map((w) => ({ h: { warehouseId: w.id }, label: w.name })),
-  ]), [meta]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Goods are always in a warehouse or a stage: hand over from one you keep.
+  const sources = useMemo(() => (!meta ? [] : meta.warehouses.filter((w) => meta.myWarehouses.includes(w.id)).map((w) => ({ h: { warehouseId: w.id }, label: w.name }))), [meta]);
   const [fromSel, setFrom] = useState(null);
-  // Empty hands and a warehouse to keep: start from the warehouse.
-  const from = fromSel ?? (mine && !mine.mine.length && mine.warehouses[0] ? { warehouseId: mine.warehouses[0].id } : { userId: me.id });
+  const from = fromSel ?? (mine?.warehouses[0] ? { warehouseId: mine.warehouses[0].id } : {});
   const [to, setTo] = useState(null);
   const [toQuery, setToQuery] = useState('');
   const [qty, setQty] = useState({});
@@ -171,12 +169,11 @@ export function StockForm({ type, onBack, onDone }) {
   const [chargeUser, setChargeUser] = useState(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
-  const available = !mine ? [] : from.userId ? mine.mine : (mine.warehouses.find((w) => w.id === from.warehouseId)?.rows ?? []);
+  const available = !mine ? [] : (mine.warehouses.find((w) => w.id === from.warehouseId)?.rows ?? []);
   const reason = meta?.reasons.find((r) => r.id === reasonId);
-  const needCharge = type === 'writeoff' && reason?.charge === 'staff' && !from.userId;
+  const needCharge = type === 'writeoff' && reason?.charge === 'staff';
   const targets = !meta ? [] : [
-    ...meta.warehouses.map((w) => ({ h: { warehouseId: w.id }, label: w.name, sub: 'Ombor' })),
-    ...meta.staff.filter((u) => u.id !== me.id).map((u) => ({ h: { userId: u.id }, label: u.name, sub: 'Xodim' })),
+    ...meta.warehouses.map((w) => ({ h: { warehouseId: w.id }, label: w.name, sub: w.is_stage ? 'Bosqich' : 'Ombor' })),
   ].filter((t) => hKey(t.h) !== hKey(from) && (!toQuery || textMatch(t.label, toQuery)));
   const lines = available.map((r) => ({ productId: r.product_id, qty: toNumber(qty[r.product_id] || 0) })).filter((l) => l.qty > 0);
   const over = available.find((r) => toNumber(qty[r.product_id] || 0) > r.qty);
@@ -229,7 +226,6 @@ export function StockForm({ type, onBack, onDone }) {
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
               {(meta?.reasons ?? []).map((r) => <Chip key={r.id} label={r.name} on={r.id === reasonId} onPress={() => setReasonId(r.id)} />)}
             </View>
-            {reason?.charge === 'staff' && from.userId && <Text style={{ color: C.warn }}>Mahsulot qiymati sizning hisobingizga yoziladi.</Text>}
             {needCharge && (
               <>
                 <Text style={s.muted}>Kimning aybi bilan?</Text>

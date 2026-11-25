@@ -3,17 +3,20 @@ import { Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 're
 import { randomUUID } from 'expo-crypto';
 import * as api from '../api';
 import { ask, notify } from '../dialog';
-import { Btn, Chip, Err, Header, fmtDT, toNumber, useLoad } from '../components';
+import { Btn, Chip, Err, Header, fmtDT, kioskField, toNumber, useLoad } from '../components';
 import { C, fmtQty, s } from '../ui';
 
-// Technologist's workplace (Yaya 2.0, stage 2): open a shift, run tasks from
-// recipes (milk and materials come from what was handed to them), weigh the
-// output, and at the end explain the milk that is not accounted for.
-// No sums anywhere — the server does not send them to the technologist.
+// Stages (Yaya 2.0, stage 10): every person runs the stages they are responsible
+// for. A stage shows what is waiting in the stage before it; a "change" stage makes
+// something new from its recipe (materials are taken by themselves from the
+// warehouses the person keeps), a "keep" stage moves the same product on. The
+// technologist sees the shift's milk at the top, with separation (entered at the
+// end of the shift). "Who did it with you" decides the piece wages.
+// No sums anywhere — the server does not send them to staff.
 
 const prod = (method, path, body, opts) => api.erp(method, `/prod${path}`, body, opts);
-export const canProduce = () => api.canAny('prod.work', 'prod.pour', 'prod.cap', 'prod.reprocess');
-const PER_UNIT = new Set(['pour', 'cap', 'reprocess']);
+export const canProduce = () => api.canAny('prod.work', 'prod.pour', 'prod.cap', 'prod.reprocess', 'prod.manage', 'stock.transfer');
+const PER_UNIT = new Set(['pour', 'pack', 'cap', 'reprocess']);
 
 const TASK = { open: ['Jarayonda', C.warn], approval: ['Rahbar tasdig\'ini kutmoqda', C.warn], done: ['Bajarildi', C.ok], cancelled: ['Bekor qilingan', C.err] };
 function Badge({ map, status }) {
@@ -21,94 +24,140 @@ function Badge({ map, status }) {
   return <View style={{ borderWidth: 1, borderColor: color, borderRadius: 99, paddingHorizontal: 8, paddingVertical: 2, alignSelf: 'flex-start' }}><Text style={{ color, fontSize: 13, fontWeight: '600' }}>{t}</Text></View>;
 }
 const weightKg = (unit, qty) => { const u = String(unit || 'kg').toLowerCase(); return u === 'g' || u === 'gramm' ? qty / 1000 : u === 'dona' ? 0 : qty; };
+const r3 = (n) => Math.round(n * 1000) / 1000;
 
 function Num({ value, onChange, unit, width = 120, placeholder = '0' }) {
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
       <TextInput style={[s.input, { width, paddingVertical: 8, fontSize: 18, textAlign: 'right' }]} keyboardType="decimal-pad" value={String(value ?? '')}
-        onChangeText={onChange} placeholder={placeholder} placeholderTextColor={C.placeholder} />
+        {...kioskField(value, onChange)} placeholder={placeholder} placeholderTextColor={C.placeholder} />
       {!!unit && <Text style={[s.muted, { minWidth: 30 }]}>{unit}</Text>}
     </View>
   );
 }
 
-// ---------------------------------------------------------------- main
-export function Production({ tick, onTask, onNew, onClose }) {
-  const { data, err, busy, load } = useLoad(() => prod('GET', '/shift'), [tick]);
+// "Who did it with you?" — the person doing it is ticked; others can be added.
+function Workers({ staff, team, setTeam }) {
+  const me = api.me();
+  return (
+    <View style={[s.card, { gap: 8 }]}>
+      <Text style={s.muted}>Bu ishni kim bilan qildingiz? (ishbay haq teng bo'linadi)</Text>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+        {(staff ?? []).map((u) => (
+          <Chip key={u.id} label={u.id === me?.id ? `${u.name} (men)` : u.name} on={team.includes(u.id)}
+            onPress={() => setTeam(team.includes(u.id) ? (team.length > 1 ? team.filter((x) => x !== u.id) : team) : [...team, u.id])} />
+        ))}
+      </View>
+      <Text style={s.muted}>{team.length} kishi</Text>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- my stages
+export function Production({ tick, onTask, onNew, onClose, onMove }) {
+  const { data, err, busy, load } = useLoad(() => prod('GET', '/board'), [tick]);
+  const stages = data?.stages ?? [];
   const sh = data?.shift;
-  const open = async () => {
-    try { await prod('POST', '/shift', { uuid: randomUUID() }, { idempotent: true }); load(); } catch (e) { notify('Xatolik', e.message); }
-  };
+  const produce = stages.find((x) => x.code === 'produce');
+  const skimUsed = (sh?.separation?.outputs ?? []).filter((o) => o.book < -0.0005);
   return (
     <ScrollView contentContainerStyle={{ padding: 12, gap: 12 }} refreshControl={<RefreshControl refreshing={busy} onRefresh={load} />}>
       <Err err={err} />
-      {data && !sh && (
-        <View style={[s.card, { gap: 12 }]}>
-          <Text style={s.h2}>Smena ochilmagan</Text>
-          <Text style={s.muted}>Kerakli mahsulotni (sut, quyma, idish, etiketka, qopqoq...) "Ombor" bo'limida qabul qiling, keyin smenani oching.</Text>
-          <Btn title="Smena ochish" onPress={open} />
+      {data && !stages.length && (
+        <View style={[s.card, { gap: 6 }]}>
+          <Text style={s.h2}>Bosqich biriktirilmagan</Text>
+          <Text style={s.muted}>Rahbar sizni bosqichga mas'ul qilib belgilasin (panel → Ishlab chiqarish → Bosqichlar).</Text>
         </View>
       )}
-      {sh && (
-        <>
-          <View style={[s.card, { gap: 6 }]}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={s.h2}>{sh.label}</Text>
-              {sh.status === 'approval' && <Badge map={{ approval: ['Rahbar tasdig\'ini kutmoqda', C.warn] }} status="approval" />}
-            </View>
-            <Text style={s.muted}>Ochildi {fmtDT(sh.opened_at)}</Text>
-            {(sh.milk.in_hands !== 0 || sh.milk.used > 0) && (
-              <>
-                <Text style={s.text}>Qo'lingizda {sh.milk.product}: <Text style={{ fontWeight: '700' }}>{fmtQty(sh.milk.in_hands)} kg</Text></Text>
-                <Text style={s.text}>Topshiriqlarda ishlatildi: <Text style={{ fontWeight: '700' }}>{fmtQty(sh.milk.used)} kg</Text></Text>
-              </>
-            )}
-            {!!sh.approval_note && <Text style={{ color: C.err }}>Rahbar: {sh.approval_note}</Text>}
+      {produce && (
+        <View style={[s.card, { gap: 6, borderColor: C.accent }]}>
+          <Text style={s.h2}>Smena{sh ? ` · ${sh.label}` : ''}</Text>
+          {sh ? (
+            <>
+              <Text style={s.text}>Sarflangan sut: <Text style={{ fontWeight: '700', fontSize: 20 }}>{fmtQty(sh.milk.used)} kg</Text></Text>
+              <Text style={s.muted}>"{sh.milk.warehouse}"da hisobda: {fmtQty(sh.milk.book)} kg · ochildi {fmtDT(sh.opened_at)}</Text>
+              {sh.status === 'approval' && <Text style={{ color: C.warn }}>Smena yakuni rahbar tasdig'ini kutmoqda</Text>}
+              {!!sh.approval_note && <Text style={{ color: C.err }}>Rahbar: {sh.approval_note}</Text>}
+            </>
+          ) : <Text style={s.muted}>Birinchi topshiriq boshlanganda smena o'zi ochiladi.</Text>}
+          {/* Separation: entered at the end of the shift; skim milk / cream used so far is shown */}
+          <View style={{ borderTopWidth: 1, borderColor: C.line, paddingTop: 8, gap: 4 }}>
+            <Text style={[s.text, { fontWeight: '700' }]}>Separatsiya</Text>
+            {skimUsed.length ? skimUsed.map((o) => <Text key={o.product_id} style={{ color: C.warn }}>{o.product}: {fmtQty(-o.book)} {o.unit} ishlatildi — smena oxirida kiritasiz</Text>)
+              : <Text style={s.muted}>Qaymoq va yog'siz sut miqdori smena oxirida kiritiladi.</Text>}
           </View>
-          {sh.status === 'open' && <Btn title="+ Yangi topshiriq" onPress={onNew} />}
-          {sh.tasks.slice().reverse().map((t) => (
-            <Pressable key={t.id} onPress={() => onTask(t.id)} style={({ pressed }) => [s.card, { gap: 4 }, pressed && { opacity: 0.6 }]}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                <Text style={[s.text, { fontWeight: '700', flex: 1 }]}>{t.label} · {t.recipe}</Text>
-                <Badge map={TASK} status={t.status} />
-              </View>
-              {t.outputs.map((o) => <Text key={o.product_id} style={s.text}>{o.product}: <Text style={{ fontWeight: '700' }}>{fmtQty(o.qty)} {o.unit}</Text></Text>)}
-              {t.status === 'open' && <Text style={s.muted}>{t.plan.map((l) => `${l.product} ${fmtQty(l.qty)} ${l.unit}`).join(' · ')}</Text>}
-              {!!t.approval_note && t.status === 'open' && <Text style={{ color: C.err }}>Rad etildi: {t.approval_note}</Text>}
-            </Pressable>
-          ))}
-          {sh.status === 'open' && <Btn title="Smenani yopish" kind="ghost" onPress={onClose} />}
-        </>
+          {sh?.status === 'open' && <Btn title="Separatsiya va smenani yopish" kind="ghost" onPress={onClose} />}
+        </View>
       )}
+      {(data?.tasks ?? []).map((t) => (
+        <Pressable key={t.id} onPress={() => onTask(t.id)} style={({ pressed }) => [s.card, { gap: 4, borderColor: C.warn }, pressed && { opacity: 0.6 }]}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <Text style={[s.text, { fontWeight: '700', flex: 1 }]}>{t.label} · {t.recipe ?? t.stage}</Text>
+            <Badge map={TASK} status={t.status} />
+          </View>
+          <Text style={s.muted}>{t.plan.map((l) => `${l.product} ${fmtQty(l.qty)} ${l.unit}`).join(' · ')}</Text>
+          {!!t.approval_note && t.status === 'open' && <Text style={{ color: C.err }}>Rad etildi: {t.approval_note}</Text>}
+        </Pressable>
+      ))}
+      {stages.map((st) => (
+        <View key={st.id} style={[s.card, { gap: 8 }]}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Text style={s.h2}>{st.name}</Text>
+            <Text style={s.muted}>{st.type_label}</Text>
+          </View>
+          {st.type === 'change' ? (
+            st.waiting.map((w) => (
+              <Pressable key={w.recipe_id} onPress={() => onNew({ stageId: st.id, recipeId: w.recipe_id })}
+                style={({ pressed }) => [{ paddingVertical: 10, borderTopWidth: 1, borderColor: C.line, gap: 2 }, pressed && { opacity: 0.6 }]}>
+                <Text style={[s.text, { fontWeight: '600' }]}>{w.recipe}{w.product ? ` → ${w.product}` : ''}</Text>
+                {w.waiting ? <Text style={{ color: w.waiting.qty > 0 ? C.ok : C.muted }}>{w.waiting.from_name}da: {fmtQty(w.waiting.qty)} {w.waiting.unit} {w.waiting.product}</Text> : null}
+              </Pressable>
+            )).concat(st.waiting.length ? [] : [<Text key="none" style={s.muted}>Bu bosqichda tarkib yo'q</Text>])
+          ) : (
+            st.waiting.length ? st.waiting.map((w) => (
+              <Pressable key={w.product_id} onPress={() => onMove({ stage: st, item: w })}
+                style={({ pressed }) => [{ paddingVertical: 10, borderTopWidth: 1, borderColor: C.line, gap: 2 }, pressed && { opacity: 0.6 }]}>
+                <Text style={[s.text, { fontWeight: '600' }]}>{w.product}</Text>
+                <Text style={{ color: C.ok }}>{w.from_name}da kutmoqda: {fmtQty(w.qty)} {w.unit}</Text>
+              </Pressable>
+            )) : <Text style={s.muted}>Oldingi bosqichda kutayotgan mahsulot yo'q</Text>
+          )}
+          {!!st.contents.length && (
+            <View style={{ borderTopWidth: 1, borderColor: C.line, paddingTop: 6 }}>
+              <Text style={s.muted}>Shu bosqichda turibdi:</Text>
+              {st.contents.map((c) => <Text key={c.product_id} style={{ color: c.qty < 0 ? C.err : C.text }}>{c.product}: {fmtQty(c.qty)} {c.unit}</Text>)}
+            </View>
+          )}
+        </View>
+      ))}
     </ScrollView>
   );
 }
 
-// ---------------------------------------------------------------- new task
-export function NewTask({ onBack, onDone }) {
-  const { data: recipes, err } = useLoad(() => prod('GET', '/recipes?mine=1'), []);
-  const [rid, setRid] = useState(null);
+// ---------------------------------------------------------------- start a task at a 'change' stage
+export function NewTask({ stageId, recipeId, onBack, onDone }) {
+  const { data: r, err } = useLoad(() => prod('GET', `/recipes/${recipeId}`), [recipeId]);
   const [milk, setMilk] = useState('');
   const [factor, setFactor] = useState('');
   const [over, setOver] = useState({});
   const [busy, setBusy] = useState(false);
-  const r = recipes?.find((x) => x.id === rid);
   const perUnit = r && PER_UNIT.has(r.kind);
   const f = r ? (r.base_milk > 0 && !perUnit ? toNumber(milk || 0) / r.base_milk : toNumber(factor || 0)) : 0;
   const lines = r ? r.lines.map((l) => {
     const o = over[l.id] ?? {};
     const pid = o.productId ?? l.product_id;
-    const alt = l.alts.find((a) => a.product_id === pid);
-    const name = alt ? alt.product : l.product;
-    const unit = alt ? alt.unit : l.unit;
+    // the chosen product: the line itself, an alternative, or a variant of either
+    const alt = l.alts.find((a) => a.product_id === pid || a.variants.some((v) => v.id === pid));
+    const base = alt ?? l;
+    const variant = base.variants?.find((v) => v.id === pid);
     const auto = Math.round((alt?.qty ?? l.qty) * f * 1000) / 1000;
-    return { l, pid, name, unit, qty: o.qty ?? (f > 0 ? String(auto) : ''), auto };
+    return { l, base, pid, name: variant?.name ?? base.product, unit: base.unit, variants: base.variants ?? [], qty: o.qty ?? (f > 0 ? String(auto) : ''), auto };
   }) : [];
   const start = async () => {
     setBusy(true);
     try {
       const t = await prod('POST', '/tasks', {
-        uuid: randomUUID(), recipeId: r.id, ...(perUnit ? { units: toNumber(factor) } : r.base_milk > 0 ? { milkQty: toNumber(milk) } : { factor: toNumber(factor) }),
+        uuid: randomUUID(), stageId, recipeId: r.id, ...(perUnit ? { units: toNumber(factor) } : r.base_milk > 0 ? { milkQty: toNumber(milk) } : { factor: toNumber(factor) }),
         lines: lines.map((x) => ({ lineId: x.l.id, productId: x.pid, ...(x.qty !== String(x.auto) ? { qty: toNumber(x.qty) } : {}) })),
       }, { idempotent: true });
       onDone(t.id);
@@ -116,16 +165,9 @@ export function NewTask({ onBack, onDone }) {
   };
   return (
     <View style={{ flex: 1 }}>
-      <Header title="Yangi topshiriq" onBack={onBack} />
+      <Header title={r ? r.name : 'Topshiriq'} onBack={onBack} />
       <ScrollView contentContainerStyle={{ padding: 12, gap: 12 }} keyboardShouldPersistTaps="handled">
         <Err err={err} />
-        <View style={[s.card, { gap: 8 }]}>
-          <Text style={s.muted}>Nima tayyorlanadi?</Text>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-            {(recipes ?? []).map((x) => <Chip key={x.id} label={x.name} on={x.id === rid} onPress={() => { setRid(x.id); setOver({}); }} />)}
-          </View>
-          {recipes && !recipes.length && <Text style={s.muted}>Tarkiblar hali kiritilmagan (panel → Ishlab chiqarish → Tarkiblar).</Text>}
-        </View>
         {r && (
           <View style={[s.card, { gap: 8 }]}>
             {r.base_milk > 0 && !perUnit ? (
@@ -149,9 +191,20 @@ export function NewTask({ onBack, onDone }) {
                 {x.l.alts.length > 0 && (
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
                     {[{ product_id: x.l.product_id, product: x.l.product }, ...x.l.alts].map((a) => (
-                      <Chip key={a.product_id} label={a.product} on={a.product_id === x.pid}
+                      <Chip key={a.product_id} label={a.product} on={a.product_id === x.base.product_id}
                         onPress={() => setOver((o) => ({ ...o, [x.l.id]: { productId: a.product_id } }))} />
                     ))}
+                  </View>
+                )}
+                {/* "Zakvaska" first, then its variant: 499, 505... */}
+                {x.variants.length > 0 && (
+                  <View style={{ gap: 4 }}>
+                    <Text style={s.muted}>Qaysi varianti?</Text>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                      {x.variants.map((v) => <Chip key={v.id} label={v.variant} on={v.id === x.pid}
+                        onPress={() => setOver((o) => ({ ...o, [x.l.id]: { ...(o[x.l.id] ?? {}), productId: v.id } }))} />)}
+                    </View>
+                    {!x.variants.some((v) => v.id === x.pid) && <Text style={{ color: C.warn, fontSize: 13 }}>Tanlanmasa — omborda ko'pi olinadi</Text>}
                   </View>
                 )}
               </View>
@@ -173,17 +226,12 @@ export function TaskScreen({ id, onBack, onDone }) {
   }, [id]);
   const me = api.me();
   const [workers, setWorkers] = useState(null);
-  const [sendTo, setSendTo] = useState(undefined);
   const [qty, setQty] = useState({});
   const [out, setOut] = useState({});
   const [busy, setBusy] = useState(false);
   const t = data?.t; const r = data?.r; const meta = data?.meta;
   const perUnit = r && PER_UNIT.has(r.kind);
   const team = workers ?? [me?.id];
-  // Next step: incubator first for pouring, finished goods for capping.
-  const order = r?.kind === 'pour' ? ['incubator', 'finished'] : ['finished', 'incubator'];
-  const places = meta ? [...meta.warehouses].sort((a, b) => (order.indexOf(a.kind) + 1 || 9) - (order.indexOf(b.kind) + 1 || 9)) : [];
-  const target = sendTo === undefined ? (perUnit && places[0] && order.includes(places[0].kind) ? { warehouseId: places[0].id } : null) : sendTo;
   const inputs = useMemo(() => (t ? t.plan.map((l) => ({ ...l, qty: qty[l.productId] ?? String(l.qty) })) : []), [t, qty]);
   if (!t) return <View style={{ flex: 1 }}><Header title="Topshiriq" onBack={onBack} /><Err err={err} /></View>;
   if (r?.kind === 'reprocess') return <ReprocessTask t={t} r={r} onBack={onBack} onDone={onDone} reload={load} />;
@@ -202,17 +250,15 @@ export function TaskScreen({ id, onBack, onDone }) {
   const finish = async () => {
     setBusy(true);
     try {
-      const body = { lines: inputs.map((l) => ({ productId: l.productId, qty: toNumber(l.qty) })) };
+      const body = { lines: inputs.map((l) => ({ productId: l.productId, qty: toNumber(l.qty) })), workers: team };
       if (r.kind !== 'separation') body.outputQty = toNumber(out[r.product_id] ?? (perUnit ? String(t.factor) : 0));
       else body.outputs = outs.map((o) => ({ productId: o.productId, qty: toNumber(out[o.productId] || 0) }));
-      if (r.rates?.length) body.workers = team;
-      if (target) body.sendTo = target;
       const res = await prod('POST', `/tasks/${t.id}/complete`, body);
       onDone(res.needApproval ? `${t.label}: chiqish limitdan tashqarida — rahbar tasdig'iga yuborildi` : `${t.label} bajarildi`);
     } catch (e) { notify('Xatolik', e.message); load(); } finally { setBusy(false); }
   };
-  const cancel = () => ask('Bekor qilish', `${t.label} bekor qilinsinmi? Ishlatilgan mahsulot qo'lingizga qaytadi.`, 'Ha', async () => {
-    try { await prod('POST', `/tasks/${t.id}/cancel`, { reason: 'Texnolog bekor qildi' }); onDone(`${t.label} bekor qilindi`); } catch (e) { notify('Xatolik', e.message); }
+  const cancel = () => ask('Bekor qilish', `${t.label} bekor qilinsinmi? Ishlatilgan mahsulot qayerdan olingan bo'lsa, o'sha yerga qaytadi.`, 'Ha', async () => {
+    try { await prod('POST', `/tasks/${t.id}/cancel`, { reason: 'Xodim bekor qildi' }); onDone(`${t.label} bekor qilindi`); } catch (e) { notify('Xatolik', e.message); }
   });
 
   return (
@@ -222,7 +268,7 @@ export function TaskScreen({ id, onBack, onDone }) {
         <Badge map={TASK} status={t.status} />
         {!!t.approval_note && <Text style={{ color: t.status === 'open' ? C.err : C.muted }}>Rahbar: {t.approval_note}</Text>}
         <View style={[s.card, { gap: 4 }]}>
-          <Text style={[s.muted, { marginBottom: 4 }]}>Ishlatildi</Text>
+          <Text style={[s.muted, { marginBottom: 4 }]}>Ishlatildi (ombordan o'zi ayriladi)</Text>
           {inputs.map((l) => (
             <View key={l.productId} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4 }}>
               <Text style={[s.text, { flex: 1 }]}>{l.product}</Text>
@@ -242,28 +288,7 @@ export function TaskScreen({ id, onBack, onDone }) {
           {range && editable && <Text style={{ color: outside ? C.err : C.muted }}>Ruxsat etilgan: {fmtQty(range.min ?? 0)} – {range.max == null ? '∞' : fmtQty(range.max)} kg{range.rule ? ` (shartli: ${range.rule})` : ''}{outside ? ' — chegaradan tashqarida, rahbar tasdiqlaydi' : ''}</Text>}
           {t.status === 'approval' && <Text style={{ color: C.warn }}>Chiqish chegaradan tashqarida. Rahbar tasdiqlashini kuting.</Text>}
         </View>
-        {editable && !!r?.rates?.length && (
-          <View style={[s.card, { gap: 8 }]}>
-            <Text style={s.muted}>Kim bilan birga bajardingiz? (ishbay haq teng bo'linadi)</Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-              {(meta?.staff ?? []).map((u) => (
-                <Chip key={u.id} label={u.id === me?.id ? `${u.name} (men)` : u.name} on={team.includes(u.id)}
-                  onPress={() => setWorkers(team.includes(u.id) ? (team.length > 1 ? team.filter((x) => x !== u.id) : team) : [...team, u.id])} />
-              ))}
-            </View>
-            <Text style={s.muted}>{team.length} kishi</Text>
-          </View>
-        )}
-        {editable && (
-          <View style={[s.card, { gap: 8 }]}>
-            <Text style={s.muted}>Tayyor mahsulot qayerga o'tadi?</Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-              <Chip label="O'zimda qoladi" on={!target} onPress={() => setSendTo(null)} />
-              {places.map((w) => <Chip key={w.id} label={w.name} on={target?.warehouseId === w.id} onPress={() => setSendTo({ warehouseId: w.id })} />)}
-            </View>
-            {!!target && <Text style={s.muted}>Mas'ul xodim qabul qilgach o'tadi.</Text>}
-          </View>
-        )}
+        {editable && <Workers staff={meta?.staff} team={team} setTeam={setWorkers} />}
         {editable && <Btn title={busy ? '...' : 'Yakunlash'} onPress={finish} disabled={busy || !(outWeight > 0 || outs.some((o) => toNumber(out[o.productId] || 0) > 0))} />}
         {(t.status === 'open' || t.status === 'done' || t.status === 'approval') && <Btn title="Bekor qilish" kind="warn" onPress={cancel} />}
       </ScrollView>
@@ -271,36 +296,73 @@ export function TaskScreen({ id, onBack, onDone }) {
   );
 }
 
-// ---------------------------------------------------------------- close the shift
+// ---------------------------------------------------------------- a 'keep' stage: move on
+export function MoveScreen({ stage, item, onBack, onDone }) {
+  const { data: meta } = useLoad(() => api.erp('GET', '/meta'), []);
+  const me = api.me();
+  const [qty, setQty] = useState(String(item.qty));
+  const [workers, setWorkers] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const team = workers ?? [me?.id];
+  const q = toNumber(qty || 0);
+  const more = q > item.qty + 0.0005;
+  const save = async () => {
+    setBusy(true);
+    try {
+      await prod('POST', '/moves', { uuid: randomUUID(), stageId: stage.id, productId: item.product_id, qty: q, workers: team }, { idempotent: true });
+      onDone(`${stage.name}: ${fmtQty(q)} ${item.unit} ${item.product}`);
+    } catch (e) { notify('Xatolik', e.message); } finally { setBusy(false); }
+  };
+  return (
+    <View style={{ flex: 1 }}>
+      <Header title={stage.name} onBack={onBack} />
+      <ScrollView contentContainerStyle={{ padding: 12, gap: 12 }} keyboardShouldPersistTaps="handled">
+        <View style={[s.card, { gap: 8 }]}>
+          <Text style={[s.text, { fontWeight: '700' }]}>{item.product}</Text>
+          <Text style={s.muted}>{item.from_name}da: {fmtQty(item.qty)} {item.unit}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Text style={s.text}>Nechtasi?</Text>
+            <Num value={qty} onChange={setQty} unit={item.unit} />
+          </View>
+          {more && <Text style={{ color: C.err }}>"{item.from_name}"da hisobdagidan ko'p — u manfiyga tushadi va rahbarga xabar boradi</Text>}
+          {q > 0 && q < item.qty - 0.0005 && <Text style={s.muted}>Qolgan {fmtQty(r3(item.qty - q))} {item.unit} "{item.from_name}"da qoladi</Text>}
+        </View>
+        {!!stage.piece_rate && <Workers staff={meta?.staff} team={team} setTeam={setWorkers} />}
+        <Btn title={busy ? '...' : 'Tasdiqlash'} onPress={save} disabled={busy || !(q > 0)} />
+      </ScrollView>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- separation and the end of the shift
 export function CloseShift({ onBack, onDone }) {
   const { data, err } = useLoad(async () => {
     const [{ shift }, meta] = await Promise.all([prod('GET', '/shift'), api.erp('GET', '/meta')]);
     return { shift, meta };
   }, []);
-  const [returned, setReturned] = useState('');
-  const [wh, setWh] = useState(null);
+  const [left, setLeft] = useState('');
   const [loss, setLoss] = useState({});
+  const [sep, setSep] = useState({});
   const [busy, setBusy] = useState(false);
   if (!data?.shift) return <View style={{ flex: 1 }}><Header title="Smenani yopish" onBack={onBack} /><Err err={err} /></View>;
   const { shift, meta } = data;
   const reasons = meta.techReasons ?? [];
-  const whs = meta.warehouses.filter((w) => w.kind === 'raw_milk').concat(meta.warehouses.filter((w) => w.kind !== 'raw_milk'));
-  const whId = wh ?? whs[0]?.id;
-  const inHands = shift.milk.in_hands;
-  const explained = toNumber(returned || 0) + reasons.reduce((a, r) => a + toNumber(loss[r.id] || 0), 0);
-  const left = Math.round((inHands - explained) * 1000) / 1000;
+  const book = shift.milk.book;
+  const lossSum = reasons.reduce((a, x) => a + toNumber(loss[x.id] || 0), 0);
+  const sepOuts = shift.separation?.outputs ?? [];
+  const sepGiven = sepOuts.some((o) => (sep[o.product_id] ?? '') !== '');
+  const unexplained = left === '' ? null : r3(book - toNumber(left) - lossSum);
   const openTasks = shift.tasks.filter((t) => t.status === 'open' || t.status === 'approval');
-  // Pourers and cappers use no milk: nothing to explain, the shift just closes.
-  const noMilk = inHands === 0 && shift.milk.used === 0;
-
+  const usedSoFar = shift.milk.used + (sepGiven && unexplained > 0 ? unexplained : 0);
   const submit = async () => {
     setBusy(true);
     try {
       const res = await prod('POST', `/shifts/${shift.id}/close`, {
-        returned: toNumber(returned || 0), returnTo: { warehouseId: whId },
-        losses: reasons.map((r) => ({ reasonId: r.id, qty: toNumber(loss[r.id] || 0) })).filter((l) => l.qty > 0),
+        milkLeft: toNumber(left),
+        losses: reasons.map((x) => ({ reasonId: x.id, qty: toNumber(loss[x.id] || 0) })).filter((l) => l.qty > 0),
+        ...(sepGiven ? { separation: { outputs: sepOuts.map((o) => ({ productId: o.product_id, qty: sep[o.product_id] === '' || sep[o.product_id] == null ? 0 : toNumber(sep[o.product_id]) })) } } : {}),
       });
-      onDone(res.needApproval ? 'Yo\'qotish limitdan oshgan — smena rahbar tasdig\'iga yuborildi' : `${shift.label} yopildi${toNumber(returned || 0) > 0 ? '. Qolgan sutni omborchi qabul qiladi.' : ''}`);
+      onDone(res.needApproval ? 'Limitdan oshgan — smena rahbar tasdig\'iga yuborildi' : `${shift.label} yopildi`);
     } catch (e) { notify('Xatolik', e.message); } finally { setBusy(false); }
   };
   return (
@@ -308,56 +370,57 @@ export function CloseShift({ onBack, onDone }) {
       <Header title={`${shift.label} — yopish`} onBack={onBack} />
       <ScrollView contentContainerStyle={{ padding: 12, gap: 12 }} keyboardShouldPersistTaps="handled">
         {openTasks.length > 0 && <Text style={s.err}>Avval ochiq topshiriqlarni yakunlang: {openTasks.map((t) => t.label).join(', ')}</Text>}
-        {noMilk ? (
-          <View style={[s.card, { gap: 6 }]}>
-            <Text style={s.text}>Bu smenada sut ishlatilmagan.</Text>
-            <Text style={s.muted}>Qo'lingizda qolgan mahsulotni (quyma, idish...) "Ombor" bo'limida omborga yoki keyingi xodimga topshiring.</Text>
-          </View>
-        ) : (
-          <>
         <View style={[s.card, { gap: 6 }]}>
-          <Text style={s.text}>Hisob bo'yicha qo'lingizda: <Text style={{ fontWeight: '700' }}>{fmtQty(inHands)} kg</Text> {shift.milk.product}</Text>
-          <Text style={s.muted}>Topshiriqlarda ishlatildi {fmtQty(shift.milk.used)} kg. Qolgan sut qayerga ketganini yozing.</Text>
-        </View>
-        <View style={[s.card, { gap: 8 }]}>
+          <Text style={s.text}>"{shift.milk.warehouse}"da hisob bo'yicha: <Text style={{ fontWeight: '700' }}>{fmtQty(book)} kg</Text></Text>
+          <Text style={s.muted}>Topshiriqlarda ishlatildi {fmtQty(shift.milk.used)} kg.</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text style={[s.text, { flex: 1 }]}>Omborga qaytaraman</Text>
-            <Num value={returned} onChange={setReturned} unit="kg" />
+            <Text style={[s.text, { flex: 1 }]}>Qolgan sut (o'lchab)</Text>
+            <Num value={left} onChange={setLeft} unit="kg" />
           </View>
-          {toNumber(returned || 0) > 0 && (
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-              {whs.map((w) => <Chip key={w.id} label={w.name} on={w.id === whId} onPress={() => setWh(w.id)} />)}
-            </View>
-          )}
         </View>
+        {sepOuts.length > 0 && (
+          <View style={[s.card, { gap: 8, borderColor: C.accent }]}>
+            <Text style={[s.text, { fontWeight: '700' }]}>Separatsiya (bo'lgan bo'lsa)</Text>
+            {sepOuts.map((o) => (
+              <View key={o.product_id} style={{ gap: 2 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Text style={[s.text, { flex: 1 }]}>{o.product} — {o.mode === 'rest' ? 'qoldi' : 'chiqdi'}</Text>
+                  <Num value={sep[o.product_id] ?? ''} onChange={(x) => setSep((m) => ({ ...m, [o.product_id]: x }))} unit={o.unit} />
+                </View>
+                {o.mode === 'rest' && o.book < -0.0005 && <Text style={{ fontSize: 13, color: C.muted }}>Smenada {fmtQty(-o.book)} {o.unit} ishlatildi — chiqqani: qolgani + {fmtQty(-o.book)}</Text>}
+              </View>
+            ))}
+            {sepGiven && unexplained != null && <Text style={{ color: unexplained > 0 ? C.ok : C.err }}>Separatsiyaga ketgan sut: {fmtQty(Math.max(0, unexplained))} kg</Text>}
+          </View>
+        )}
         <View style={[s.card, { gap: 8 }]}>
           <Text style={s.muted}>Yo'qotish sababi (bir nechta bo'lishi mumkin)</Text>
-          {reasons.map((r) => {
-            const allowed = r.limit_qty != null && r.limit_base > 0 ? (r.limit_qty * shift.milk.used) / r.limit_base : null;
-            const v = toNumber(loss[r.id] || 0);
+          {reasons.map((x) => {
+            const allowed = x.limit_qty != null && x.limit_base > 0 ? (x.limit_qty * usedSoFar) / x.limit_base : null;
+            const v = toNumber(loss[x.id] || 0);
             return (
-              <View key={r.id} style={{ gap: 2 }}>
+              <View key={x.id} style={{ gap: 2 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Text style={[s.text, { flex: 1 }]}>{r.name}</Text>
-                  <Num value={loss[r.id] ?? ''} onChange={(x) => setLoss((l) => ({ ...l, [r.id]: x }))} unit="kg" />
+                  <Text style={[s.text, { flex: 1 }]}>{x.name}</Text>
+                  <Num value={loss[x.id] ?? ''} onChange={(y) => setLoss((l) => ({ ...l, [x.id]: y }))} unit="kg" />
                 </View>
-                {allowed != null && <Text style={{ fontSize: 13, color: v > allowed + 0.0005 ? C.err : C.muted }}>Limit: {fmtQty(Math.round(allowed * 1000) / 1000)} kg gacha{v > allowed + 0.0005 ? ' — oshib ketdi, rahbar tasdiqlaydi' : ''}</Text>}
+                {allowed != null && <Text style={{ fontSize: 13, color: v > allowed + 0.0005 ? C.err : C.muted }}>Limit: {fmtQty(r3(allowed))} kg gacha{v > allowed + 0.0005 ? ' — oshib ketdi, rahbar tasdiqlaydi' : ''}</Text>}
               </View>
             );
           })}
         </View>
-        <Text style={{ fontSize: 18, fontWeight: '700', color: left > 0.0005 ? C.err : left < -0.0005 ? C.ok : C.ok }}>
-          {left > 0.0005 ? `Hisobsiz qoldi: ${fmtQty(left)} kg` : left < -0.0005 ? `Yutish: +${fmtQty(-left)} kg (hisobdagidan ko'p)` : 'Hammasi hisoblandi'}
-        </Text>
-          </>
+        {unexplained != null && !sepGiven && (
+          <Text style={{ fontSize: 18, fontWeight: '700', color: unexplained > 0.0005 ? C.err : C.ok }}>
+            {unexplained > 0.0005 ? `Hisobsiz qoldi: ${fmtQty(unexplained)} kg — separatsiya yoki yo'qotish kiriting` : unexplained < -0.0005 ? `Yutish: +${fmtQty(-unexplained)} kg (hisobdagidan ko'p)` : 'Hammasi hisoblandi'}
+          </Text>
         )}
-        <Btn title={busy ? '...' : 'Smenani yopish'} onPress={submit} disabled={busy || left > 0.0005 || openTasks.length > 0} />
+        <Btn title={busy ? '...' : 'Smenani yopish'} onPress={submit} disabled={busy || left === '' || openTasks.length > 0 || (!sepGiven && unexplained > 0.0005)} />
       </ScrollView>
     </View>
   );
 }
 
-// ---------------------------------------------------------------- reprocessing (stage 5)
+// ---------------------------------------------------------------- reprocessing
 // Expired product taken apart: the container (fixed count per unit) and the content
 // (by netto weight, editable within its range). Containers that did not come out
 // must be explained: the missing count is filled in, the worker picks the reasons.

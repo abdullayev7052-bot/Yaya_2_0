@@ -30,10 +30,11 @@ const parseHolderValue = (v) => {
   if (t === 'u') return { userId: Number(id) };
   return null;
 };
-const holderOptions = (m, { staff = true, empty = null } = {}) => [
+// Places: warehouses and stages (nothing is "in a person's hands" any more).
+const holderOptions = (m, { empty = null } = {}) => [
   ...(empty ? [`<option value="">${esc(empty)}</option>`] : []),
-  `<optgroup label="Omborlar">${m.warehouses.map((w) => `<option value="w:${w.id}">${esc(w.name)}</option>`).join('')}</optgroup>`,
-  ...(staff ? [`<optgroup label="Xodimlar (qo'lida)">${m.staff.map((u) => `<option value="u:${u.id}">${esc(u.name)}</option>`).join('')}</optgroup>`] : []),
+  `<optgroup label="Omborlar">${m.warehouses.filter((w) => !w.is_stage).map((w) => `<option value="w:${w.id}">${esc(w.name)}</option>`).join('')}</optgroup>`,
+  `<optgroup label="Bosqichlar">${m.warehouses.filter((w) => w.is_stage).map((w) => `<option value="w:${w.id}">${esc(w.name)}</option>`).join('')}</optgroup>`,
 ].join('');
 const optionsHtml = (list, value) => list.map(([v, t]) => `<option value="${esc(v)}" ${String(v) === String(value ?? '') ? 'selected' : ''}>${esc(t)}</option>`).join('');
 
@@ -45,7 +46,7 @@ function tabsHtml(active) {
 // One dialog for every document type. opts: { type, doc (existing draft), title }.
 async function openDocForm(type, { doc = null, preset = {} } = {}) {
   const m = await loadMeta(true);
-  const products = await erp('GET', '/products');
+  const products = await erp('GET', '/products?stock=1');
   const dlg = $('#dlg');
   const t = { opening: 'Boshlang\'ich qoldiq', transfer: 'Topshirish', writeoff: 'Hisobdan chiqarish', inventory: 'Inventarizatsiya' }[type];
   const lines = (doc?.lines ?? preset.lines ?? []).filter((l) => !(type === 'inventory' && l.sort === 9999)).map((l) => ({
@@ -319,10 +320,11 @@ const stockTabs = {
         ${can('stock.manage') ? '<button id="newWh">+ Ombor</button>' : ''}
       </div>
       <div class="card table-wrap"><table><thead><tr><th>Nomi</th><th>Turi</th><th>Mas'ullar</th><th>Manfiy qoldiq</th><th>Ogohlantirish</th><th></th></tr></thead><tbody>
-      ${list.map((w) => `<tr class="${w.active ? '' : 'voided'}"><td><b>${esc(w.name)}</b>${w.note ? `<div class="muted">${esc(w.note)}</div>` : ''}</td><td>${esc(w.kind_label)}</td>
+      ${list.map((w) => `<tr class="${w.active ? '' : 'voided'}"><td><b>${esc(w.name)}</b>${w.note ? `<div class="muted">${esc(w.note)}</div>` : ''}</td>
+        <td>${esc(w.kind_label)}${w.is_stage ? ` <span class="muted">· ${esc(w.stage_type_label ?? '')}</span>` : ''}</td>
         <td>${w.keepers.map((k) => esc(k.name)).join(', ') || '<span class="muted">—</span>'}</td>
         <td>${w.allow_negative ? '<span class="warn">Ruxsat</span>' : 'Yo\'q'}</td><td>${w.warn_negative ? 'Ha' : 'Yo\'q'}</td>
-        <td>${can('stock.manage') ? `<button class="ghost small" data-edit="${w.id}">Tahrirlash</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">Ombor yo\'q</td></tr>'}
+        <td>${w.is_stage ? '<a href="#prod-stages">Bosqichlar →</a>' : can('stock.manage') ? `<button class="ghost small" data-edit="${w.id}">Tahrirlash</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">Ombor yo\'q</td></tr>'}
       </tbody></table></div>
       <p class="muted">Manfiy qoldiq: mahsulot hali kirim bo'lmasdan berilishi mumkinmi. Ruxsat bo'lsa, keyingi kirim kamomadni yopadi; narx farqi "Tannarx farqi" xarajatiga yoziladi.</p>`;
     $('#milkWh', box).onchange = act(async (e) => { if (e.target.value) { await erp('PUT', '/settings/milk-warehouse', { warehouseId: Number(e.target.value) }); flash('Saqlandi'); } });
@@ -363,12 +365,13 @@ const stockTabs = {
     box.innerHTML = `
       <div class="row" style="margin-bottom:12px;justify-content:space-between">
         <label style="max-width:280px">Turi<select id="kind"><option value="">Hammasi</option>${optionsHtml(Object.entries(m.productKinds), kind)}</select></label>
-        ${can('catalog.manage') ? '<button id="newP">+ Mahsulot</button>' : ''}
+        <div class="row" style="flex:none">${can('catalog.manage') ? '<button class="ghost" id="impP">⬆ Excel\'dan import</button><button id="newP">+ Mahsulot</button>' : ''}</div>
       </div>
-      <div class="card table-wrap"><table><thead><tr><th>Nomi</th><th>Turi</th><th>Birlik</th><th class="num">Netto, g</th><th class="num">Brutto, g</th><th>Hajm</th><th>Shakl</th><th class="num">Yaroqlilik, soat</th><th class="num">Turish, soat</th><th></th></tr></thead><tbody>
-      ${list.map((x) => `<tr class="${x.active ? '' : 'voided'}"><td><b>${esc(x.name)}</b>${x.sku ? ` <span class="muted">${esc(x.sku)}</span>` : ''}</td><td>${esc(x.kind_label)}</td><td>${esc(x.unit)}</td>
+      <div class="card table-wrap"><table><thead><tr><th>Nomi</th><th>Turi</th><th>Birlik</th><th class="num">Netto, g</th><th class="num">Brutto, g</th><th>Hajm</th><th>Shakl</th><th class="num">Yaroqlilik, soat</th><th>Variantlar</th><th></th></tr></thead><tbody>
+      ${list.filter((x) => !x.parent_id).map((x) => `<tr class="${x.active ? '' : 'voided'}"><td><b>${esc(x.name)}</b>${x.sku ? ` <span class="muted">${esc(x.sku)}</span>` : ''}</td><td>${esc(x.kind_label)}</td><td>${esc(x.unit)}</td>
         <td class="num">${x.netto_g ?? ''}</td><td class="num">${x.brutto_g ?? ''}</td><td>${x.volume != null ? `${fmtNum(x.volume, 4)} ${esc(x.volume_unit ?? '')}` : ''}</td>
-        <td>${esc(m.shapes[x.shape] ?? '')}</td><td class="num">${x.shelf_life_hours ?? ''}</td><td class="num">${x.dwell_hours ?? ''}</td>
+        <td>${esc(m.shapes[x.shape] ?? '')}</td><td class="num">${x.shelf_life_hours ?? ''}</td>
+        <td>${x.has_variants ? list.filter((c) => c.parent_id === x.id).map((c) => `<span class="badge">${esc(c.variant)}</span>`).join(' ') : ''}</td>
         <td>${can('catalog.manage') && x.kind !== 'milk' ? `<button class="ghost small" data-edit="${x.id}">Tahrirlash</button>` : x.kind === 'milk' ? '<span class="muted" title="Sut yig\'ish bo\'limida tahrirlanadi">Sut yig\'ish</span>' : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="muted">Mahsulot yo\'q</td></tr>'}
       </tbody></table></div>
       <p class="muted">"Yig'uvchilar suti" (Yog'li / Yog'siz sut) sut yig'ish bo'limidagi "Mahsulotlar" sahifasida boshqariladi. Omborga ular bitta "Xom sut" bo'lib kiradi.</p>`;
@@ -386,18 +389,24 @@ const stockTabs = {
         { name: 'volume_unit', label: 'Hajm birligi', type: 'select', options: [['', '—'], ['m3', 'm³'], ['m2', 'm²'], ['l', 'litr']], value: x?.volume_unit ?? '' },
         { name: 'shape', label: 'Shakl', type: 'select', options: [['', '—'], ...Object.entries(m.shapes)], value: x?.shape ?? '' },
         { name: 'shelf_life_hours', label: 'Yaroqlilik muddati, soat', type: 'number', min: 0, value: x?.shelf_life_hours, hint: 'Kirimda partiya muddati shundan avtomatik qo\'yiladi (masalan 7 kun = 168).' },
-        { name: 'dwell_hours', label: 'Issiqxonada / omborda turish vaqti, soat', type: 'number', step: '0.1', min: 0, value: x?.dwell_hours },
+        ...(x ? (x.has_variants ? [{ name: 'addVariants', label: "Yangi variant qo'shish (vergul bilan)", hint: `Hozir: ${list.filter((c) => c.parent_id === x.id).map((c) => c.variant).join(', ')}` }] : [])
+          : [{ name: 'hasVariants', label: 'Variantli mahsulot (masalan Zakvaska: 499, 505) — keyin o\'zgartirib bo\'lmaydi', type: 'checkbox', value: false },
+            { name: 'variants', label: 'Variantlar (vergul bilan)', hint: 'Har bir variant alohida mahsulot: "Zakvaska / 499" — o\'z qoldig\'i va tannarxi bilan.' }]),
         { name: 'sku', label: 'Artikul', value: x?.sku }, { name: 'barcode', label: 'Shtrix-kod', value: x?.barcode },
         { name: 'category', label: 'Turkum', value: x?.category },
         ...(x ? [{ name: 'active', label: 'Faol', type: 'checkbox', value: !!x.active }] : []),
       ],
       onSubmit: async (d) => {
         const body = { ...d };
-        for (const k of ['netto_g', 'brutto_g', 'volume', 'shelf_life_hours', 'dwell_hours']) body[k] = d[k] === '' ? null : Number(d[k]);
+        for (const k of ['netto_g', 'brutto_g', 'volume', 'shelf_life_hours']) body[k] = d[k] === '' ? null : Number(d[k]);
+        delete body.addVariants;
+        if (!x && !body.hasVariants) delete body.variants;
         await (x ? erp('PATCH', `/products/${x.id}`, body) : erp('POST', '/products', body));
+        if (x && d.addVariants) await erp('POST', `/products/${x.id}/variants`, { variants: d.addVariants });
       },
     });
     $('#newP', box)?.addEventListener('click', () => edit());
+    $('#impP', box)?.addEventListener('click', () => setHash('stock', { tab: 'import' }));
     $$('[data-edit]', box).forEach((b) => { b.onclick = () => edit(list.find((x) => x.id === Number(b.dataset.edit))); });
   },
 

@@ -1,7 +1,22 @@
 # 10-bosqich — omborgacha jarayonni qayta qurish: talablar ro'yxati
 
-Holat: **yig'ilmoqda** (2026-11-25). Hali kod yozilmadi — rahbar qo'shimcha o'zgarishlarni aytadi, keyin hammasi
-birga rejalashtiriladi. Pastdagi "Ochiq savollar" ish boshlanishidan oldin aniqlanadi.
+Holat: **birinchi qism qurildi** (2026-11-25): pastdagi 1–9-bo'limlar ishlaydi (server, panel, ilova, 70 ta test).
+Rahbar keyingi o'zgarishlarni aytadi (reja / buyurtma bo'yicha topshiriqlar, yaroqli qayta ishlash va boshqalar).
+
+**Nima qurildi (qisqacha):**
+- Laboratoriya butunlay olib tashlandi (kod, rol, ruxsatlar, ma'lumot); eski zaxiralar avvalgidek tiklanadi.
+- Variantli mahsulotlar (yaratishda; "Zakvaska / 499"), Excel importda "Variantlar" ustuni, Mahsulotlar sahifasida import tugmasi.
+- 10 ta bosqich (ombor sifatida), tartibi, turi (o'zgaradigan / o'zgarmas), ishbay haq, mas'ullar; **Ishlab chiqarish →
+  Bosqichlar va xarita** sahifasida har bir mahsulot xaritasi (katakchalar) va bosqichlar jurnali.
+- Har bir amal oldingi bosqichdan oladi; ko'p kiritilsa oldingi bosqich manfiyga tushadi va ogohlantiradi; keyin kelgan
+  mahsulot uni **haqiqiy tannarxda** yopadi (yopilmagan farq yo'q — butun zanjir FIFO).
+- "Mening qo'limda" yo'q: eski qoldiqlar rolga mos bosqichga o'tdi; xodimga topshirish yo'q.
+- Texnolog: sut to'g'ridan-to'g'ri Xom sut omboridan; smena birinchi topshiriqda o'zi ochiladi; tepada sarflangan sut va
+  separatsiya; smena oxirida o'lchab qolgan sut + separatsiya (qaymoq chiqdi, yog'siz sut qoldi) — 9-bo'lim bo'yicha.
+- Quyuvchi idishni o'zi olmaydi — idish ombori mas'uli sifatida tarkib bo'yicha avtomatik ayriladi.
+- Issiqxona soat taymeri olib tashlandi; qopqoq yopish — o'zgarmas bosqich, faqat miqdor, ishbay haq bosqichda.
+- "Bu ishni kim bilan qildingiz?" — o'zi belgilangan, boshqalarni qo'shadi; ish haqi teng bo'linadi.
+- Monoblok: "Monoblokdan foydalanadi" belgisi, takrorlanmas PIN, burchakda katta raqam tugmalari.
 
 ## 1. Mahsulotlar
 1.1. **Mahsulotlarni Excel'dan import** qilish (hozir faqat boshlang'ich qoldiq importi bor — mahsulotlar ro'yxati

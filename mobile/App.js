@@ -9,6 +9,7 @@ import Home from './src/screens/Home';
 import Splash from './src/screens/Splash';
 import { LockScreen } from './src/screens/Lock';
 import { KioskPair, KioskPicker } from './src/screens/Kiosk';
+import { KioskKeys } from './src/components';
 import { isDark, onThemeChange, s, setTheme } from './src/ui';
 
 // Catches any render error anywhere in the app and shows a recover screen
@@ -108,6 +109,7 @@ function Root() {
     // Any touch counts as activity for the auto-lock timer.
     <View style={{ flex: 1 }} onStartShouldSetResponderCapture={() => { lock.touch(); return false; }}>
       <Home tick={tick} refresh={refresh} onLogout={() => logout()} />
+      {session.kiosk && <KioskKeys />}
     </View>
   );
 }

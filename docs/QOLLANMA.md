@@ -19,11 +19,14 @@ ilovada (telefon, planshet yoki monoblokdagi brauzer: `/app/`) ishlaydi.
 | Admin | rahbar | hammasi (summalar bilan) |
 | Menejer | boshqaruvchi | ombor, ishlab chiqarish nazorati, tasdiqlash, moliya (oyliksiz) |
 | Omborchi | ombor mas'uli | topshirish/qabul, inventarizatsiya, hisobdan chiqarish (summasiz) |
-| Texnolog | texnolog | smena, quyma va separatsiya topshiriqlari |
-| Quyuvchi | quyuvchi | quyish topshiriqlari (ishbay haq) |
-| Qopqoq yopuvchi | qopqoqchi | qopqoq yopish topshiriqlari (ishbay haq) |
-| Qayta ishlovchi | qayta ishlovchi | muddati o'tganlarni qayta ishlash |
-| Buxgalter, Sut yig'uvchi, Laborant | — | avvalgidek |
+| Texnolog | texnolog | "Ishlab chiqarish" bosqichi: quyma, smena, separatsiya |
+| Quyuvchi | quyuvchi | "Quyish" (va kerak bo'lsa "Issiqxona") bosqichi — ishbay haq |
+| Qopqoq yopuvchi | qopqoqchi | "Qopqoq yopish" bosqichi — ishbay haq |
+| Qayta ishlovchi | qayta ishlovchi | "Yaroqsiz qayta ishlash" bosqichi |
+| Buxgalter, Sut yig'uvchi | — | avvalgidek |
+
+Kim qaysi bosqichda ishlashini **rol emas, bosqichga mas'ullik** belgilaydi (Ishlab chiqarish → Bosqichlar va xarita).
+Xodim yaratishda **"Monoblokdan foydalanadi"** belgisi: belgilanmasa PIN so'ralmaydi va u faqat telefonda ishlaydi.
 
 Rol ruxsatlarini **Boshqaruv → Rollar va ruxsatlar**da o'zgartirasiz. Muhim ruxsatlar:
 "Tannarx va summalarni ko'rish" (oddiy xodimlarga bermang) va "Oylik" (faqat rahbar/buxgalter).
@@ -51,13 +54,26 @@ Rol ruxsatlarini **Boshqaruv → Rollar va ruxsatlar**da o'zgartirasiz. Muhim ru
 - **Xonadonlar:** avvalgidek, Sut yig'ish → Qarzlar.
 
 ## 5. Ishlab chiqarish sozlamalari
-**Ishlab chiqarish → Tarkiblar:**
+**Ishlab chiqarish → Bosqichlar va xarita** (eng muhimi):
+- 10 ta bosqich bor: Ishlab chiqarish, Quyish, Qadoqlash, Issiqxona, Sovuqxona, Qopqoq yopish, Tayyor mahsulot ombori,
+  Vozvrat ombori, Yaroqli qayta ishlash, Yaroqsiz qayta ishlash. Har biri — ombor ("Bosqich"). Yangi bosqichni kerakli
+  joyga qo'yasiz, ↑↓ bilan tartibini o'zgartirasiz.
+- **Turi:** *O'zgaradigan* — mahsulot boshqasiga aylanadi (tarkib, xomashyo, chegaralar, ishbay haq tarkibda);
+  *O'zgarmas* — o'sha mahsulot keyingi joyga o'tadi (ishbay haq bosqichda, masalan qopqoq 90 so'm; issiqxonada bo'sh).
+- **Mas'ullar:** shu bosqichni kim boshqaradi. Xomashyo / idish olinadigan omborlarga ham shu xodimlarni mas'ul qiling
+  (texnolog — Xom sut va Xomashyo ombori; quyuvchi — Idish ombori): tarkib bo'yicha o'zi ayriladi.
+- **Xarita:** pastdagi jadvalda har bir mahsulot qaysi bosqichlardan o'tishini belgilaysiz; o'chiq bosqich o'tkazib yuboriladi.
+- **Jurnal:** har bir amal — qaysi bosqichda, kim bajardi, kimlar qatnashdi.
+
+**Ishlab chiqarish → Tarkiblar:** har bir tarkib bitta bosqichga tegishli; bir bosqichda bir mahsulotga bitta tarkib.
 - **Tayyorlash (quyma)** — asosiy partiya: xom sut, qaymoq, zakvaska...; har qatorga alternativ;
   chiqish oralig'i (masalan 320–335 kg) — partiyaga qarab o'zi o'zgaradi.
   **Shartli limitlar:** "B zakvaska ishlatilsa — 315–330 kg" kabi; bir nechtasi mos kelsa eng aniqi (ko'p xomashyolisi)
   olinadi, birortasi mos kelmasa — umumiy oraliq. Texnolog ilovada qaysi chegara ishlayotganini ko'radi.
 - **Separatsiya** — chiqadigan mahsulotlar: qaymoq "qat'iy 1 kg tannarxi", yog'siz sut "qolgan tannarx".
-- **Quyish** va **Qopqoq yopish** — 1 dona uchun; ishbay haq (masalan 170 va 90 so'm) va topshiriq muddati.
+- **Quyish** va **Qadoqlash** — 1 dona uchun; ishbay haq (masalan 170 so'm) va topshiriq muddati. Qadoqlash — masalan
+  tashqaridan kg lab xarid qilingan mahsulotni idishga solish (bunday mahsulotda "Ishlab chiqarish" o'chiq turadi).
+- **Variantli xomashyo** ("Zakvaska") tarkibda bitta qator; texnolog ishlatishda variantini (499, 505) tanlaydi.
 - **Qayta ishlash** — 1 dona muddati o'tgan mahsulotdan: idish (qat'iy tannarx, "idish" belgisi) va ichidagi
   mahsulot (netto vazndan, chegara bilan, tannarx 0).
 
@@ -81,23 +97,27 @@ kamomad — kim hisobiga ekani so'raladi (xodim(lar)ga summa, qolgani "Kassa kam
 
 ## 8. Monoblok (sexdagi umumiy kompyuter)
 1. **Boshqaruv → Monobloklar → "+ Monoblok"** (bo'sh tursa necha daqiqada ismlar ro'yxatiga qaytsin).
-2. Xodimlarga 4 xonali PIN (shu sahifada yoki xodim o'zi: ilova → Profil → "Monoblok uchun PIN").
+2. Monoblokda ishlaydigan xodimlarga **"Monoblokdan foydalanadi"** belgisi (Boshqaruv → Xodimlar), so'ng 4 xonali PIN
+   (shu sahifada yoki xodim o'zi: ilova → Profil). Ikki xodimning PIN'i bir xil bo'lishi mumkin emas.
+   Monoblokda son kiritiladigan joy bosilganda burchakda katta raqam tugmalari chiqadi.
 3. Monoblokda brauzerda `/app/` → **"🖥 Monoblok rejimi"** → panelda "Ulash kodi" bilan olingan 6 xonali kod.
 4. Monoblokni to'liq ekran rejimida qoldiring (brauzerda F11).
 
 ## 9. Kundalik ish oqimi
-1. **Sut yig'uvchi** smena yopadi → **omborchi/buxgalter** qabul qiladi → sut "Xom sut ombori"ga o'zi tushadi.
-2. **Omborchi** texnologga sut va xomashyoni **topshiradi** (Ombor → Topshirish); texnolog **qabul qiladi**.
-3. **Texnolog** smena ochadi, topshiriq bajaradi (tarkib bo'yicha, quymani tortib yozadi), quymani quyuvchiga
-   topshiradi, smena oxirida qolgan sutni qaytaradi va yo'qotishni sabablar bilan yozadi.
-4. **Quyuvchi** quyadi (kim bilan birga — ishbay haq bo'linadi), mahsulot **issiqxonaga** ketadi;
-   turish vaqti o'tsa, mas'ul ismi bilan ogohlantirish chiqadi.
-5. **Qopqoq yopuvchi** issiqxonadan oladi, qopqoqlaydi → **tayyor mahsulot ombori**.
-6. Muddati o'tgan mahsulotni **omborchi** tayyor mahsulot omboridan **"Muddati o'tganlar" omboriga topshiradi**.
-7. Muddati o'tgan qaytgan mahsulotni **qayta ishlovchi** qayta ishlaydi.
+1. **Sut yig'uvchi** smena yopadi → **omborchi/buxgalter** qabul qiladi → sut "Xom sut ombori"ga o'zi tushadi va
+   texnolog darhol ishlata oladi.
+2. **Texnolog** (ilova → Ishlab chiqarish) tarkibni bosadi, sut miqdorini yozadi, quymani tortib kiritadi — sut va
+   xomashyo omborlardan o'zi ayriladi, quyma "Ishlab chiqarish" bosqichida turadi. Tepada smenada sarflangan sut ko'rinadi.
+   Yog'siz sut / qaymoqni separatsiyadan oldin ham ishlatish mumkin. Smena oxirida: qolgan sutni o'lchab kiritadi,
+   separatsiyani (qaymoq chiqdi, yog'siz sut qoldi) va yo'qotishlarni yozadi — haqiqiy tannarx shunda aniqlanadi.
+3. **Quyuvchi** "Quyish" bosqichida kutayotgan quymani ko'radi, nechta quyganini yozadi, "kim bilan" — ishbay haq bo'linadi.
+4. **Issiqxona → Sovuqxona → Qopqoq yopish → Tayyor mahsulot ombori:** har bir bosqich mas'uli oldingi bosqichdan
+   nechtasini olganini yozadi. Ko'p yozilsa oldingi bosqich manfiyga tushadi va rahbarga xabar boradi.
+5. Muddati o'tgani tayyor mahsulot omboridan **Vozvrat ombori**ga o'tadi, u yerdan **qayta ishlovchi** qayta ishlaydi.
+6. Hech kimning "qo'lida" mahsulot yo'q — hamma narsa ombor yoki bosqichda.
 8. **Rahbar** Bosh panelda kunlik holatni, "Tasdiqlash"da limitdan chiqqanlarni, hisobotlarda natijani ko'radi.
 
-Internet bo'lmasa: to'lov, topshirish, hisobdan chiqarish va qabul qilish navbatga tushadi
+Internet bo'lmasa: to'lov, topshirish, hisobdan chiqarish, qabul qilish va o'zgarmas bosqich amallari navbatga tushadi
 va internet chiqqanda o'zi ketadi (ilova tepasida "⏳"). Ishlab chiqarish topshiriqlari, inventarizatsiya va
 monoblokka kirish uchun internet kerak.
 

@@ -264,7 +264,10 @@ test('"in my hands" is gone: hand-overs to a person are refused; old stock in ha
   // stock left in a person's hands from before
   const id = Number(db.prepare("INSERT INTO docs (uuid, type, number, status, doc_date, created_by) VALUES ('old', 'opening', 99, 'posted', ?, 'x')").run(new Date().toISOString()).lastInsertRowid);
   addIn(db, { doc: getDoc(db, id), at: new Date().toISOString(), touched: new Set() }, { productId: p.siyro, h: { userId: u.pour1 }, qty: 7, cost: 7000, lot: { unitCost: 1000, seq: 1 } });
+  // and an old hand-over to a person still waiting to be accepted
+  const sent = Number(db.prepare("INSERT INTO docs (uuid, type, number, status, doc_date, from_wh, to_user, created_by) VALUES ('old-sent', 'transfer', 98, 'sent', ?, ?, ?, 'x')").run(new Date().toISOString(), wh.raw, u.tech).lastInsertRowid);
   assert.equal(moveHandsToStages(db), 1);
+  assert.equal(db.prepare('SELECT status FROM docs WHERE id = ?').get(sent).status, 'cancelled', 'old hand-overs to a person close');
   assert.equal(bal(db, S.pour, p.siyro).q, 7, "the pourer's goods are in the pouring stage");
   assert.equal(db.prepare('SELECT COUNT(*) n FROM (SELECT 1 FROM stock_moves WHERE holder_id IS NOT NULL GROUP BY holder_id, product_id HAVING ABS(SUM(qty)) > 0.0005)').get().n, 0);
 });

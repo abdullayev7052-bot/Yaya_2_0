@@ -7,7 +7,7 @@ import Profile from './Profile';
 import { Debts, MyPayments, Payments, ShiftDetail, Shifts, Today } from './Office';
 import { PaymentForm, SupplierCard } from './Supplier';
 import { InventoryForm, Stock, StockForm, canStock } from './Stock';
-import { CloseShift, NewTask, Production, TaskScreen, canProduce } from './Production';
+import { CloseShift, MoveScreen, NewTask, Production, TaskScreen, canProduce } from './Production';
 import { AlertBanner } from '../AlertBanner';
 import { OutboxBadge } from '../Outbox';
 import { C, s } from '../ui';
@@ -51,7 +51,9 @@ export default function Home({ tick, refresh, onLogout }) {
   const stockDone = (m) => { setStockForm(null); setToast(m); setTimeout(() => setToast(''), 4000); refresh(); };
   const prodDone = (m) => { setProdView(null); setToast(m); setTimeout(() => setToast(''), 4000); refresh(); };
   if (prodView?.screen === 'new') {
-    body = <NewTask onBack={() => setProdView(null)} onDone={(id) => setProdView({ screen: 'task', id })} />;
+    body = <NewTask stageId={prodView.stageId} recipeId={prodView.recipeId} onBack={() => setProdView(null)} onDone={(id) => setProdView({ screen: 'task', id })} />;
+  } else if (prodView?.screen === 'move') {
+    body = <MoveScreen stage={prodView.stage} item={prodView.item} onBack={() => setProdView(null)} onDone={prodDone} />;
   } else if (prodView?.screen === 'task') {
     body = <TaskScreen id={prodView.id} onBack={() => { setProdView(null); refresh(); }} onDone={prodDone} />;
   } else if (prodView?.screen === 'close') {
@@ -70,7 +72,7 @@ export default function Home({ tick, refresh, onLogout }) {
   } else if (current === 'collect') body = <Collector tick={tick} refresh={refresh} setFull={setFull} histReq={histReq} />;
   else if (current === 'today') body = <Today onShift={setShiftId} />;
   else if (current === 'shifts') body = <Shifts onShift={setShiftId} tick={tick} />;
-  else if (current === 'prod') body = <Production tick={tick} onNew={() => setProdView({ screen: 'new' })} onTask={(id) => setProdView({ screen: 'task', id })} onClose={() => setProdView({ screen: 'close' })} />;
+  else if (current === 'prod') body = <Production tick={tick} onNew={(x) => setProdView({ screen: 'new', ...x })} onMove={(x) => setProdView({ screen: 'move', ...x })} onTask={(id) => setProdView({ screen: 'task', id })} onClose={() => setProdView({ screen: 'close' })} />;
   else if (current === 'stock') body = <Stock tick={tick} onForm={(type, docId) => setStockForm({ type, docId })} />;
   else if (current === 'debts') body = <Debts onOpen={setCardId} onPay={setPayFor} tick={tick} />;
   else if (current === 'pays') body = <Payments onOpen={setCardId} />;

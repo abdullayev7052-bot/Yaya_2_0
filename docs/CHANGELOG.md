@@ -2,6 +2,18 @@
 
 Eng yangisi tepada. Qavs ichida Android `versionCode`.
 
+## Yaya 2.0 — bosqichlar va ishlab chiqarish xaritasi (10-bosqich, 1-qism), 2026-11-25
+- **Bosqichlar:** 10 ta bosqich ombor sifatida (o'zgaradigan / o'zgarmas, ishbay haq, mas'ullar, tartib); har bir
+  mahsulotning ishlab chiqarish xaritasi; bosqichlar jurnali. Har bir amal oldingi bosqichdan oladi.
+- **Haqiqiy tannarx:** manfiy qoldiqdan olingan mahsulot keyin kelgan mahsulot bilan haqiqiy tannarxda yopiladi (butun zanjir FIFO).
+- **Texnolog:** sut Xom sut omboridan to'g'ridan-to'g'ri; separatsiya smena oxirida (yog'siz sutni oldindan ishlatish mumkin).
+- **"Mening qo'limda" yo'q:** eski qoldiqlar bosqichlarga o'tdi; xodimga topshirish yo'q.
+- **Variantli mahsulotlar** ("Zakvaska / 499"), Excel importda ham; Mahsulotlar sahifasida import tugmasi.
+- **Laboratoriya** butunlay olib tashlandi. **Issiqxona taymeri** olib tashlandi. **Qopqoq yopish** — faqat miqdor.
+- **"Bu ishni kim bilan qildingiz?"** — o'zi belgilangan; ish haqi teng bo'linadi.
+- **Monoblok:** "Monoblokdan foydalanadi" belgisi, takrorlanmas PIN, katta raqam tugmalari.
+- 70 ta avtomatik test (butun zanjir bosqichlar bilan qayta yozildi).
+
 ## Yaya 2.0 — omborgacha fokus, 2026-11-22
 - Sotuv, qaytarish, mijozlar, narxlar, savdo sozlamalari, "Sotuvchi" roli, savdo hisobotlari va sotuv grafigi olib
   tashlandi (panel, ilova, server). 11–12-bosqichlarda distributsiya bilan yangi uslubda qaytadi.

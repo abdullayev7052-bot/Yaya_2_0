@@ -15,12 +15,12 @@ views.kiosks = async (v) => {
     <div class="card table-wrap"><table><thead><tr><th>Monoblok</th><th>Holati</th><th>Kim kira oladi</th><th class="num">Bo'sh turganda, daq.</th><th></th></tr></thead><tbody>
     ${d.kiosks.map((k) => `<tr class="${k.active ? '' : 'voided'}"><td><b>${esc(k.name)}</b>${k.last_seen_at ? `<div class="muted">oxirgi marta ${fmtDate(k.last_seen_at)}</div>` : ''}</td>
       <td>${k.paired ? '<span class="badge sent">Ulangan</span>' : '<span class="badge pending">Ulanmagan</span>'}${k.pair_code ? `<div>Kod: <b style="font-size:20px;letter-spacing:3px">${k.pair_code}</b></div>` : ''}</td>
-      <td class="muted">${k.users.length ? k.users.map((u) => esc(u.name)).join(', ') : 'PIN o\'rnatgan hamma xodim'}</td><td class="num">${k.idle_minutes}</td>
+      <td class="muted">${k.users.length ? k.users.map((u) => esc(u.name)).join(', ') : '"Monoblokdan foydalanadi" belgilangan hamma xodim'}</td><td class="num">${k.idle_minutes}</td>
       <td style="white-space:nowrap"><button class="small" data-code="${k.id}">Ulash kodi</button> <button class="ghost small" data-edit="${k.id}">Tahrirlash</button>
         ${k.paired ? `<button class="ghost small" data-unpair="${k.id}">Uzish</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Monoblok yo\'q</td></tr>'}
     </tbody></table></div>
-    <div class="card table-wrap"><h2>Xodimlar PIN kodi</h2><p class="muted">Xodim PINni o'zi ham telefonidagi ilovada (Profil → "Monoblok uchun PIN") o'rnatishi mumkin.</p>
-      <table><tbody>${d.staff.map((u) => `<tr class="${u.active ? '' : 'voided'}"><td>${esc(u.name)}</td><td class="muted">${esc(u.role ?? '')}</td>
+    <div class="card table-wrap"><h2>Xodimlar PIN kodi</h2><p class="muted">Faqat "Monoblokdan foydalanadi" belgilangan xodimlar (Boshqaruv → Xodimlar → Tahrirlash). Har bir xodimning PIN'i boshqalarnikidan farq qiladi. Xodim PINni o'zi ham telefonidagi ilovada (Profil → "Monoblok uchun PIN") o'rnatishi mumkin.</p>
+      <table><tbody>${d.staff.filter((u) => u.kiosk).map((u) => `<tr class="${u.active ? '' : 'voided'}"><td>${esc(u.name)}</td><td class="muted">${esc(u.role ?? '')}</td>
         <td>${u.has_pin ? '<span class="badge sent">PIN bor</span>' : '<span class="muted">PIN yo\'q</span>'}</td>
         <td><button class="ghost small" data-pin="${u.id}">${u.has_pin ? "O'zgartirish" : "O'rnatish"}</button> ${u.has_pin ? `<button class="ghost small" data-clear="${u.id}">O'chirish</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
   const form = (k = null) => {
@@ -29,7 +29,7 @@ views.kiosks = async (v) => {
       <label>Nomi<input name="name" required value="${esc(k?.name ?? '')}" placeholder="Masalan: Sex monobloki"></label>
       <label>Necha daqiqa bo'sh tursa, ismlar ro'yxatiga qaytsin<input name="idle" type="number" min="1" max="60" value="${k?.idle_minutes ?? 2}"></label>
       <div><div class="muted" style="font-size:13px">Kim kira oladi (hech kim belgilanmasa — PIN o'rnatgan hamma)</div>
-        <div class="checks">${d.staff.filter((u) => u.active).map((u) => `<label><input type="checkbox" name="u" value="${u.id}" ${sel.has(u.id) ? 'checked' : ''}> ${esc(u.name)}</label>`).join('')}</div></div>
+        <div class="checks">${d.staff.filter((u) => u.active && u.kiosk).map((u) => `<label><input type="checkbox" name="u" value="${u.id}" ${sel.has(u.id) ? 'checked' : ''}> ${esc(u.name)}</label>`).join('')}</div></div>
       ${k ? `<label style="display:flex;gap:8px;color:var(--text)"><input type="checkbox" name="active" ${k.active ? 'checked' : ''}> Faol</label>` : ''}
       <p class="err" id="dlgErr"></p><div class="actions"><button type="button" class="ghost" value="cancel">Bekor</button><button value="ok">Saqlash</button></div></form>`;
     const f = $('form', dlg); $('button[value=cancel]', dlg).onclick = () => dlg.close();

@@ -318,3 +318,48 @@ export function Btn({ title, onPress, kind = 'main', disabled, style }) {
     </Pressable>
   );
 }
+
+// ---------------------------------------------------------------- monoblock number keys
+// On the shared monoblock (a touch screen, no keyboard) a column of big number keys
+// sits in the bottom-right corner while a number field is focused, so people can
+// type quantities (with a decimal point) without covering the rest of the screen.
+// A number field joins with kioskField(value, onChange).
+let kTarget = null; // { value, onChange }
+const kListeners = new Set();
+const kNotify = () => kListeners.forEach((fn) => fn(kTarget));
+export function kioskField(value, onChange) {
+  return {
+    onFocus: () => { kTarget = { value: String(value ?? ''), onChange }; kNotify(); },
+    onChangeText: (v) => { if (kTarget?.onChange === onChange) kTarget.value = v; onChange(v); },
+  };
+}
+const KKEYS = ['7', '8', '9', '4', '5', '6', '1', '2', '3', ',', '0', '⌫'];
+export function KioskKeys() {
+  const [target, setTarget] = useState(kTarget);
+  useEffect(() => { kListeners.add(setTarget); return () => kListeners.delete(setTarget); }, []);
+  if (!target) return null;
+  const press = (k) => {
+    let v = kTarget.value;
+    if (k === '⌫') v = v.slice(0, -1);
+    else if (k === ',') { if (!v.includes(',') && !v.includes('.')) v = (v || '0') + ','; }
+    else v = v === '0' ? k : v + k;
+    kTarget.value = v;
+    kTarget.onChange(v);
+  };
+  return (
+    <View style={{ position: 'absolute', right: 10, bottom: 10, width: 228, padding: 6, gap: 6, borderRadius: 16, backgroundColor: C.card, borderWidth: 1, borderColor: C.line,
+      shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 10, elevation: 8 }}>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+        {KKEYS.map((k) => (
+          <Pressable key={k} onPress={() => press(k)} style={({ pressed }) => [{ width: 66, height: 60, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
+            backgroundColor: pressed ? C.line : C.bg, borderWidth: 1, borderColor: C.line }]}>
+            <Text style={{ fontSize: 28, fontWeight: '700', color: C.text }}>{k}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <Pressable onPress={() => { kTarget = null; kNotify(); }} style={{ alignItems: 'center', paddingVertical: 6 }}>
+        <Text style={{ color: C.muted, fontWeight: '600' }}>Yopish ✕</Text>
+      </Pressable>
+    </View>
+  );
+}

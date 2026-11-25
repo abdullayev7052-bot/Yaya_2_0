@@ -150,6 +150,10 @@ export function stageBoard(db, userId, { all = false } = {}) {
 // Goods a person still holds (from before stage 10) move once, as a posted hand-over,
 // to the stage that matches their role (or a warehouse they keep, or production).
 export function moveHandsToStages(db) {
+  // Hand-overs to or from a person still waiting to be accepted cannot happen any more:
+  // they close (nothing had moved yet).
+  db.prepare(`UPDATE docs SET status = 'cancelled', cancelled_by = 'system', cancelled_at = ?, cancel_reason = ?
+    WHERE status = 'sent' AND (from_user IS NOT NULL OR to_user IS NOT NULL)`).run(nowIso(), "Xodim qo'liga topshirish olib tashlandi");
   const rows = db.prepare(`SELECT holder_id, product_id, ROUND(SUM(qty), 3) AS q FROM stock_moves WHERE holder_id IS NOT NULL
     GROUP BY holder_id, product_id HAVING SUM(qty) > ${EPS}`).all();
   if (!rows.length) return 0;
