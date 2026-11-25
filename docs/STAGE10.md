@@ -94,6 +94,8 @@ Shuning uchun **har bir mahsulotda "Ishlab chiqarish xaritasi"** bo'ladi. Bosqic
 ### 8.1. Variantli mahsulotlar
 - Mahsulot **yaratilayotganda** "variantlimi?" so'raladi; keyin **o'zgartirib bo'lmaydi**.
 - Har bir variantning tannarxi **alohida yoki bir xil** bo'lishi mumkin (har biri o'z partiyalari bilan yuradi).
+- Variantlar **o'lchov birligini** (va yaroqlilik muddatini) asosiy mahsulotdan oladi — faqat **nomi va tannarxi**
+  farq qiladi. Vazni yo'q (odatda donali emas).
 - **Xaridda** (yetkazib beruvchidan) variantlar **alohida mahsulot** sifatida kiritiladi ("Zakvaska / 499").
 - **Texnolog** xomashyo tanlaganda **ichma-ich oyna**: avval "Zakvaska" → oyna ochiladi → 499, 505...
 
@@ -110,7 +112,11 @@ Bosqich ochishda yoki tahrirlashda turi tanlanadi:
 
 ### 8.3. Laboratoriya
 - Laboratoriya **butunlay** o'chiriladi: kod, ekranlar, ruxsatlar, rol **va bazadagi barcha yozuvlar** — go'yo hech
-  qachon bo'lmagandek. (Ehtiyot uchun: o'chirishdan oldin avtomatik zaxira olinadi — tizimdagi odatiy tartib.)
+  qachon bo'lmagandek. **Alohida zaxira olinmaydi** (Yaya 1.0 da ham ishlatilmayapti). Laborant rejimi kelajakda —
+  balki yig'ishdan (build) oldin — yangi tartibda mukammal qayta quriladi.
+- **Zaxira mosligi saqlanadi:** eski zaxira fayllari (jumladan **Yaya 1.0** dan) avvalgidek tiklanadi — xonadonlar,
+  qarzlar va to'lovlar tarixi, balanslar, qarzdorliklar, sut yig'uvchilar, xonadonlarning sut narxlari, smenalar,
+  xaridlar tarixi va boshqa hamma narsa. Fayldagi laboratoriya ma'lumotlari tiklashda shunchaki **e'tiborga olinmaydi**.
 
 ### 8.4. Tarkiblar va xarita
 - Bosqich ochishda yoki tahrirlashda **shu bosqichda qaysi tarkiblar amal qilishi** belgilanadi; amal bajarilayotganda
@@ -134,7 +140,11 @@ Bosqich ochishda yoki tahrirlashda turi tanlanadi:
 - Hozirgi asosiy maqsad: **omborga kirguncha** barcha jarayonlarni optimallashtirish — **real tannarxni buzmasdan**
   hisoblash, **xodimlar ish haqini to'g'ri** hisoblash, omborlar va bosqichlarni **real vaqtda** to'g'ri nazorat qilish.
 
-## 9. Taklif: separatsiyada yog'siz sut va qaymoqni "oldindan ishlatish" (tasdiqlash kerak)
+## 9. Separatsiya: yog'siz sut va qaymoqni "oldindan ishlatish" — ✅ ma'qullandi (2026-11-25)
+**Rahbar sharti:** tizimda **taxminiy narx qolib ketmasin**. Manfiy yopilganda albatta **haqiqiy tannarx** yuklatiladi —
+aynan shu smenada qabul qilingan xom sut, yo'qotishlar, qaymoqning qat'iy tannarxi va hamma narsa hisobga olinadi.
+**Butun tizim** (faqat separatsiya emas, butun zanjir) **FIFO** rejimida ishlaydi.
+
 Maqsad — texnolog smena davomida bemalol ishlatsin, tannarx esa oxirida aniq va to'g'ri bo'lsin, moliya qoidalari
 buzilmasin (hech bir xarajat yo'qolmaydi yoki ikki marta yozilmaydi).
 
@@ -160,11 +170,10 @@ buzilmasin (hech bir xarajat yo'qolmaydi yoki ikki marta yozilmaydi).
 6. **Himoya.** Smena yopilmaguncha manfiy qoldiq faqat shu smenaning separatsiya mahsulotlarida ruxsat etiladi; smena
    yopilganda manfiy qolishi mumkin emas (yakun kiritilmasa smena yopilmaydi). Ogohlantirish rahbarga ko'rinadi.
 
-## 10. Ochiq savollar (ish boshlashdan oldin aniqlanadi)
+## 10. Savollar — hammasiga javob berildi
 1. ✅ 8.1 (variantlar). 2. ✅ 8.3 (laboratoriya — butunlay o'chiriladi). 3. ✅ 7.1–7.2. 4. ✅ 7.4. 5. ✅ 7.5.
 6. ✅ 8.2 (qopqoq — "O'zgarmas" bosqich, stavka bosqichda yoziladi). 7. ✅ 8.4. 8. ✅ 8.5. 9. ✅ 8.6.
-10. **9-bo'limdagi separatsiya taklifi** — ma'qulmi?
-11. Qopqoq yopishda qopqoqning o'zi (idish omboridagi "Qopqoq" mahsuloti) ayrilmaydimi? 5.4 da "xomashyo, idish
-    ishlatilmaydi" deyilgan — qopqoq tannarxi bu holda mahsulot tannarxiga qo'shilmaydi. Shundaymi?
-12. Variantlar: variantlar birligi, vazni va yaroqlilik muddati asosiy mahsulotdan meros oladimi (faqat nomi va
-    tannarxi farq qiladi)?
+10. ✅ Separatsiya taklifi ma'qul — 9-bo'lim (taxminiy narx qolmaydi; butun zanjir FIFO).
+11. ✅ Qopqoq yopishda hech narsa ayrilmaydi: qopqoq **quyish bosqichida idishi bilan juft** holda ombordan chiqib
+    ketgan va tannarxda allaqachon bor. Idish omborida alohida "qopqoq" turmaydi.
+12. ✅ Variantlar — 8.1 (birlik bir xil, faqat nomi va tannarxi farq qiladi).
