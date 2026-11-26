@@ -346,11 +346,10 @@ views['prod-stages'] = async (v) => {
       miqdorni kiritadi, "kim bilan qildingiz"ni belgilaydi. <b>O'zgaradigan</b> bosqichda mahsulot boshqasiga aylanadi (tarkib, xomashyo, chegaralar, ishbay haq);
       <b>O'zgarmas</b> bosqichda o'sha mahsulot keyingi joyga o'tadi (ishbay haq bo'lishi yoki bo'lmasligi mumkin).
       Oldingi bosqichda yo'q miqdor kiritilsa — u manfiyga tushadi va ogohlantirish chiqadi; keyin kelgan mahsulot uni haqiqiy tannarxda yopadi.</p>
-    <div class="table-wrap"><table><thead><tr><th>#</th><th>Bosqich</th><th>Turi</th><th class="num">Ishbay, so'm</th><th>Mas'ullar</th><th>Tarkiblar</th><th></th></tr></thead><tbody>
+    <div class="table-wrap"><table><thead><tr><th>#</th><th>Bosqich</th><th>Turi</th><th class="num">Ishbay, so'm</th><th>Mas'ullar</th><th></th></tr></thead><tbody>
     ${stages.map((s, i) => `<tr class="${s.active ? '' : 'voided'}"><td>${i + 1}</td><td><b>${esc(s.name)}</b></td><td>${esc(s.type_label)}</td>
       <td class="num">${s.type === 'keep' && s.piece_rate ? fmtNum(s.piece_rate) : ''}</td>
       <td>${s.keepers.map((k) => esc(k.name)).join(', ') || '<span class="warn">belgilanmagan</span>'}</td>
-      <td>${s.type === 'change' ? (s.recipes.filter((r) => r.active).map((r) => `<a href="#prod-recipe?id=${r.id}">${esc(r.name)}</a>`).join(', ') || '<span class="muted">—</span>') : '<span class="muted">tarkibsiz</span>'}</td>
       <td style="white-space:nowrap">${manage ? `<button class="ghost small" data-up="${s.id}" ${i ? '' : 'disabled'}>↑</button><button class="ghost small" data-down="${s.id}" ${i < stages.length - 1 ? '' : 'disabled'}>↓</button>
         <button class="ghost small" data-st="${s.id}">Tahrirlash</button>` : ''}</td></tr>`).join('')}
     </tbody></table></div></div>
