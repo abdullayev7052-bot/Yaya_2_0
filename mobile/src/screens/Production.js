@@ -3,7 +3,7 @@ import { Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 're
 import { randomUUID } from 'expo-crypto';
 import * as api from '../api';
 import { ask, notify } from '../dialog';
-import { Btn, Chip, Err, Header, fmtDT, kioskField, toNumber, useLoad } from '../components';
+import { Btn, Chip, Err, Header, fmtDT, kioskField, textMatch, toNumber, useLoad } from '../components';
 import { C, fmtQty, s } from '../ui';
 
 // Stages (Yaya 2.0, stage 10): every person runs the stages they are responsible
@@ -56,6 +56,8 @@ function Workers({ staff, team, setTeam }) {
 // ---------------------------------------------------------------- my stages
 export function Production({ tick, onTask, onNew, onClose, onMove }) {
   const { data, err, busy, load } = useLoad(() => prod('GET', '/board'), [tick]);
+  // today's plan for a product (pourer)
+  const planOf = (w) => (data?.plan?.pour ?? []).find((x) => x.product_id === w.product_id);
   const stages = data?.stages ?? [];
   const sh = data?.shift;
   const produce = stages.find((x) => x.code === 'produce');
@@ -88,6 +90,28 @@ export function Production({ tick, onTask, onNew, onClose, onMove }) {
               : <Text style={s.muted}>Toza qaymoq smena oxirida kiritiladi; yog'siz sut sarfga qarab o'zi hisoblanadi.</Text>}
           </View>
           {sh?.status === 'open' && <Btn title="Separatsiya va smenani yopish" kind="ghost" onPress={onClose} />}
+        </View>
+      )}
+      {produce && !!data?.plan?.tech?.length && (
+        <View style={[s.card, { gap: 8 }]}>
+          <Text style={s.h2}>Bugungi rejalar</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {data.plan.tech.map((t) => {
+              const left = Math.max(0, r3(t.qty - t.made));
+              return (
+                <Pressable key={t.recipe_id} onPress={() => onNew({ stageId: produce.id, recipeId: t.recipe_id, planKg: left || t.qty })}
+                  style={({ pressed }) => [s.card, { minWidth: 150, flexGrow: 1, flexDirection: 'row', gap: 10, alignItems: 'center', padding: 12, borderColor: left > 0 ? C.accent : C.line }, pressed && { opacity: 0.6 }]}>
+                  <View style={{ backgroundColor: left > 0 ? C.accent : C.line, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 6, minWidth: 64, alignItems: 'center' }}>
+                    <Text style={{ color: left > 0 ? C.accentText : C.text, fontWeight: '700' }}>{fmtQty(t.qty)} {t.unit}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[s.text, { fontWeight: '700' }]}>{t.quyma}</Text>
+                    <Text style={s.muted}>{t.made ? `chiqdi ${fmtQty(t.made)} · ` : ''}{t.products.map((x) => `${x.product} ${fmtQty(x.plan)}`).join(', ')}</Text>
+                  </View>
+                </Pressable>
+              );
+            })}
+          </View>
         </View>
       )}
       {(data?.tasks ?? []).map((t) => (
@@ -123,7 +147,17 @@ export function Production({ tick, onTask, onNew, onClose, onMove }) {
               <View key={gi} style={{ borderTopWidth: 1, borderColor: C.line, paddingTop: 8, gap: 6 }}>
                 {grp.head ? <Text style={{ color: grp.head.qty > 0 ? C.ok : C.muted, fontWeight: '600' }}>{grp.head.product}: {fmtQty(grp.head.qty)} {grp.head.unit} — {grp.head.from_name}da</Text> : null}
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-                  {grp.items.map((w) => <Chip key={w.product_id} label={w.product} on={false} onPress={() => onNew({ stageId: st.id, recipeId: w.recipe_id, productId: w.product_id, productName: w.product })} />)}
+                  {grp.items.slice().sort((x, y) => (planOf(y)?.plan ?? 0) - (planOf(x)?.plan ?? 0)).map((w) => {
+                    const pl = planOf(w);
+                    const left = pl ? Math.max(0, r3(pl.plan - pl.made)) : null;
+                    return (
+                      <Pressable key={w.product_id} onPress={() => onNew({ stageId: st.id, recipeId: w.recipe_id, productId: w.product_id, productName: w.product, planUnits: left || null, avail: grp.head?.qty ?? null })}
+                        style={({ pressed }) => [{ borderWidth: 1, borderColor: pl ? C.accent : C.line, borderRadius: 99, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', gap: 6, alignItems: 'center' }, pressed && { opacity: 0.6 }]}>
+                        <Text style={s.text}>{w.product}</Text>
+                        {pl && <View style={{ backgroundColor: C.accent, borderRadius: 99, paddingHorizontal: 6 }}><Text style={{ color: C.accentText, fontSize: 12, fontWeight: '700' }}>{fmtQty(left)}</Text></View>}
+                      </Pressable>
+                    );
+                  })}
                 </View>
               </View>
             )).concat(st.waiting.length ? [] : [<Text key="none" style={s.muted}>Tex kartalarda bu bosqich uchun mahsulot yo'q</Text>])
@@ -149,30 +183,44 @@ export function Production({ tick, onTask, onNew, onClose, onMove }) {
 }
 
 // ---------------------------------------------------------------- start a task at a 'change' stage
-export function NewTask({ stageId, recipeId, productId, productName, onBack, onDone }) {
-  const { data: r, err } = useLoad(() => prod('GET', `/recipes/${recipeId}`), [recipeId]);
-  const [milk, setMilk] = useState('');
-  const [factor, setFactor] = useState('');
+export function NewTask({ stageId, recipeId, productId, productName, planKg, planUnits, avail, onBack, onDone }) {
+  const { data, err } = useLoad(() => Promise.all([prod('GET', `/recipes/${recipeId}`), api.erp('GET', '/products?stock=1')]), [recipeId]);
+  const [r, products] = data ?? [null, []];
+  const [units, setUnits] = useState('');
   const [over, setOver] = useState({});
+  const [extra, setExtra] = useState([]);
+  const [search, setSearch] = useState('');
   const [busy, setBusy] = useState(false);
   const perUnit = r && PER_UNIT.has(r.kind);
-  const f = r ? (r.base_milk > 0 && !perUnit ? toNumber(milk || 0) / r.base_milk : toNumber(factor || 0)) : 0;
+  // Main raw materials (milk, skim milk) lead; the rest follow their total.
+  const mains = r ? r.lines.filter((l) => l.product_kind === 'main_raw') : [];
+  const expected = r ? (r.out_min != null && r.out_max != null ? (r.out_min + r.out_max) / 2 : r.base_weight) : 0;
+  const mainSuggest = (l) => (planKg && r.base_milk > 0 && expected > 0 ? r3((planKg * r.base_milk / expected) * (l.qty / r.base_milk)) : null);
+  const mainVal = (l) => (over[l.id]?.qty ?? '') !== '' ? toNumber(over[l.id].qty) : (mainSuggest(l) ?? 0);
+  const mainTotal = mains.reduce((a, l) => a + mainVal(l), 0);
+  const f = !r ? 0 : perUnit ? toNumber(units || (planUnits ?? 0)) : r.base_milk > 0 ? mainTotal / r.base_milk : toNumber(units || 1);
   const lines = r ? r.lines.map((l) => {
     const o = over[l.id] ?? {};
     const pid = o.productId ?? l.product_id;
-    // the chosen product: the line itself, an alternative, or a variant of either
     const alt = l.alts.find((a) => a.product_id === pid || a.variants.some((v) => v.id === pid));
     const base = alt ?? l;
     const variant = base.variants?.find((v) => v.id === pid);
-    const auto = Math.round((alt?.qty ?? l.qty) * f * 1000) / 1000;
-    return { l, base, pid, name: variant?.name ?? base.product, unit: base.unit, variants: base.variants ?? [], qty: o.qty ?? (f > 0 ? String(auto) : ''), auto };
+    const main = l.product_kind === 'main_raw';
+    // pouring: the quyma starts as everything the stage before holds
+    const semiDefault = perUnit && avail != null && products.find((x) => x.id === pid)?.kind === 'semi' ? String(avail) : null;
+    const suggest = main ? mainSuggest(l) : r3((alt?.qty ?? l.qty) * f);
+    return { l, base, pid, main, name: variant?.name ?? base.product, unit: base.unit, variants: base.variants ?? [],
+      typed: o.qty ?? semiDefault ?? '', suggest };
   }) : [];
+  const found = search.trim().length >= 2 ? products.filter((x) => textMatch(x.name, search) && !lines.some((l) => l.pid === x.id) && !extra.some((e) => e.productId === x.id)).slice(0, 8) : [];
   const start = async () => {
     setBusy(true);
     try {
       const t = await prod('POST', '/tasks', {
-        uuid: randomUUID(), stageId, recipeId: r.id, ...(productId ? { productId } : {}), ...(perUnit ? { units: toNumber(factor) } : r.base_milk > 0 ? { milkQty: toNumber(milk) } : { factor: toNumber(factor) }),
-        lines: lines.map((x) => ({ lineId: x.l.id, productId: x.pid, ...(x.qty !== String(x.auto) ? { qty: toNumber(x.qty) } : {}) })),
+        uuid: randomUUID(), stageId, recipeId: r.id, ...(productId ? { productId } : {}),
+        ...(perUnit ? { units: f } : r.base_milk > 0 ? { milkQty: r3(mainTotal) } : { factor: f }),
+        lines: lines.map((x) => ({ lineId: x.l.id, productId: x.pid, ...(x.typed !== '' ? { qty: toNumber(x.typed) } : x.main ? { qty: x.suggest ?? 0 } : {}) })),
+        extra: extra.filter((e) => toNumber(e.qty || 0) > 0).map((e) => ({ productId: e.productId, qty: toNumber(e.qty) })),
       }, { idempotent: true });
       onDone(t.id);
     } catch (e) { notify('Xatolik', e.message); } finally { setBusy(false); }
@@ -184,33 +232,35 @@ export function NewTask({ stageId, recipeId, productId, productName, onBack, onD
         <Err err={err} />
         {r && (
           <View style={[s.card, { gap: 8 }]}>
-            {r.base_milk > 0 && !perUnit ? (
+            {!!planKg && <Text style={{ color: C.accent, fontWeight: '600' }}>Reja: {fmtQty(planKg)} kg {r.product}</Text>}
+            {perUnit && (
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Text style={s.text}>Necha kg sut?</Text>
-                <Num value={milk} onChange={setMilk} unit="kg" />
-              </View>
-            ) : (
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Text style={s.text}>{perUnit ? 'Nechta dona?' : 'Necha partiya?'}</Text>
-                <Num value={factor} onChange={setFactor} unit={perUnit ? 'dona' : '×'} />
+                <Text style={s.text}>Nechta dona?{planUnits ? ` (reja: ${fmtQty(planUnits)})` : ''}</Text>
+                <Num value={units} onChange={setUnits} unit="dona" placeholder={planUnits ? String(planUnits) : '0'} />
               </View>
             )}
-            <Text style={s.muted}>Tarkib bo'yicha (shu partiya uchun o'zgartirish mumkin):</Text>
+            {!perUnit && !(r.base_milk > 0) && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text style={s.text}>Necha partiya?</Text>
+                <Num value={units} onChange={setUnits} unit="×" placeholder="1" />
+              </View>
+            )}
+            <Text style={s.muted}>Tarkib — xira raqamlar tavsiya, bosib o'zgartirasiz:</Text>
             {lines.map((x) => (
               <View key={x.l.id} style={{ gap: 6, paddingVertical: 6, borderBottomWidth: 1, borderColor: C.line }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                  <Text style={[s.text, { flex: 1 }]}>{x.name}</Text>
-                  <Num value={x.qty} unit={x.unit} onChange={(v) => setOver((o) => ({ ...o, [x.l.id]: { ...(o[x.l.id] ?? {}), qty: v } }))} />
+                  <Text style={[s.text, { flex: 1 }, x.main && { fontWeight: '700' }]}>{x.name}{x.main ? '  · asosiy' : ''}</Text>
+                  <Num value={x.typed} placeholder={x.suggest != null ? String(x.suggest) : '0'} unit={x.unit}
+                    onChange={(v) => setOver((o) => ({ ...o, [x.l.id]: { ...(o[x.l.id] ?? {}), qty: v } }))} />
                 </View>
                 {x.l.alts.length > 0 && (
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
                     {[{ product_id: x.l.product_id, product: x.l.product }, ...x.l.alts].map((a) => (
                       <Chip key={a.product_id} label={a.product} on={a.product_id === x.base.product_id}
-                        onPress={() => setOver((o) => ({ ...o, [x.l.id]: { productId: a.product_id } }))} />
+                        onPress={() => setOver((o) => ({ ...o, [x.l.id]: { ...(o[x.l.id] ?? {}), productId: a.product_id } }))} />
                     ))}
                   </View>
                 )}
-                {/* "Zakvaska" first, then its variant: 499, 505... */}
                 {x.variants.length > 0 && (
                   <View style={{ gap: 4 }}>
                     <Text style={s.muted}>Qaysi varianti?</Text>
@@ -223,6 +273,21 @@ export function NewTask({ stageId, recipeId, productId, productName, onBack, onD
                 )}
               </View>
             ))}
+            {extra.map((e, i) => (
+              <View key={e.productId} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingVertical: 6, borderBottomWidth: 1, borderColor: C.line }}>
+                <Text style={[s.text, { flex: 1 }]}>{e.name}</Text>
+                <Num value={e.qty} unit={e.unit} onChange={(v) => setExtra((xs) => xs.map((y, j) => (j === i ? { ...y, qty: v } : y)))} />
+                <Pressable onPress={() => setExtra((xs) => xs.filter((_, j) => j !== i))}><Text style={{ color: C.err, fontSize: 18 }}>✕</Text></Pressable>
+              </View>
+            ))}
+            {!perUnit && (
+              <View style={{ gap: 6 }}>
+                <TextInput style={[s.input, { paddingVertical: 8 }]} value={search} onChangeText={setSearch} placeholder="+ Boshqa xomashyo qidirish" placeholderTextColor={C.placeholder} />
+                {found.length > 0 && <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                  {found.map((p) => <Chip key={p.id} label={p.name} on={false} onPress={() => { setExtra((xs) => [...xs, { productId: p.id, name: p.name, unit: p.unit, qty: '' }]); setSearch(''); }} />)}
+                </View>}
+              </View>
+            )}
             <Btn title={busy ? '...' : 'Boshlash'} onPress={start} disabled={busy || !(f > 0)} />
           </View>
         )}

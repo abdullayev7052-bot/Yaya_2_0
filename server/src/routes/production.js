@@ -12,6 +12,7 @@ import {
 } from '../erp/production.js';
 import { getStage, isKeeper, keptWarehouses, productMap, saveStage, setProductMap, stageBoard, stageList, texRecipes } from '../erp/stages.js';
 import { stripCosts } from './erp.js';
+import { deletePlan, listPlans, planOf, planReport, planView, savePlan, today } from '../erp/plans.js';
 
 export default async function productionRoutes(app, { db }) {
   const need = makeGuard(app, db);
@@ -47,6 +48,8 @@ export default async function productionRoutes(app, { db }) {
   app.get('/board', need(), async (req) => ({
     stages: stageBoard(db, req.me.id, { all: req.query.all === '1' && viewAll(req) }),
     shift: (() => { const s = myShift(db, req.me.id); return s ? shiftDetail(db, s.id) : null; })(),
+    // Today's plan: as quyma for the technologist, per product for the pourer.
+    plan: planView(db),
     // My unfinished tasks (started, waiting for a manager, or sent back).
     tasks: db.prepare("SELECT id FROM prod_tasks WHERE user_id = ? AND status IN ('open','approval') ORDER BY id DESC").all(req.me.id).map((t) => taskDetail(db, t.id)),
   }));
@@ -208,4 +211,26 @@ export default async function productionRoutes(app, { db }) {
   }));
 
   app.get('/approvals', need('prod.approve'), async () => approvals(db));
+
+  // ---------------------------------------------------------------- Reja (plan)
+  const isDay = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v ?? '');
+  app.get('/plans', need(), async (req) => listPlans(db, { from: isDay(req.query.from) ? req.query.from : null, to: isDay(req.query.to) ? req.query.to : null }));
+  app.get('/plans/view', need(), async (req) => planView(db, isDay(req.query.day) ? req.query.day : today()));
+  app.get('/plans/report', need(), async (req, reply) => {
+    if (!viewAll(req)) return deny(reply);
+    const to = isDay(req.query.to) ? req.query.to : today();
+    const from = isDay(req.query.from) ? req.query.from : `${to.slice(0, 7)}-01`;
+    return planReport(db, { from, to });
+  });
+  app.get('/plans/:day', need(), async (req, reply) => planOf(db, req.params.day) ?? reply.code(404).send({ error: 'Topilmadi' }));
+  app.put('/plans/:day', need('prod.manage'), async (req, reply) => run(reply, () => {
+    const p = savePlan(db, req.params.day, req.body?.lines, req.actor);
+    log(req, 'plan.save', { day: req.params.day, lines: p.lines.length });
+    return p;
+  }));
+  app.delete('/plans/:day', need('prod.manage'), async (req, reply) => run(reply, () => {
+    deletePlan(db, req.params.day);
+    log(req, 'plan.delete', { day: req.params.day });
+    return { ok: true };
+  }));
 }

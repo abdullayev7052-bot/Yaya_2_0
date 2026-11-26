@@ -423,7 +423,7 @@ export const taskDetail = (db, id) => { const t = getTask(db, id); return t ? ta
 // (or by the milk to use, or the number of units); any line may be changed for this
 // batch, swapped for one of its alternatives, or given its variant. The technologist's
 // tasks (the production stage) belong to their shift, opened on the first task.
-export function createTask(db, { uuid, stageId, recipeId, productId, factor, milkQty, units, lines }, { actor, userId }) {
+export function createTask(db, { uuid, stageId, recipeId, productId, factor, milkQty, units, lines, extra }, { actor, userId }) {
   const u = String(uuid || randomUUID()).slice(0, 80);
   const ex = db.prepare('SELECT * FROM prod_tasks WHERE uuid = ?').get(u);
   if (ex) return ex;
@@ -461,6 +461,15 @@ export function createTask(db, { uuid, stageId, recipeId, productId, factor, mil
     if (!(qty >= 0)) throw new StockError(`${l.product}: miqdor noto'g'ri`);
     return { lineId: l.id, productId: pid, qty };
   });
+  // Other materials chosen from the list for this batch (not in the recipe).
+  for (const x of Array.isArray(extra) ? extra : []) {
+    const p = product(db, Number(x.productId));
+    if (!p) throw new StockError('Qo\'shimcha xomashyo topilmadi');
+    if (p.has_variants) throw new StockError(`${p.name}: variantini tanlang`);
+    const q = r3(x.qty);
+    if (!(q > 0)) throw new StockError(`${p.name}: miqdor noto'g'ri`);
+    planLines.push({ lineId: null, productId: p.id, qty: q, extra: true });
+  }
   const n = db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM prod_tasks').get().n;
   const id = Number(db.prepare('INSERT INTO prod_tasks (uuid, number, shift_id, stage_id, user_id, recipe_id, kind, plan, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .run(u, n, shift?.id ?? null, st.id, userId, r.id, r.kind, JSON.stringify({ factor: r3(f), lines: planLines, productId: outProduct ?? r.product_id ?? null }), actor).lastInsertRowid);
@@ -601,6 +610,18 @@ export function completeTask(db, taskId, body, { actor, approve = false }) {
       const given = new Map((b?.outputs ?? []).map((o) => [Number(o.productId), r3(o.qty)]));
       outputs = r.outputs.map((o) => ({ productId: o.product_id, qty: given.get(o.product_id) ?? 0, mode: o.cost_mode, value: o.cost_value }));
       if (!outputs.some((o) => o.qty > 0)) throw new StockError('Chiqqan mahsulotlar miqdorini kiriting');
+    }
+    // Pouring / packing: the quyma comes from the stage before and cannot be more than it holds.
+    if (['pour', 'pack'].includes(r.kind)) {
+      const out = plan.productId ?? r.product_id;
+      const from = out ? prevStage(db, out, t.stage_id) : null;
+      if (from) {
+        for (const l of inputs) {
+          if (product(db, l.productId)?.kind !== 'semi') continue;
+          const have = productBalance(db, { warehouseId: from }, l.productId);
+          if (l.qty > have + EPS) throw new StockError(`${product(db, l.productId).name}: bosqichda faqat ${Math.max(0, have)} bor`, { available: have });
+        }
+      }
     }
     const range = outputRange(db, r, inputs);
     const outWeight = r3(outputs.reduce((a, o) => a + weightKg(product(db, o.productId), o.qty), 0));

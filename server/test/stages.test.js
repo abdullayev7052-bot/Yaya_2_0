@@ -417,3 +417,45 @@ test('no piece wage in production: a quyma recipe cannot have one and "who did i
   const s = db.prepare('SELECT for_sale, as_raw FROM products WHERE id = ?').get(p.siyro);
   assert.deepEqual([s.for_sale, s.as_raw], [1, 1]);
 });
+
+test('Reja: finished products per day; the technologist sees quyma kg, the pourer products; past days locked; the report; pouring cannot take more quyma than there is', async () => {
+  const { app, db, b, T, ok, post, S, p, r, wh } = await plant();
+  const bochka = await post(b, '/api/erp/products', { name: 'Qatiq bochka 800 g', kind: 'finished', unit: 'dona', netto_g: 800 }).then((x) => x.id);
+  const p800 = await post(b, '/api/erp/prod/recipes', { name: '800 g idishga quyish', kind: 'pour', lines: [{ productId: p.siyro, qty: 0.8 }, { productId: p.jar, qty: 1 }], rates: [{ name: 'Quyish', amount: 200 }] });
+  await ok(call(app, 'PUT', `/api/erp/prod/map/${bochka}`, b, { stages: [{ stageId: S.produce, recipeId: r.r5.id }, { stageId: S.pour, recipeId: p800.id }, { stageId: S.finished }] }), 'tex');
+  const today = new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10);
+  // only finished products; a past day cannot be changed
+  assert.equal((await call(app, 'PUT', `/api/erp/prod/plans/${today}`, b, { lines: [{ productId: p.siyro, qty: 10 }] })).status, 400);
+  assert.equal((await call(app, 'PUT', '/api/erp/prod/plans/2026-01-01', b, { lines: [{ productId: p.qatiq, qty: 10 }] })).status, 400);
+  assert.equal((await call(app, 'PUT', `/api/erp/prod/plans/${today}`, T.tech, { lines: [{ productId: p.qatiq, qty: 10 }] })).status, 403, 'the admin sets the plan');
+  await ok(call(app, 'PUT', `/api/erp/prod/plans/${today}`, b, { lines: [{ productId: p.qatiq, qty: 100 }, { productId: bochka, qty: 150 }] }), 'plan');
+  // the technologist: 100 × 0.4 + 150 × 0.8 = 160 kg of 5% siyro
+  const board = (await call(app, 'GET', '/api/erp/prod/board', T.tech)).body;
+  assert.deepEqual(board.plan.tech.map((x) => [x.quyma, x.qty, x.recipe_id]), [['5% siyro', 160, r.r5.id]]);
+  const t1 = await post(T.tech, '/api/erp/prod/tasks', { recipeId: r.r5.id, milkQty: 160, extra: [{ productId: p.cream, qty: 1 }] });
+  assert.equal(t1.plan.find((l) => l.productId === p.cream && l.qty === 1) != null, true, 'another material added for this batch');
+  await post(T.tech, `/api/erp/prod/tasks/${t1.id}/complete`, { outputQty: 163 });
+  assert.equal((await call(app, 'GET', '/api/erp/prod/board', T.tech)).body.plan.tech[0].made, 163);
+  // the pourer: products by quyma with the plan
+  const pb = (await call(app, 'GET', '/api/erp/prod/board', T.pour1)).body.plan.pour;
+  assert.deepEqual(pb.map((x) => [x.product, x.plan, x.quyma]).sort(), [['5% qatiq 400 g', 100, '5% siyro'], ['Qatiq bochka 800 g', 150, '5% siyro']]);
+  // pouring cannot take more quyma than the stage before holds
+  const big = await post(T.pour1, '/api/erp/prod/tasks', { stageId: S.pour, productId: bochka, units: 150 });
+  const no = await call(app, 'POST', `/api/erp/prod/tasks/${big.id}/complete`, T.pour1, { outputQty: 150, lines: big.plan.map((l) => ({ productId: l.productId, qty: l.productId === p.siyro ? 200 : l.qty })) });
+  assert.equal(no.status, 400);
+  assert.match(no.body.error, /bosqichda faqat 163 bor/);
+  await post(T.pour1, `/api/erp/prod/tasks/${big.id}/complete`, { outputQty: 150 });
+  const pt = await post(T.pour1, '/api/erp/prod/tasks', { stageId: S.pour, productId: p.qatiq, units: 40 });
+  await post(T.pour1, `/api/erp/prod/tasks/${pt.id}/complete`, { outputQty: 40 });
+  // the report: bochka done, qatiq 40 of 100
+  const rep = (await call(app, 'GET', `/api/erp/prod/plans/report?from=${today}&to=${today}`, b)).body[0];
+  assert.deepEqual(rep.rows.map((x) => [x.product, x.plan, x.made, x.diff, x.pct]).sort(), [['5% qatiq 400 g', 100, 40, -60, 40], ['Qatiq bochka 800 g', 150, 150, 0, 100]]);
+  assert.equal(rep.pct, 76, '190 of 250');
+  assert.equal(rep.done, false);
+  assert.equal((await call(app, 'GET', '/api/erp/prod/plans/report', T.tech)).status, 403);
+  // edit and delete today's plan
+  await ok(call(app, 'PUT', `/api/erp/prod/plans/${today}`, b, { lines: [{ productId: p.qatiq, qty: 120 }] }), 'edit');
+  assert.equal((await call(app, 'GET', `/api/erp/prod/plans/${today}`, b)).body.lines.length, 1);
+  await ok(call(app, 'DELETE', `/api/erp/prod/plans/${today}`, b), 'delete');
+  void wh; void db;
+});

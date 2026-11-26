@@ -316,6 +316,21 @@ CREATE TABLE IF NOT EXISTS neg_links (
   doc_id INTEGER REFERENCES docs(id)
 );
 CREATE INDEX IF NOT EXISTS idx_neg_links ON neg_links(warehouse_id, product_id, open_qty);
+-- Reja: the production plan per day (finished products only).
+CREATE TABLE IF NOT EXISTS plans (
+  id INTEGER PRIMARY KEY,
+  day TEXT NOT NULL UNIQUE,
+  note TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS plan_lines (
+  plan_id INTEGER NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  qty REAL NOT NULL,
+  PRIMARY KEY (plan_id, product_id)
+);
 -- Which collector shifts' milk a technologist shift counted ("Qabul qilingan sut"):
 -- each collector shift once.
 CREATE TABLE IF NOT EXISTS prod_shift_milk (

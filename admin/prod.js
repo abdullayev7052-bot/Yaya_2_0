@@ -426,6 +426,77 @@ async function texCard(productId) {
   dlg.showModal();
 }
 
+// ------------------------------------------------------------------ Reja (plan)
+views['prod-plans'] = async (v) => {
+  const q = hashParams();
+  const today = todayLocal();
+  const day = q.get('day') || today;
+  const [plans, plan, products] = await Promise.all([prodApi('GET', `/plans?from=${addDays(today, -30)}&to=${addDays(today, 60)}`),
+    prodApi('GET', `/plans/${day}`).catch(() => null), api('GET', '/products', null, '/api/erp')]);
+  const finished = products.filter((x) => x.kind === 'finished' && !x.has_variants && x.active);
+  const editable = day >= today && can('prod.manage');
+  const dmy = (d) => d.split('-').reverse().join('.');
+  const lines = (plan?.lines ?? []).map((l) => ({ productId: l.product_id, qty: l.qty, name: l.product }));
+  if (!lines.length && editable) lines.push({ productId: '', qty: '' });
+  v.innerHTML = `<div class="grid2">
+    <div class="card"><div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">Rejalar</h2>
+        ${can('prod.manage') ? `<label style="flex:none">Yangi kun<input type="date" id="newDay" min="${today}"></label>` : ''}</div>
+      <p class="muted">Reja faqat tayyor mahsulot soni bilan kiritiladi. Texnologga u quyma (kg) bo'lib, quyuvchiga mahsulot bo'yicha ko'rinadi.
+        O'tgan kunning rejasini o'zgartirib bo'lmaydi. Keyinchalik reja agentlar buyurtmasidan to'ladi.</p>
+      <table><tbody>${plans.map((x) => `<tr><td><a href="#prod-plans?day=${x.day}"><b>${dmy(x.day)}</b></a>${x.day === today ? ' <span class="badge sent">bugun</span>' : ''}${x.day === day ? ' ◀' : ''}</td>
+        <td class="muted">${x.lines.length} ta mahsulot · ${fmtNum(x.lines.reduce((a, l) => a + l.qty, 0))} dona</td><td>${x.editable ? '' : '<span class="muted">yopiq</span>'}</td></tr>`).join('') || '<tr><td class="muted">Reja yo&#39;q</td></tr>'}</tbody></table></div>
+    <div class="card"><h2>${dmy(day)} — reja</h2>
+      <div id="pl"></div>
+      ${editable ? `<button class="ghost small" id="addL" style="margin-top:8px">+ Mahsulot</button><div class="row" style="margin-top:12px"><button id="saveP">Saqlash</button>${plan ? '<button class="ghost" id="delP">O&#39;chirish</button>' : ''}</div>` : (plan ? '' : '<p class="muted">Bu kun uchun reja yo&#39;q</p>')}
+      <p class="err" id="pErr"></p>
+      <div id="tv"></div></div></div>`;
+  const draw = () => {
+    $('#pl', v).innerHTML = lines.length ? `<table><thead><tr><th>Tayyor mahsulot</th><th class="num">Soni</th><th></th></tr></thead><tbody>${lines.map((l, i) => `<tr data-i="${i}">
+      <td>${editable ? `<select data-k="productId"><option value="">— tanlang —</option>${finished.map((x) => `<option value="${x.id}" ${String(x.id) === String(l.productId) ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>` : esc(l.name ?? '')}</td>
+      <td class="num">${editable ? `<input data-k="qty" type="number" min="0" step="1" value="${esc(l.qty)}" style="width:110px">` : fmtNum(l.qty)}</td>
+      <td>${editable ? '<button class="ghost small" data-del>✕</button>' : ''}</td></tr>`).join('')}</tbody></table>` : '';
+  };
+  draw();
+  // how the technologist sees it (quyma)
+  if (plan) prodApi('GET', `/plans/view?day=${day}`).then((pv) => {
+    $('#tv', v).innerHTML = pv.tech.length ? `<h2 style="margin-top:16px">Texnolog uchun (quyma)</h2><table><tbody>${pv.tech.map((t) => `<tr><td>${esc(t.quyma)}<div class="muted">${t.products.map((x) => `${esc(x.product)} ${fmtNum(x.plan)}`).join(', ')}</div></td>
+      <td class="num"><b>${fmtNum(t.qty, 3)} ${esc(t.unit)}</b>${t.made ? `<div class="muted">chiqdi ${fmtNum(t.made, 3)}</div>` : ''}</td></tr>`).join('')}</tbody></table>
+      ${pv.pour.some((x) => !x.quyma) ? `<p class="warn">Tex kartasida quyma tanlanmagan: ${pv.pour.filter((x) => !x.quyma).map((x) => esc(x.product)).join(', ')}</p>` : ''}` : '';
+  }).catch(() => {});
+  $('#newDay', v)?.addEventListener('change', (e) => { if (e.target.value) setHash('prod-plans', { day: e.target.value }); });
+  if (!editable) return;
+  $('#pl', v).oninput = (e) => { const tr = e.target.closest('tr[data-i]'); if (tr && e.target.dataset.k) lines[tr.dataset.i][e.target.dataset.k] = e.target.value; };
+  $('#pl', v).onchange = $('#pl', v).oninput;
+  $('#pl', v).onclick = (e) => { const tr = e.target.closest('tr[data-i]'); if (tr && e.target.hasAttribute('data-del')) { lines.splice(Number(tr.dataset.i), 1); draw(); } };
+  $('#addL', v).onclick = () => { lines.push({ productId: '', qty: '' }); draw(); };
+  $('#saveP', v).onclick = act(async () => {
+    try { await prodApi('PUT', `/plans/${day}`, { lines: lines.filter((l) => l.productId && Number(l.qty) > 0).map((l) => ({ productId: Number(l.productId), qty: Number(l.qty) })) }); flash('Reja saqlandi'); route(); }
+    catch (ex) { $('#pErr', v).textContent = ex.message; }
+  });
+  $('#delP', v)?.addEventListener('click', act(async () => { if (!confirm("Shu kunning rejasi o'chirilsinmi?")) return; await prodApi('DELETE', `/plans/${day}`); flash("O'chirildi"); setHash('prod-plans', {}); }));
+};
+
+views['prod-plan-report'] = async (v) => {
+  const q = hashParams();
+  const f = { from: q.get('from') || addDays(todayLocal(), -13), to: q.get('to') || todayLocal() };
+  const days = await prodApi('GET', `/plans/report?from=${f.from}&to=${f.to}`);
+  const color = (pct) => (pct == null ? 'inherit' : pct >= 100 ? 'var(--ok)' : pct >= 80 ? 'var(--warn)' : 'var(--err)');
+  const tot = { plan: days.reduce((a, d) => a + d.plan, 0), made: days.reduce((a, d) => a + d.rows.reduce((x, r) => x + Math.min(r.made, r.plan), 0), 0) };
+  v.innerHTML = `<div class="card"><div class="row"><label>Dan<input type="date" id="from" value="${f.from}"></label><label>Gacha<input type="date" id="to" value="${f.to}"></label></div></div>
+    <div class="tiles"><div class="tile"><div class="k">Rejalar</div><div class="v">${days.length}</div><div class="s">${days.filter((d) => d.done).length} tasi to'liq bajarilgan</div></div>
+      <div class="tile"><div class="k">Bajarilish</div><div class="v" style="color:${color(tot.plan ? (tot.made / tot.plan) * 100 : null)}">${tot.plan ? fmtNum((tot.made / tot.plan) * 100, 1) : '—'}%</div><div class="s">reja: ${fmtNum(tot.plan)} dona</div></div></div>
+    ${days.map((d) => `<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">${d.day.split('-').reverse().join('.')}</h2>
+        <b style="font-size:20px;color:${color(d.pct)}">${d.pct ?? '—'}%${d.done ? ' ✓' : ''}</b></div>
+      <p class="muted">Rejadan kam: ${d.under} ta mahsulot · ko'p: ${d.over} ta · chiqdi ${fmtNum(d.made)} / ${fmtNum(d.plan)} dona</p>
+      <table><thead><tr><th>Mahsulot</th><th class="num">Reja</th><th class="num">Chiqdi</th><th class="num">Farq</th><th class="num">%</th></tr></thead><tbody>
+      ${d.rows.map((r) => `<tr><td>${esc(r.product)}</td><td class="num">${fmtNum(r.plan)}</td><td class="num">${fmtNum(r.made)}</td>
+        <td class="num" style="color:${r.diff < 0 ? 'var(--err)' : r.diff > 0 ? 'var(--ok)' : 'inherit'}">${r.diff > 0 ? '+' : ''}${fmtNum(r.diff)}</td><td class="num" style="color:${color(r.pct)}">${r.pct ?? '—'}%</td></tr>`).join('')}
+      </tbody></table></div>`).join('') || '<div class="card"><p class="muted">Bu davrda reja yo&#39;q</p></div>'}
+    <p class="muted">"Chiqdi" — o'sha kuni quyish / qadoqlashdan chiqqan tayyor mahsulot soni.</p>`;
+  $('#from', v).onchange = (e) => setHash('prod-plan-report', { ...f, from: e.target.value });
+  $('#to', v).onchange = (e) => setHash('prod-plan-report', { ...f, to: e.target.value });
+};
+
 views['prod-journal'] = async (v) => {
   const q = hashParams();
   const f = { stageId: q.get('stageId') || '', from: q.get('from') || addDays(todayLocal(), -2), to: q.get('to') || todayLocal() };
@@ -444,6 +515,8 @@ views['prod-journal'] = async (v) => {
 };
 
 PAGES.push(
+  ['prod-plans', 'Reja', ['prod.manage', 'prod.view'], 'prod'],
+  ['prod-plan-report', 'Reja hisoboti', ['prod.manage', 'prod.view'], 'prod'],
   ['prod-stages', 'Bosqichlar va xarita', ['prod.manage', 'prod.view'], 'prod'],
   ['prod-journal', 'Jurnal', ['prod.view', 'prod.approve', 'prod.manage'], 'prod'],
   ['prod', 'Texnolog smenalari', ['prod.view', 'prod.approve', 'prod.manage'], 'prod'],
