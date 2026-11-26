@@ -374,7 +374,7 @@ const stockTabs = {
         <td>${x.has_variants ? list.filter((c) => c.parent_id === x.id).map((c) => `<span class="badge">${esc(c.variant)}</span>`).join(' ') : ''}${x.for_sale ? ' <span class="badge sent" title="Kg hisobida ham sotiladi">sotuvda</span>' : ''}${x.as_raw ? ' <span class="badge" title="Xomashyo sifatida ham ishlatiladi">xomashyo</span>' : ''}${x.kind === 'finished' && can('prod.manage') ? ` <button class="ghost small" data-tex="${x.id}">Tex karta</button>` : ''}</td>
         <td>${can('catalog.manage') && x.kind !== 'milk' ? `<button class="ghost small" data-edit="${x.id}">Tahrirlash</button>` : x.kind === 'milk' ? '<span class="muted" title="Sut yig\'ish bo\'limida tahrirlanadi">Sut yig\'ish</span>' : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="muted">Mahsulot yo\'q</td></tr>'}
       </tbody></table></div>
-      <p class="muted">"Yig'uvchilar suti" (Yog'li / Yog'siz sut) sut yig'ish bo'limidagi "Mahsulotlar" sahifasida boshqariladi. Omborga ular bitta "Xom sut" bo'lib kiradi.</p>`;
+      <p class="muted">"Yig'uvchilar suti" (Yog'li / Yog'siz sut) sut yig'ish bo'limidagi "Mahsulotlar" sahifasida boshqariladi. Omborga ("Sut ombori") ular bitta "Yog'li sut" bo'lib kiradi — u "Asosiy xomashyo".</p>`;
     $('#kind', box).onchange = (e) => setHash('stock', { tab: 'mahsulot', kind: e.target.value });
     const kinds = Object.entries(m.productKinds).filter(([k]) => k !== 'milk');
     const edit = (x = null) => openForm({

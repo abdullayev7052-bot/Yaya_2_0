@@ -5,7 +5,7 @@
 // person may see (the server leaves out the rest). Uses app.js / stock.js helpers.
 
 const KIND_LABEL = {
-  raw_milk: 'Xom sut', raw: 'Xomashyo', semi: 'Quyma', pack: 'Idish', label: 'Etiketka', finished: 'Tayyor mahsulot',
+  main_raw: 'Asosiy xomashyo', raw_milk: 'Yog\'li sut', raw: 'Xomashyo', semi: 'Quyma', pack: 'Idish', label: 'Etiketka', finished: 'Tayyor mahsulot',
   returned: 'Qaytgan', recycled: 'Qayta ishlangan', other: 'Boshqa', milk: 'Yig\'uvchilar suti',
 };
 
@@ -29,7 +29,7 @@ views.overview = async (v) => {
     const s = o.stock;
     blocks.push(`<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">2. Ombor</h2><a href="#stock">batafsil →</a></div>
       <div class="tiles" style="margin:12px 0 0">
-        ${tile('Xom sut qoldig\'i', `${fmtNum(s.raw_milk)} kg`, 'omborlar va xodimlar qo\'lida', '#stock?tab=qoldiq&kind=raw_milk')}
+        ${tile('Asosiy xomashyo (sut)', `${fmtNum(s.raw_milk)} kg`, 'omborlar va bosqichlarda', '#stock?tab=qoldiq&kind=main_raw')}
         ${costs() ? tile('Qoldiq qiymati', fmtMoney(s.value), "so'm, tannarxda") : ''}
         ${tile('Qabul kutayotgan topshirishlar', s.waiting_handovers, s.draft_counts ? `${s.draft_counts} ta sanoq tasdiq kutmoqda` : '', '#stock?tab=hujjat&status=sent')}
         ${tile('Muddati yaqin partiyalar', s.expiring, '2 kun ichida')}

@@ -30,7 +30,7 @@ export function overview(db, perms, day = todayLocal()) {
     for (const k of Object.values(byKind)) { k.qty = r3(k.qty); k.cost = r2(k.cost); }
     out.stock = {
       value: r2(rows.reduce((a, r) => a + r.c, 0)),
-      raw_milk: r3(rows.filter((r) => r.kind === 'raw_milk').reduce((a, r) => a + r.q, 0)),
+      raw_milk: r3(rows.filter((r) => r.kind === 'main_raw').reduce((a, r) => a + r.q, 0)),
       by_kind: byKind,
       negative: rows.filter((r) => r.q < -EPS).length,
       in_hands: rows.filter((r) => r.holder_id && r.q > EPS).length,

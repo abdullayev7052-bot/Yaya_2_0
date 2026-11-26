@@ -72,7 +72,7 @@ test('conditional limit: with the alternative starter the output must be 315–3
   const { app, db, ids } = setup();
   const b = await boss(app);
   const P = async (body) => (await call(app, 'POST', '/api/erp/products', b, body)).body.id;
-  const milk = await P({ name: 'Xom sut', kind: 'raw_milk', unit: 'kg' });
+  const milk = await P({ name: 'Xom sut', kind: 'main_raw', unit: 'kg' });
   const st1 = await P({ name: 'Zakvaska A', kind: 'raw', unit: 'g' });
   const st2 = await P({ name: 'Zakvaska B', kind: 'raw', unit: 'g' });
   const siyro = await P({ name: '5% siyro', kind: 'semi', unit: 'kg' });

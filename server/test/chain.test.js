@@ -57,7 +57,7 @@ test('whole chain: every step works together and the books balance', async () =>
   await runShift(app, a, 'chain-1', [{ supplierId: 1, quantity: 60 }, { supplierId: 2, quantity: 40 }, { supplierId: 1, productId: 2, quantity: 20 }], { close: true });
   const shiftId = db.prepare("SELECT id FROM shifts WHERE client_uuid = 'chain-1'").get().id;
   await post(b, `/api/admin/shifts/${shiftId}/accept`, {}, 'accept shift');
-  const milkId = db.prepare("SELECT id FROM products WHERE kind = 'raw_milk'").get().id;
+  const milkId = Number(db.prepare("SELECT value FROM settings WHERE key = 'erp_milk_product'").get().value);
   assert.equal(db.prepare('SELECT ROUND(SUM(qty), 3) q FROM stock_moves WHERE product_id = ? AND warehouse_id = ?').get(milkId, raw).q, 120);
 
   // ---- 2. a vendor sells us jars (a jar and its lid as one pair; half paid)
@@ -66,23 +66,24 @@ test('whole chain: every step works together and the books balance', async () =>
   const v = (await post(b, '/api/erp/finance/vendors', { name: 'Plastik' })).id;
   await post(b, '/api/erp/finance/purchases', { vendorId: v, warehouseId: pack, lines: [{ productId: p.jar, qty: 300, price: 900 }], paid: 135000, cashboxId: main });
 
-  // ---- 3. production stage: 100 kg milk (straight from the raw-milk warehouse) → 98 kg quyma;
-  // at the end 18 kg counted in the tank, 2 kg boiled away
+  // ---- 3. production stage: 118 kg milk (straight from "Sut ombori") → 115.64 kg quyma; at the
+  // end the collector's shift (120 kg) is chosen as received milk: 2 kg boiled away
   const cook = await post(b, '/api/erp/prod/recipes', { name: '5% siyro', kind: 'cook', productId: p.siyro, outMin: 95, outMax: 101, lines: [{ productId: milkId, qty: 100 }] });
-  const t1 = await post(T.tech, '/api/erp/prod/tasks', { recipeId: cook.id, milkQty: 100 });
-  await post(T.tech, `/api/erp/prod/tasks/${t1.id}/complete`, { outputQty: 98 });
+  const t1 = await post(T.tech, '/api/erp/prod/tasks', { recipeId: cook.id, milkQty: 118 });
+  await post(T.tech, `/api/erp/prod/tasks/${t1.id}/complete`, { outputQty: 115.64 });
   const boil = db.prepare("SELECT id FROM stock_reasons WHERE section = 'tech' AND name = 'Qaynatishda'").get().id;
   const ts = (await ok(call(app, 'GET', '/api/erp/prod/shift', T.tech), 'my shift')).shift;
-  await post(T.tech, `/api/erp/prod/shifts/${ts.id}/close`, { milkLeft: 18, losses: [{ reasonId: boil, qty: 2 }] }, 'close tech shift');
+  await ok(call(app, 'PUT', `/api/erp/prod/shifts/${ts.id}/milk`, T.tech, { shiftIds: [shiftId] }), 'received milk');
+  await post(T.tech, `/api/erp/prod/shifts/${ts.id}/close`, { losses: [{ reasonId: boil, qty: 2 }] }, 'close tech shift');
 
   // ---- 4. pouring 240 jars (0.4 kg + jar) by two people: the quyma from the production
   // stage and the jars from the jar warehouse are taken by themselves
   const pourR = await post(b, '/api/erp/prod/recipes', { name: 'quyish', kind: 'pour', productId: p.qatiq, lines: [{ productId: p.siyro, qty: 0.4 }, { productId: p.jar, qty: 1 }], rates: [{ name: 'Quyish', amount: 170 }] });
   const t2 = await post(T.pour, '/api/erp/prod/tasks', { recipeId: pourR.id, units: 240 });
   await post(T.pour, `/api/erp/prod/tasks/${t2.id}/complete`, { workers: [u.pour, u.cap] });
-  // 2 kg of quyma left in the production stage: spilt, the technologist pays
+  // 19.64 kg of quyma left in the production stage: spilt, the technologist pays
   const spill = db.prepare("SELECT id FROM stock_reasons WHERE section = 'warehouse' AND charge = 'staff'").get().id;
-  await post(T.tech, '/api/erp/docs', { type: 'writeoff', from: { warehouseId: S.produce }, reasonId: spill, chargeUserId: u.tech, lines: [{ productId: p.siyro, qty: 2 }] }, 'spill');
+  await post(T.tech, '/api/erp/docs', { type: 'writeoff', from: { warehouseId: S.produce }, reasonId: spill, chargeUserId: u.tech, lines: [{ productId: p.siyro, qty: 19.64 }] }, 'spill');
 
   // ---- 5. incubator → cold room → capping (90 per jar) → finished goods
   await post(T.pour, '/api/erp/prod/moves', { stageId: S.incubator, productId: p.qatiq, qty: 240 }, 'incubator');

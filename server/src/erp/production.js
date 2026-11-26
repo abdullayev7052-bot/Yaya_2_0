@@ -32,7 +32,7 @@
 //   Out of range → the task / shift waits for a manager's approval.
 import { randomUUID } from 'node:crypto';
 import {
-  StockError, addAlert, addIn, allowNegative, cancelDocTx, chargeStaff, getDoc, holderName, lastUnitCost, linkNegative, milkWarehouse, nextNumber, pnl,
+  StockError, addAlert, addIn, allowNegative, cancelDocTx, chargeStaff, getDoc, holderName, insertMove, linkNegative, milkWarehouse, nextNumber, pnl,
   negativeAlerts, productBalance, r2, r3, rawMilkProduct, revalueLot, takeOut,
 } from './stock.js';
 import { getStage, keptWarehouses, prevStage, stageByCode, texRecipe } from './stages.js';
@@ -87,7 +87,8 @@ export function recipeDetail(db, id) {
       return { ...x, product_ids: ids, products: ids.map((pid) => product(db, pid)?.name ?? `#${pid}`) };
     });
   const baseWeight = r3(lines.reduce((a, l) => a + weightKg(product(db, l.product_id), l.qty), 0));
-  const baseMilk = r3(lines.filter((l) => l.product_kind === 'raw_milk').reduce((a, l) => a + l.qty, 0));
+  // The recipe's main raw materials (milk, skim milk): the others scale with their total.
+  const baseMilk = r3(lines.filter((l) => l.product_kind === 'main_raw').reduce((a, l) => a + l.qty, 0));
   return { ...r, kind_label: RECIPE_KINDS[r.kind] ?? r.kind, lines, outputs, rates, limits, rate_total: r2(rates.reduce((a, x) => a + x.amount, 0)), base_weight: baseWeight, base_milk: baseMilk };
 }
 
@@ -157,6 +158,9 @@ export function saveRecipe(db, id, b) {
     return { productId: p.id, qty, alts };
   });
   if (!lines.length) throw new StockError('Kamida bitta xomashyo kiriting');
+  if (kind === 'cook' && !lines.some((l) => product(db, l.productId)?.kind === 'main_raw')) {
+    throw new StockError("Tayyorlash tarkibida kamida bitta asosiy xomashyo (Yog'li sut yoki Yog'siz sut) bo'lishi shart");
+  }
   const outputs = kind === 'reprocess' ? (Array.isArray(b.outputs) ? b.outputs : []).map((o) => {
     const p = product(db, num(o.productId));
     if (!p) throw new StockError('Chiqadigan mahsulot topilmadi');
@@ -261,6 +265,98 @@ export function shiftSeparation(db, userId) {
   };
 }
 
+// ---------------------------------------------------------------- the technologist's milk
+// Received milk: the technologist picks the accepted collector shifts whose milk this
+// shift used (their milk is already in "Sut ombori"). A collector shift is counted
+// in one technologist shift only. Their real quantities make "Qabul qilingan sut",
+// and their cost becomes the cost of the milk this shift used.
+const milkDocsOf = (db, ids) => (ids.length ? db.prepare(`SELECT s.id AS shift_id, d.id AS doc_id FROM shifts s JOIN docs d ON d.uuid = 'shift-' || s.client_uuid
+  WHERE s.id IN (${ids.map(() => '?').join(',')}) AND d.type = 'milk_in' AND d.status = 'posted'`).all(...ids) : []);
+export function milkShifts(db, prodShift) {
+  const selected = new Set(J(prodShift?.milk_shifts) ?? []);
+  const usedBy = new Map(db.prepare('SELECT shift_id, prod_shift_id FROM prod_shift_milk').all().map((r) => [r.shift_id, r.prod_shift_id]));
+  // also chosen by another shift that is still open
+  for (const o of db.prepare("SELECT id, milk_shifts FROM prod_shifts WHERE status <> 'closed' AND id <> ?").all(prodShift?.id ?? 0)) for (const id of J(o.milk_shifts) ?? []) if (!usedBy.has(id)) usedBy.set(id, o.id);
+  return db.prepare(`SELECT s.id, s.number, s.copy_no, s.accepted_at, COALESCE(u.name, u.login) AS collector, dl.qty, ROUND(dl.qty * dl.unit_cost, 2) AS cost
+    FROM shifts s JOIN users u ON u.id = s.employee_id JOIN docs d ON d.uuid = 'shift-' || s.client_uuid JOIN doc_lines dl ON dl.doc_id = d.id
+    WHERE d.type = 'milk_in' AND d.status = 'posted' ORDER BY s.accepted_at DESC, s.id DESC LIMIT 80`).all()
+    .map((r) => ({ ...r, label: `#${r.number}${r.copy_no ? `-${r.copy_no}` : ''}`, qty: r3(r.qty), selected: selected.has(r.id),
+      used: usedBy.has(r.id) && usedBy.get(r.id) !== prodShift?.id }));
+}
+export function setShiftMilk(db, shiftId, ids, userId) {
+  const s = getShift(db, shiftId);
+  if (!s || s.user_id !== userId) throw new StockError('Smena topilmadi');
+  if (s.status !== 'open') throw new StockError('Smena ochiq emas');
+  const list = [...new Set((Array.isArray(ids) ? ids : []).map(Number))];
+  const avail = new Map(milkShifts(db, s).map((r) => [r.id, r]));
+  for (const id of list) {
+    const r = avail.get(id);
+    if (!r) throw new StockError('Smena topilmadi (yoki suti omborga tushmagan)');
+    if (r.used) throw new StockError(`${r.label} smenasi boshqa ishlab chiqarish smenasida hisoblangan`);
+  }
+  db.prepare('UPDATE prod_shifts SET milk_shifts = ? WHERE id = ?').run(JSON.stringify(list), s.id);
+  return shiftDetail(db, s.id);
+}
+
+// Everything the end of the shift needs: received, used (milk directly, skim milk),
+// cream from separation, total, and the loss = received − total.
+export function shiftSummary(db, s) {
+  const milkId = rawMilkProduct(db);
+  const sepR = db.prepare("SELECT id FROM recipes WHERE kind = 'separation' AND active = 1 ORDER BY sort, id LIMIT 1").get();
+  const sep = sepR ? recipeDetail(db, sepR.id) : null;
+  const restIds = new Set((sep?.outputs ?? []).filter((o) => o.cost_mode === 'rest').map((o) => o.product_id));
+  const used = new Map(db.prepare(`SELECT m.product_id, SUM(-m.qty) AS q FROM stock_moves m JOIN prod_tasks t ON t.doc_id = m.doc_id
+    WHERE t.shift_id = ? AND t.status = 'done' AND t.kind <> 'separation' AND m.qty < 0 AND m.kind = 'consume' GROUP BY m.product_id`).all(s.id).map((r) => [r.product_id, r.q]));
+  const sepTask = db.prepare("SELECT * FROM prod_tasks WHERE shift_id = ? AND kind = 'separation' AND status = 'done' ORDER BY id DESC LIMIT 1").get(s.id);
+  const sepOut = sepTask ? db.prepare(`SELECT dl.product_id, dl.qty, dl.meta FROM doc_lines dl WHERE dl.doc_id = ?`).all(sepTask.doc_id).filter((l) => J(l.meta)?.role === 'out') : [];
+  const sepMilk = sepTask ? r3(db.prepare("SELECT COALESCE(SUM(-qty), 0) AS q FROM stock_moves WHERE doc_id = ? AND product_id = ? AND qty < 0 AND kind = 'consume'").get(sepTask.doc_id, milkId).q) : 0;
+  const ids = J(s.milk_shifts) ?? [];
+  const received = r3(ids.length ? db.prepare(`SELECT COALESCE(SUM(dl.qty), 0) AS q FROM doc_lines dl JOIN docs d ON d.id = dl.doc_id JOIN shifts sh ON d.uuid = 'shift-' || sh.client_uuid
+    WHERE sh.id IN (${ids.map(() => '?').join(',')}) AND d.type = 'milk_in'`).get(...ids).q : 0);
+  const milkDirect = r3(used.get(milkId) ?? 0);
+  const skimUsed = r3([...restIds].reduce((a, id) => a + (used.get(id) ?? 0), 0));
+  const cream = r3(sepOut.filter((l) => !restIds.has(l.product_id)).reduce((a, l) => a + l.qty, 0));
+  const total = r3(milkDirect + (sepTask ? sepMilk : skimUsed));
+  return {
+    milk_shifts: ids, received, milk_direct: milkDirect, skim_used: skimUsed, cream: sepTask ? cream : null, sep_milk: sepMilk, total,
+    loss_qty: r3(received - total), separated: !!sepTask, need_separation: skimUsed > EPS && !sepTask, separation_recipe: sep
+      ? { id: sep.id, name: sep.name, outputs: sep.outputs.map((o) => ({ product_id: o.product_id, product: o.product, unit: o.unit, mode: o.cost_mode,
+        qty: o.cost_mode === 'rest' ? r3(used.get(o.product_id) ?? 0) : null })) } : null,
+  };
+}
+
+// Separation (before closing): the skim milk made is exactly the skim milk the shift
+// used (it was taken below zero); the cream is entered. Separation never loses
+// anything: the milk it takes = skim milk + cream. Posted at FIFO now; the shift
+// close gives the milk its real cost.
+export function separateShift(db, shiftId, body, { actor, userId }) {
+  return db.transaction(() => {
+    const s = getShift(db, shiftId);
+    if (!s || s.user_id !== userId) throw new StockError('Smena topilmadi');
+    if (s.status !== 'open') throw new StockError('Smena ochiq emas');
+    const sum = shiftSummary(db, s);
+    if (sum.separated) throw new StockError('Bu smenada separatsiya allaqachon kiritilgan');
+    if (!sum.separation_recipe) throw new StockError('Separatsiya tarkibi yo\'q (panel → Tarkiblar)');
+    const given = new Map((body?.outputs ?? []).filter((o) => o.qty != null && o.qty !== '').map((o) => [Number(o.productId), r3(o.qty)]));
+    const r = recipeDetail(db, sum.separation_recipe.id);
+    const outputs = r.outputs.map((o) => ({ productId: o.product_id, mode: o.cost_mode, value: o.cost_value,
+      qty: o.cost_mode === 'rest' ? r3(sum.separation_recipe.outputs.find((x) => x.product_id === o.product_id)?.qty ?? 0) : (given.get(o.product_id) ?? 0) }));
+    for (const o of outputs) if (!(o.qty >= 0)) throw new StockError('Miqdor noto\'g\'ri');
+    const milkQty = r3(outputs.reduce((a, o) => a + o.qty, 0));
+    if (!(milkQty > EPS)) throw new StockError('Separatsiyadan chiqqan miqdorni kiriting (toza qaymoq)');
+    const milkId = rawMilkProduct(db);
+    const stage = stageByCode(db, 'produce');
+    const n = db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM prod_tasks').get().n;
+    const tid = Number(db.prepare("INSERT INTO prod_tasks (uuid, number, shift_id, stage_id, user_id, recipe_id, kind, plan, created_by) VALUES (?, ?, ?, ?, ?, ?, 'separation', ?, ?)")
+      .run(`sep-${s.uuid}`, n, s.id, stage?.id ?? null, s.user_id, r.id, JSON.stringify({ factor: 1, lines: [{ productId: milkId, qty: milkQty }] }), actor).lastInsertRowid);
+    const t = getTask(db, tid);
+    postProduction(db, t, s, r, [{ productId: milkId, qty: milkQty }], outputs, actor, 'Separatsiya', [s.user_id], [], { sources: [{ h: { warehouseId: milkWarehouse(db) } }] });
+    db.prepare("UPDATE prod_tasks SET status = 'done', result = ?, done_at = ? WHERE id = ?")
+      .run(JSON.stringify({ lines: [{ productId: milkId, qty: milkQty }], outputs: outputs.map((o) => ({ productId: o.productId, qty: o.qty })), workers: [s.user_id] }), nowIso(), tid);
+    return shiftDetail(db, s.id);
+  })();
+}
+
 function taskRow(db, t) {
   const plan = J(t.plan) ?? {};
   const out = plan.productId ? product(db, plan.productId) : null;
@@ -293,7 +389,7 @@ export function shiftDetail(db, id) {
   const tasks = db.prepare('SELECT * FROM prod_tasks WHERE shift_id = ? ORDER BY id').all(id).map((t) => taskRow(db, t));
   return {
     ...s, label: `TS-${s.number}`, user_name: holderName(db, { userId: s.user_id }), close_data: J(s.close_data),
-    milk: shiftMilk(db, s), separation: s.status === 'closed' ? null : shiftSeparation(db, s.user_id), tasks,
+    milk: shiftMilk(db, s), separation: s.status === 'closed' ? null : shiftSeparation(db, s.user_id), summary: shiftSummary(db, s), tasks,
   };
 }
 
@@ -351,7 +447,7 @@ export function createTask(db, { uuid, stageId, recipeId, productId, factor, mil
   let f = Number(factor) || 1;
   if (PER_UNIT.has(r.kind) && units != null) f = Number(units);
   if (milkQty != null && milkQty !== '' && !PER_UNIT.has(r.kind)) {
-    if (!(r.base_milk > 0)) throw new StockError('Bu tarkibda xom sut yo\'q; miqdorni koeffitsiyent bilan bering');
+    if (!(r.base_milk > 0)) throw new StockError('Bu tarkibda asosiy xomashyo yo\'q; miqdorni koeffitsiyent bilan bering');
     f = Number(milkQty) / r.base_milk;
   }
   if (!(f > 0)) throw new StockError('Miqdor noto\'g\'ri');
@@ -411,7 +507,7 @@ function inputSource(db, { t, r, productId, qty }) {
   const prevs = [prevStage(db, productId, t.stage_id), out ? prevStage(db, out, t.stage_id) : null].filter(Boolean);
   const list = [...new Set(prevs)];
   const add = (id) => { if (id && !list.includes(id)) list.push(id); };
-  if (product(db, productId)?.kind === 'raw_milk') add(milkWarehouse(db));
+  if (product(db, productId)?.kind === 'main_raw') { add(milkWarehouse(db)); add(sepWarehouse(db, t.user_id)); }
   for (const w of keptWarehouses(db, t.user_id)) if (w !== t.stage_id && !db.prepare('SELECT is_stage FROM warehouses WHERE id = ?').get(w)?.is_stage) add(w);
   for (const w of keptWarehouses(db, t.user_id)) if (w !== t.stage_id) add(w);
   // Materials kept at the stage itself come last.
@@ -552,7 +648,7 @@ function postProduction(db, t, s, r, inputs, outputs, actor, note, workers, shor
     const src = sources?.[i] ?? inputSource(db, { t, r, productId: l.productId, qty: l.qty });
     const lid = Number(insLine.run(id, l.productId, l.qty, JSON.stringify({ role: 'in', from: src.h.warehouseId }), i).lastInsertRowid);
     for (const x of takeOut(db, ctx, { productId: l.productId, h: src.h, qty: l.qty, lineId: lid, kind: 'consume', allowNeg: !!src.allowNeg })) { total += x.cost; taken.push({ ...x, productId: l.productId }); }
-    if (product(db, l.productId).kind === 'raw_milk') milk += l.qty;
+    if (product(db, l.productId).kind === 'main_raw') milk += l.qty;
   });
   // Piece rates: part of the cost, owed to the workers (split equally).
   if (r.kind !== 'separation' && r.rates.length) {
@@ -724,38 +820,32 @@ function closeAlerts(db, key, id, actor) {
     AND json_extract(payload, '$.${key}') = ?`).run(actor, id);
 }
 
-// ---------------------------------------------------------------- cost spread
-// Spread an amount over the shift's finished tasks by the milk each used; within a
-// task, over its "rest" outputs by quantity (fixed-cost outputs like cream keep their cost).
-function spreadOverShift(db, ctx, shift, amount) {
+// ---------------------------------------------------------------- closing a shift
+// Add an amount to a task's "rest" outputs (by quantity; fixed-cost outputs like
+// cream keep their cost), passing it on to whatever was made from them.
+function revalueRest(db, ctx, docId, amount, label) {
   if (Math.abs(amount) < 0.005) return;
-  const tasks = db.prepare("SELECT * FROM prod_tasks WHERE shift_id = ? AND status = 'done' AND milk_qty > 0").all(shift.id);
-  const milk = tasks.reduce((a, t) => a + t.milk_qty, 0);
-  if (!(milk > 0)) { pnl(db, ctx, 'production_loss', amount, `TS-${shift.number}: sut yo'qotishi (topshiriqsiz)`); return; }
+  const outs = db.prepare(`SELECT l.id, l.qty0, dl.meta FROM lots l JOIN doc_lines dl ON dl.doc_id = l.doc_id AND dl.product_id = l.product_id
+    WHERE l.doc_id = ? ORDER BY l.id`).all(docId).filter((o) => (J(o.meta)?.mode ?? 'rest') === 'rest' && J(o.meta)?.role === 'out');
+  const q = outs.reduce((a, o) => a + (o.qty0 ?? 0), 0);
+  if (!outs.length || !(q > 0)) { pnl(db, ctx, 'production_loss', amount, label); return; }
   let left = amount;
-  tasks.forEach((t, i) => {
-    const share = i === tasks.length - 1 ? r2(left) : r2((amount * t.milk_qty) / milk);
-    left -= share;
-    const outs = db.prepare(`SELECT l.id, l.qty0, dl.meta FROM lots l JOIN doc_lines dl ON dl.doc_id = l.doc_id AND dl.product_id = l.product_id
-      WHERE l.doc_id = ? ORDER BY l.id`).all(t.doc_id).filter((o) => (J(o.meta)?.mode ?? 'rest') === 'rest' && J(o.meta)?.role === 'out');
-    const q = outs.reduce((a, o) => a + (o.qty0 ?? 0), 0);
-    if (!outs.length || !(q > 0)) { pnl(db, ctx, 'production_loss', share, `TQ-${t.number}`); return; }
-    let l2 = share;
-    outs.forEach((o, j) => {
-      const c = j === outs.length - 1 ? r2(l2) : r2((share * o.qty0) / q);
-      l2 -= c;
-      revalueLot(db, ctx, o.id, c);
-    });
+  outs.forEach((o, j) => {
+    const c = j === outs.length - 1 ? r2(left) : r2((amount * o.qty0) / q);
+    left -= c;
+    revalueLot(db, ctx, o.id, c);
   });
 }
 
-// ---------------------------------------------------------------- closing a shift
-// body: milkLeft = milk counted in the raw-milk warehouse; losses: [{ reasonId, qty }];
-// separation (optional): { outputs: [{ productId, qty }] } — for a fixed / percent
-// output (cream) the quantity made, for a "rest" output (skim milk) the quantity
-// LEFT now; what was made is the quantity left minus the books (which are below
-// zero by what was already used). The separation milk is what the count leaves
-// unexplained. More milk than the books say is a gain.
+// body: losses: [{ reasonId, qty }] — the loss (received − used − cream) explained
+// in full. Then:
+// 1. the loss milk leaves "Sut ombori";
+// 2. the milk this shift used takes the real cost of the chosen collector shifts:
+//    what was taken at FIFO goes back, the chosen shifts' milk goes out instead,
+//    and the difference reaches the products (and the loss);
+// 3. losses with effect "cost" are spread over the products by the value of the
+//    main raw materials (milk, skim milk) each one used — the milk gets dearer, so
+//    do the products; "company" is an expense, "staff" the person's debt.
 export function closeShift(db, shiftId, body, { actor, approve = false }) {
   return db.transaction(() => {
     const s = getShift(db, shiftId);
@@ -766,11 +856,10 @@ export function closeShift(db, shiftId, body, { actor, approve = false }) {
     if (db.prepare("SELECT 1 FROM prod_tasks WHERE shift_id = ? AND status IN ('open','approval')").get(s.id)) {
       throw new StockError('Avval ochiq topshiriqlarni yakunlang yoki bekor qiling');
     }
-    const milk = shiftMilk(db, s);
-    const milkH = { warehouseId: milk.warehouse_id };
-    if (b.milkLeft == null || b.milkLeft === '') throw new StockError(`"${milk.warehouse}"da qolgan sutni o'lchab kiriting`);
-    const counted = r3(b.milkLeft);
-    if (!(counted >= 0)) throw new StockError('Qolgan sut miqdori noto\'g\'ri');
+    const sum = shiftSummary(db, s);
+    if (sum.need_separation) throw new StockError(`Avval separatsiyani kiriting: smenada ${sum.skim_used} kg yog'siz sut ishlatilgan`);
+    if (sum.total > EPS && !sum.milk_shifts.length) throw new StockError("Qabul qilingan sutni tanlang (sut yig'uvchilar smenalari)");
+    if (sum.loss_qty < -EPS) throw new StockError(`Tanlangan smenalardagi sut (${sum.received} kg) sarflangandan (${sum.total} kg) kam — yana smena tanlang`, { received: sum.received, total: sum.total });
     const losses = (Array.isArray(b.losses) ? b.losses : []).map((l) => {
       const reason = db.prepare("SELECT * FROM stock_reasons WHERE id = ? AND section = 'tech' AND active = 1").get(Number(l.reasonId));
       if (!reason) throw new StockError('Yo\'qotish sababi topilmadi');
@@ -779,103 +868,102 @@ export function closeShift(db, shiftId, body, { actor, approve = false }) {
       return { reason, qty };
     }).filter((l) => l.qty > 0);
     const lossSum = r3(losses.reduce((a, l) => a + l.qty, 0));
-    // Separation entered at the end.
-    let sep = null;
-    const sepInfo = shiftSeparation(db, s.user_id);
-    const given = new Map((b.separation?.outputs ?? []).filter((o) => o.qty != null && o.qty !== '').map((o) => [Number(o.productId), r3(o.qty)]));
-    if (sepInfo && given.size) {
-      const outs = sepInfo.outputs.map((o) => {
-        const g = given.get(o.product_id) ?? 0;
-        if (!(g >= 0)) throw new StockError(`${o.product}: miqdor noto'g'ri`);
-        const made = o.mode === 'rest' ? r3(g - o.book) : g;
-        if (made < -EPS) throw new StockError(`${o.product}: qolgan miqdor hisobdagidan (${o.book}) ko'p bo'lishi kerak`);
-        return { productId: o.product_id, product: o.product, qty: Math.max(0, made), left: o.mode === 'rest' ? g : null, mode: o.mode };
-      });
-      if (!outs.some((o) => o.qty > EPS)) throw new StockError('Separatsiyadan chiqqan mahsulot miqdorini kiriting');
-      sep = { recipeId: sepInfo.recipe_id, outputs: outs };
+    if (Math.abs(lossSum - Math.max(0, sum.loss_qty)) > EPS) {
+      throw new StockError(`Yo'qotish ${Math.max(0, sum.loss_qty)} kg — sabablari bo'yicha to'liq kiriting (hozir ${lossSum} kg)`, { loss: sum.loss_qty, entered: lossSum });
     }
-    const unexplained = r3(milk.book - counted - lossSum);
-    let sepMilk = 0; let gain = 0;
-    if (sep) {
-      sepMilk = unexplained;
-      if (sepMilk <= EPS) throw new StockError(`Separatsiya uchun sut qolmadi: hisobda ${milk.book} kg, qolgan ${counted} kg, yo'qotish ${lossSum} kg`, { book: milk.book, counted, losses: lossSum });
-    } else if (unexplained > EPS) {
-      throw new StockError(`${unexplained} kg sut hisobsiz qoldi — qayerga ketganini kiriting (yo'qotish yoki separatsiya)`, { unexplained, book: milk.book, counted });
-    } else gain = r3(-unexplained);
     // Proportional limits: limit_qty per limit_base kg of milk used.
-    const usedMilk = r3(milk.used + sepMilk);
     const over = losses.filter((l) => l.reason.limit_qty != null && l.reason.limit_base > 0)
-      .map((l) => ({ reason: l.reason.name, qty: l.qty, allowed: r3((l.reason.limit_qty * usedMilk) / l.reason.limit_base) }))
+      .map((l) => ({ reason: l.reason.name, qty: l.qty, allowed: r3((l.reason.limit_qty * sum.total) / l.reason.limit_base) }))
       .filter((x) => x.qty > x.allowed + EPS);
-    let sepRange = null;
-    if (sep) {
-      const r = recipeDetail(db, sep.recipeId);
-      const range = outputRange(db, r, [{ productId: milk.product_id, qty: sepMilk }]);
-      const w = r3(sep.outputs.reduce((a, o) => a + weightKg(product(db, o.productId), o.qty), 0));
-      if (range && ((range.min != null && w < range.min - EPS) || (range.max != null && w > range.max + EPS))) {
-        sepRange = { milk: sepMilk, out: w, min: range.min, max: range.max };
-        over.push({ reason: `Separatsiya: ${sepMilk} kg sutdan ${w} kg`, qty: w, allowed: `${range.min ?? '—'}–${range.max ?? '—'}` });
-      }
-    }
-    const data = { body: b, counted, book: milk.book, losses: losses.map((l) => ({ reasonId: l.reason.id, reason: l.reason.name, qty: l.qty })), gain, sepMilk, separation: sep, milk, over, sepRange };
+    const data = { body: b, ...sum, losses: losses.map((l) => ({ reasonId: l.reason.id, reason: l.reason.name, qty: l.qty })), over };
     if (over.length && !approve) {
       db.prepare("UPDATE prod_shifts SET status = 'approval', close_data = ? WHERE id = ?").run(JSON.stringify(data), s.id);
-      addAlert(db, 'prod.limit', `TS-${s.number} (${holderName(db, { userId: s.user_id })}): ${over.map((o) => `${o.reason} ${o.qty} (ruxsat ${o.allowed})`).join(', ')}. Tasdiqlang yoki rad eting.`,
+      addAlert(db, 'prod.limit', `TS-${s.number} (${holderName(db, { userId: s.user_id })}): ${over.map((o) => `${o.reason} ${o.qty} kg (ruxsat ${o.allowed} kg)`).join(', ')}. Tasdiqlang yoki rad eting.`,
         { shiftId: s.id });
       return { needApproval: true, over, shift: shiftDetail(db, s.id) };
     }
 
-    // 1. Separation: the milk it used, at FIFO cost, into cream (fixed) and skim milk (rest).
-    if (sep) {
-      const r = recipeDetail(db, sep.recipeId);
-      const n = db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM prod_tasks').get().n;
-      const stage = stageByCode(db, 'produce');
-      const tid = Number(db.prepare("INSERT INTO prod_tasks (uuid, number, shift_id, stage_id, user_id, recipe_id, kind, plan, created_by) VALUES (?, ?, ?, ?, ?, ?, 'separation', ?, ?)")
-        .run(`sep-${s.uuid}`, n, s.id, stage?.id ?? null, s.user_id, r.id, JSON.stringify({ factor: 1, lines: [{ productId: milk.product_id, qty: sepMilk }] }), actor).lastInsertRowid);
-      const t = getTask(db, tid);
-      const outputs = r.outputs.map((o) => ({ productId: o.product_id, qty: sep.outputs.find((x) => x.productId === o.product_id)?.qty ?? 0, mode: o.cost_mode, value: o.cost_value }));
-      postProduction(db, t, s, r, [{ productId: milk.product_id, qty: sepMilk }], outputs, actor, 'Smena yakunidagi separatsiya', [s.user_id], [], { sources: [{ h: milkH }] });
-      db.prepare("UPDATE prod_tasks SET status = 'done', result = ?, done_at = ? WHERE id = ?")
-        .run(JSON.stringify({ lines: [{ productId: milk.product_id, qty: sepMilk }], outputs: outputs.map((o) => ({ productId: o.productId, qty: o.qty })), workers: [s.user_id], atClose: true }), nowIso(), tid);
-      // Skim milk / cream used before they were known must be covered now.
-      const wh = sepWarehouse(db, s.user_id);
-      for (const o of r.outputs) {
-        const bal = productBalance(db, { warehouseId: wh }, o.product_id);
-        if (bal < -EPS) throw new StockError(`${o.product}: hali ${-bal} hisobda manfiy — qolgan miqdorni to'g'ri kiriting`, { productId: o.product_id, balance: bal });
-      }
-    }
-
+    const milkId = rawMilkProduct(db);
+    const milkH = { warehouseId: milkWarehouse(db) };
     const docId = Number(db.prepare(`INSERT INTO docs (uuid, type, number, status, doc_date, from_wh, source, note, created_by, created_by_id)
-      VALUES (?, 'shift_close', ?, 'draft', ?, ?, 'prod_shift', ?, ?, ?)`).run(`pshift-${s.uuid}`, nextNumber(db, 'shift_close'), nowIso(), milk.warehouse_id, `TS-${s.number}`, actor, s.user_id).lastInsertRowid);
+      VALUES (?, 'shift_close', ?, 'draft', ?, ?, 'prod_shift', ?, ?, ?)`).run(`pshift-${s.uuid}`, nextNumber(db, 'shift_close'), nowIso(), milkH.warehouseId, `TS-${s.number}`, actor, s.user_id).lastInsertRowid);
     const ctx = { doc: getDoc(db, docId), at: nowIso(), touched: new Set() };
     const insLine = db.prepare('INSERT INTO doc_lines (doc_id, product_id, qty, meta, sort) VALUES (?, ?, ?, ?, ?)');
-    // The shift's average milk cost (what the tasks paid for milk).
-    const avg = db.prepare(`SELECT SUM(-m.cost) AS c, SUM(-m.qty) AS q FROM stock_moves m JOIN prod_tasks t ON t.doc_id = m.doc_id
-      WHERE t.shift_id = ? AND t.status = 'done' AND m.product_id = ? AND m.qty < 0`).get(s.id, milk.product_id);
-    const unit = avg?.q > 0 ? avg.c / avg.q : lastUnitCost(db, milk.product_id);
-    let spread = 0;
-    if (gain > 0) {
-      const lid = Number(insLine.run(docId, milk.product_id, gain, JSON.stringify({ role: 'gain' }), 0).lastInsertRowid);
-      const c = r2(gain * unit);
-      addIn(db, ctx, { productId: milk.product_id, h: milkH, qty: gain, cost: c, lineId: lid, kind: 'surplus', lot: { unitCost: unit, seq: 1 } });
-      spread -= c;
-    }
-    losses.forEach((l, i) => {
-      const lid = Number(insLine.run(docId, milk.product_id, l.qty, JSON.stringify({ role: 'loss', reasonId: l.reason.id, reason: l.reason.name }), i + 1).lastInsertRowid);
-      const c = r2(takeOut(db, ctx, { productId: milk.product_id, h: milkH, qty: l.qty, lineId: lid, kind: 'loss' }).reduce((a, x) => a + x.cost, 0));
-      const effect = l.reason.effect ?? (l.reason.charge === 'staff' ? 'staff' : 'company');
-      if (effect === 'cost') spread += c;
-      else if (effect === 'staff') chargeStaff(db, ctx, s.user_id, c, 'production', l.reason.name);
-      else pnl(db, ctx, l.reason.category_id ?? 'production_loss', c, `TS-${s.number}: ${l.reason.name}`);
+    // 1. the loss milk leaves the milk warehouse (FIFO for now)
+    const lossLines = losses.map((l, i) => {
+      const lid = Number(insLine.run(docId, milkId, l.qty, JSON.stringify({ role: 'loss', reasonId: l.reason.id, reason: l.reason.name }), i + 1).lastInsertRowid);
+      const c = r2(takeOut(db, ctx, { productId: milkId, h: milkH, qty: l.qty, lineId: lid, kind: 'loss' }).reduce((a, x) => a + x.cost, 0));
+      return { ...l, lineId: lid, cost: c };
     });
-    spreadOverShift(db, ctx, s, r2(spread));
+    // 2. the shift's milk at the chosen collector shifts' cost
+    const taskDocs = db.prepare("SELECT doc_id FROM prod_tasks WHERE shift_id = ? AND status = 'done' AND doc_id IS NOT NULL").all(s.id).map((t) => t.doc_id);
+    const docs = [...taskDocs, docId];
+    const consumed = db.prepare(`SELECT * FROM stock_moves WHERE warehouse_id = ? AND product_id = ? AND qty < 0 AND kind IN ('consume','loss')
+      AND doc_id IN (${docs.map(() => '?').join(',')})`).all(milkH.warehouseId, milkId, ...docs);
+    const T = r3(consumed.reduce((a, m) => a - m.qty, 0));
+    const Cold = r2(consumed.reduce((a, m) => a - m.cost, 0));
+    let unitNew = T > 0 ? Cold / T : 0;
+    if (T > EPS && sum.milk_shifts.length) {
+      for (const m of consumed) insertMove(db, ctx, { productId: milkId, lotId: m.lot_id, h: milkH, qty: -m.qty, cost: -m.cost, kind: 'swap' });
+      const lots = db.prepare(`SELECT l.id, l.unit_cost FROM lots l WHERE l.product_id = ? AND l.doc_id IN (${milkDocsOf(db, sum.milk_shifts).map((d) => d.doc_id).join(',') || '0'}) ORDER BY l.produced_at, l.id`).all(milkId);
+      let left = T; let Cnew = 0;
+      for (const l of lots) {
+        if (left <= EPS) break;
+        const bal = db.prepare('SELECT ROUND(COALESCE(SUM(qty), 0), 3) q, ROUND(COALESCE(SUM(cost), 0), 2) c FROM stock_moves WHERE lot_id = ? AND warehouse_id = ?').get(l.id, milkH.warehouseId);
+        if (bal.q <= EPS) continue;
+        const q = r3(Math.min(left, bal.q));
+        const c = Math.abs(q - bal.q) <= EPS ? bal.c : r2(q * l.unit_cost);
+        insertMove(db, ctx, { productId: milkId, lotId: l.id, h: milkH, qty: -q, cost: -c, kind: 'swap' });
+        Cnew += c; left = r3(left - q);
+      }
+      if (left > EPS) Cnew += takeOut(db, ctx, { productId: milkId, h: milkH, qty: left, kind: 'swap' }).reduce((a, x) => a + x.cost, 0);
+      unitNew = Cnew / T;
+      // the difference reaches whoever used the milk
+      const byDoc = new Map();
+      for (const m of consumed) {
+        const d = r2(-m.qty * unitNew + m.cost);
+        if (m.doc_id === docId) { const ll = lossLines.find((x) => x.lineId === m.line_id); if (ll) ll.cost = r2(ll.cost + d); continue; }
+        byDoc.set(m.doc_id, r2((byDoc.get(m.doc_id) ?? 0) + d));
+      }
+      for (const [d, amount] of byDoc) revalueRest(db, ctx, d, amount, `TS-${s.number}: sut tannarxi`);
+    }
+    // 3. the loss
+    let spread = 0;
+    for (const l of lossLines) {
+      const effect = l.reason.effect ?? (l.reason.charge === 'staff' ? 'staff' : 'company');
+      if (effect === 'cost') spread += l.cost;
+      else if (effect === 'staff') chargeStaff(db, ctx, s.user_id, l.cost, 'production', l.reason.name);
+      else pnl(db, ctx, l.reason.category_id ?? 'production_loss', l.cost, `TS-${s.number}: ${l.reason.name}`);
+    }
+    spread = r2(spread);
+    if (Math.abs(spread) >= 0.005) {
+      // by the value of the main raw materials each product used (milk at its real cost now, skim milk at its own)
+      const tasks = db.prepare("SELECT * FROM prod_tasks WHERE shift_id = ? AND status = 'done' AND kind <> 'separation' AND doc_id IS NOT NULL").all(s.id);
+      const value = (t) => db.prepare(`SELECT m.product_id, m.lot_id, -m.qty AS q, -m.cost AS c FROM stock_moves m JOIN products p ON p.id = m.product_id
+        WHERE m.doc_id = ? AND m.qty < 0 AND m.kind = 'consume' AND p.kind = 'main_raw'`).all(t.doc_id)
+        .reduce((a, m) => a + (m.product_id === milkId ? m.q * unitNew : (m.lot_id ? m.q * (db.prepare('SELECT unit_cost FROM lots WHERE id = ?').get(m.lot_id)?.unit_cost ?? 0) : m.q * (db.prepare(
+          `SELECT unit_cost FROM lots WHERE product_id = ? ORDER BY produced_at DESC, id DESC LIMIT 1`).get(m.product_id)?.unit_cost ?? m.c / m.q))), 0);
+      const vals = tasks.map((t) => ({ t, v: value(t) })).filter((x) => x.v > 0.005);
+      const V = vals.reduce((a, x) => a + x.v, 0);
+      if (!(V > 0)) pnl(db, ctx, 'production_loss', spread, `TS-${s.number}: sut yo'qotishi (topshiriqsiz)`);
+      else {
+        let left = spread;
+        vals.forEach((x, i) => {
+          const share = i === vals.length - 1 ? r2(left) : r2((spread * x.v) / V);
+          left -= share;
+          revalueRest(db, ctx, x.t.doc_id, share, `TQ-${x.t.number}`);
+        });
+      }
+    }
     db.prepare("UPDATE docs SET status = 'posted', posted_by = ?, posted_at = ? WHERE id = ?").run(actor, nowIso(), docId);
+    const insUsed = db.prepare('INSERT OR REPLACE INTO prod_shift_milk (shift_id, prod_shift_id) VALUES (?, ?)');
+    for (const id of sum.milk_shifts) insUsed.run(id, s.id);
     // The shift's lots — and everything made from them — are final now (unless they
     // still wait for a shortage to be settled).
     db.prepare(`WITH RECURSIVE d(id) AS (SELECT id FROM lots WHERE shift_id = ? UNION SELECT ls.lot_id FROM lot_sources ls JOIN d ON ls.source_lot_id = d.id)
       UPDATE lots SET provisional = 0 WHERE id IN (SELECT id FROM d) AND id NOT IN (SELECT lot_id FROM neg_links WHERE open_qty > ${EPS} AND lot_id IS NOT NULL)`).run(s.id);
     db.prepare("UPDATE prod_shifts SET status = 'closed', closed_at = ?, close_data = ?, close_doc_id = ? WHERE id = ?")
-      .run(nowIso(), JSON.stringify({ ...data, spread_cost: r2(spread), unit_cost: r2(unit) }), docId, s.id);
+      .run(nowIso(), JSON.stringify({ ...data, spread_cost: spread, unit_cost: r2(unitNew) }), docId, s.id);
     if (approve) closeAlerts(db, 'shiftId', s.id, actor);
     return { shift: shiftDetail(db, s.id) };
   })();

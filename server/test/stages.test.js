@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import bcrypt from 'bcryptjs';
-import { setup, call, login, boss } from './helpers.js';
+import { setup, call, login, boss, ali, runShift } from './helpers.js';
 import { roleIdByCode, ensureDeviceSlots } from '../src/db/index.js';
 import { runChecks } from '../src/erp/watch.js';
 import { moveHandsToStages } from '../src/erp/stages.js';
@@ -38,7 +38,7 @@ async function plant() {
   await ok(call(app, 'PUT', `/api/erp/prod/stages/${S.cap}`, b, { pieceRate: 90 }), 'cap rate');
   const P = async (body) => (await post(b, '/api/erp/products', body)).id;
   const p = {
-    milk: await P({ name: 'Xom sut', kind: 'raw_milk', unit: 'kg' }),
+    milk: await P({ name: 'Xom sut', kind: 'main_raw', unit: 'kg' }),
     cream: await P({ name: 'Toza qaymoq', kind: 'raw', unit: 'kg' }),
     starter: await P({ name: 'Zakvaska', kind: 'raw', unit: 'g', hasVariants: true, variants: '499, 505' }),
     siyro: await P({ name: '5% siyro', kind: 'semi', unit: 'kg' }),
@@ -47,9 +47,11 @@ async function plant() {
     qatiq: await P({ name: '5% qatiq 400 g', kind: 'finished', unit: 'dona', netto_g: 400 }),
     back: await P({ name: 'Vozvrat qatiq', kind: 'returned', unit: 'kg' }),
     sepCream: await P({ name: 'Qaymoq (separatsiya)', kind: 'raw', unit: 'kg' }),
-    skim: await P({ name: "Yog'siz sut (separatsiya)", kind: 'raw', unit: 'kg' }),
+    skim: await P({ name: "Yog'siz sut (separatsiya)", kind: 'main_raw', unit: 'kg' }),
   };
   const v = Object.fromEntries(db.prepare('SELECT variant, id FROM products WHERE parent_id = ?').all(p.starter).map((x) => [x.variant, x.id]));
+  // this plant's collected-milk product ("Yog'li sut" in real life)
+  db.prepare("INSERT INTO settings (key, value) VALUES ('erp_milk_product', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(p.milk));
   await post(b, '/api/erp/docs', { type: 'opening', to: { warehouseId: wh.raw }, lines: [{ productId: p.milk, qty: 1000, unitCost: 5000 }] });
   await post(b, '/api/erp/docs', { type: 'opening', to: { warehouseId: wh.store }, lines: [
     { productId: p.cream, qty: 20, unitCost: 40000 }, { productId: v['499'], qty: 100, unitCost: 50 }, { productId: v['505'], qty: 100, unitCost: 80 }] });
@@ -115,58 +117,84 @@ test('one product, one recipe per stage; variants are their own products; a pare
   assert.equal((await call(app, 'POST', '/api/erp/prod/recipes', b, { name: 'x', kind: 'cook', productId: p.starter, lines: [{ productId: p.milk, qty: 1 }] })).status, 400, 'a parent is not an output');
 });
 
-test('technologist: tasks at the production stage straight from the warehouses; variant chosen; limit approval; separation at the end settles skim milk used during the shift at its real cost', async () => {
+test('technologist: tasks straight from the warehouses; variant chosen; limit approval; separation as a step; received milk from collector shifts at their real cost; loss spread by main raw value', async () => {
   const { app, db, u, b, T, ok, post, wh, S, p, v, r, reasons } = await plant();
+  // two collector shifts accepted into "Sut ombori": 600 kg at 5 000 and 200 kg at 6 000
+  const a = await ali(app);
+  for (const [uu, sup, q] of [['cs-1', 1, 600], ['cs-2', 2, 200]]) {
+    await runShift(app, a, uu, [{ supplierId: sup, quantity: q }], { close: true });
+    await post(b, `/api/admin/shifts/${db.prepare('SELECT id FROM shifts WHERE client_uuid = ?').get(uu).id}/accept`, {});
+  }
+  assert.equal(bal(db, wh.raw, p.milk).q, 1800, '1000 older + 800 from the collectors');
   // the pourer does not run the production stage
   assert.equal((await call(app, 'POST', '/api/erp/prod/tasks', T.pour1, { recipeId: r.r5.id, milkQty: 320 })).status, 403);
-  // 1) a full batch; "Zakvaska" → variant 505 chosen in the app
+  // 1) a full batch; "Zakvaska" → variant 505 chosen in the app (milk taken FIFO: the older 5 000 milk)
   const t1 = await post(T.tech, '/api/erp/prod/tasks', { recipeId: r.r5.id, milkQty: 320, lines: [{ lineId: r.r5.lines[2].id, productId: v['505'] }] });
   assert.ok(t1.shift_id, 'the shift opened by itself');
   const d1 = await post(T.tech, `/api/erp/prod/tasks/${t1.id}/complete`, { outputQty: 326 });
-  assert.equal(d1.task.status, 'done');
   assert.equal(d1.task.outputs[0].cost, undefined, 'the technologist never sees costs');
-  assert.equal(bal(db, S.produce, p.siyro).q, 326, 'the quyma is in the production stage');
-  assert.equal(bal(db, wh.raw, p.milk).q, 680, 'milk came straight from the raw-milk warehouse');
-  assert.equal(bal(db, wh.store, v['505']).q, 95.8);
-  // 2) over the range → waits for the manager
+  assert.equal(bal(db, S.produce, p.siyro).q, 326);
+  // 2) over the range → waits for the manager; sent back and cancelled
   const t2 = await post(T.tech, '/api/erp/prod/tasks', { recipeId: r.r5.id, milkQty: 160 });
   const over = await post(T.tech, `/api/erp/prod/tasks/${t2.id}/complete`, { outputQty: 170 });
   assert.equal(over.needApproval, true);
   assert.deepEqual([over.range.min, over.range.max], [160, 167.5]);
   await post(b, `/api/erp/prod/tasks/${t2.id}/reject`, { note: "Qayta o'lchang" });
   await post(T.tech, `/api/erp/prod/tasks/${t2.id}/cancel`, { reason: 'Kerak emas' });
-  // 3) skim milk is used before the separation is entered: the raw warehouse goes below zero
-  const t3 = await post(T.tech, '/api/erp/prod/tasks', { recipeId: r.tv.id, factor: 1 });
-  await post(T.tech, `/api/erp/prod/tasks/${t3.id}/complete`, { outputQty: 12 });
-  assert.equal(bal(db, wh.store, p.skim).q, -50);
-  const sh = (await call(app, 'GET', '/api/erp/prod/shift', T.tech)).body.shift;
-  assert.equal(sh.milk.used, 320);
-  assert.equal(sh.milk.book, 680);
-  assert.equal(sh.separation.outputs.find((o) => o.product_id === p.skim).book, -50);
-  // close: 400 kg separated (unknown), 20 kg lost boiling, 260 kg counted in the tank;
-  // cream made 28 kg, skim milk left 300 kg → made 350 kg
+  // 3) skim milk used before the separation: 350 kg (the raw warehouse goes below zero)
+  const t3 = await post(T.tech, '/api/erp/prod/tasks', { recipeId: r.tv.id, factor: 7 });
+  await post(T.tech, `/api/erp/prod/tasks/${t3.id}/complete`, { outputQty: 80 });
+  assert.equal(bal(db, wh.store, p.skim).q, -350);
+  let sh = (await call(app, 'GET', '/api/erp/prod/shift', T.tech)).body.shift;
+  assert.equal(sh.summary.skim_used, 350);
+  assert.equal(sh.summary.need_separation, true);
+  // no close before separation, and not without the received milk
+  assert.equal((await call(app, 'POST', `/api/erp/prod/shifts/${sh.id}/close`, T.tech, { losses: [] })).status, 400);
+  // separation: cream 40 kg entered; skim milk made = 350 used; milk = 390 (never a loss)
+  sh = (await post(T.tech, `/api/erp/prod/shifts/${sh.id}/separation`, { outputs: [{ productId: p.sepCream, qty: 40 }] })).shift;
+  assert.deepEqual([sh.summary.cream, sh.summary.sep_milk, sh.summary.total], [40, 390, 710]);
+  assert.equal(bal(db, wh.store, p.skim).q, 0, 'skim milk settled');
+  assert.equal((await call(app, 'POST', `/api/erp/prod/shifts/${sh.id}/separation`, T.tech, { outputs: [{ productId: p.sepCream, qty: 1 }] })).status, 400, 'once');
+  // received milk: the collector shifts (only one is not enough)
+  const list = (await call(app, 'GET', '/api/erp/prod/milk-shifts', T.tech)).body;
+  assert.deepEqual(list.map((x) => x.qty).sort(), [200, 600]);
+  const ids = list.map((x) => x.id);
+  sh = (await ok(call(app, 'PUT', `/api/erp/prod/shifts/${sh.id}/milk`, T.tech, { shiftIds: [list.find((x) => x.qty === 600).id] }), 'milk')).shift;
+  const short = await call(app, 'POST', `/api/erp/prod/shifts/${sh.id}/close`, T.tech, { losses: [] });
+  assert.equal(short.status, 400);
+  assert.match(short.body.error, /yana smena tanlang/);
+  sh = (await ok(call(app, 'PUT', `/api/erp/prod/shifts/${sh.id}/milk`, T.tech, { shiftIds: ids }), 'milk')).shift;
+  assert.deepEqual([sh.summary.received, sh.summary.total, sh.summary.loss_qty], [800, 710, 90]);
+  // the loss must be explained in full
   const boil = reasons.find((x) => x.name === 'Qaynatishda').id;
-  const unexplained = await call(app, 'POST', `/api/erp/prod/shifts/${sh.id}/close`, T.tech, { milkLeft: 260, losses: [{ reasonId: boil, qty: 20 }] });
-  assert.equal(unexplained.status, 400);
-  assert.equal(unexplained.body.details.unexplained, 400);
-  const closed = await post(T.tech, `/api/erp/prod/shifts/${sh.id}/close`, { milkLeft: 260, losses: [{ reasonId: boil, qty: 20 }],
-    separation: { outputs: [{ productId: p.sepCream, qty: 28 }, { productId: p.skim, qty: 300 }] } });
+  const spilt = reasons.find((x) => x.name === "To'kildi").id;
+  const part = await call(app, 'POST', `/api/erp/prod/shifts/${sh.id}/close`, T.tech, { losses: [{ reasonId: boil, qty: 60 }] });
+  assert.equal(part.status, 400);
+  assert.match(part.body.error, /to'liq kiriting/);
+  const closed = await post(T.tech, `/api/erp/prod/shifts/${sh.id}/close`, { losses: [{ reasonId: boil, qty: 60 }, { reasonId: spilt, qty: 30 }] });
   assert.equal(closed.shift.status, 'closed');
-  assert.equal(closed.shift.close_data.sepMilk, 400);
-  // real costs: separation 400 × 5000 = 2 000 000 → cream 28 × 42 000, skim milk the rest (824 000 for 350 kg);
-  // boiling 20 × 5000 = 100 000 spread by milk: 320 / 720 to the quyma, 400 / 720 to skim milk
-  const skimCost = 824000 + (100000 * 400) / 720;
-  near(bal(db, wh.store, p.sepCream).c, 28 * 42000, 'cream keeps its fixed cost');
-  near(bal(db, wh.store, p.skim).c, (skimCost * 300) / 350, 'skim milk left');
-  // (its starter: not chosen, so the variant with the most stock — 499 at 50)
-  near(bal(db, S.produce, p.tvorog).c, (skimCost * 50) / 350 + 50, 'the tvorog made from skim milk before it was known now carries its real cost');
-  near(bal(db, S.produce, p.siyro).c, 320 * 5000 + 6 * 40000 + 4.2 * 80 + (100000 * 320) / 720, 'quyma with its share of boiling');
-  assert.ok(Math.abs(pnl(db, 'cost_variance')) < 0.05, `no cost left as a variance: ${pnl(db, 'cost_variance')}`);
+  // real cost: the shift used the chosen shifts' milk (4 200 000 / 800 = 5 250 per kg), not the older 5 000;
+  // separation: cream 40 × 42 000, skim milk the rest; boiling (60 kg) spread by the value of main raw used
+  const unit = 5250;
+  const skimLot = (390 * unit - 40 * 42000);
+  const boilCost = 60 * unit;
+  const vMilk = 320 * unit; const vSkim = skimLot;
+  near(bal(db, wh.store, p.sepCream).c, 40 * 42000, 'cream keeps its fixed cost');
+  near(bal(db, S.produce, p.siyro).c, 320 * unit + 6 * 40000 + 4.2 * 80 + (boilCost * vMilk) / (vMilk + vSkim), 'quyma: real milk cost + its share of boiling');
+  near(bal(db, S.produce, p.tvorog).c, 7 * 50 + skimLot + (boilCost * vSkim) / (vMilk + vSkim), 'tvorog: real skim milk cost + its share');
+  near(pnl(db, 'production_loss'), 30 * unit, 'spilt milk is an expense, at the real milk cost');
+  assert.ok(Math.abs(pnl(db, 'cost_variance')) < 0.05, `no variance: ${pnl(db, 'cost_variance')}`);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM lots WHERE provisional = 1').get().n, 0, 'all final');
-  assert.equal(bal(db, wh.raw, p.milk).q, 260);
-  // the whole value is still there: opening = stock now (no expense was booked)
+  // the older milk is back in the warehouse untouched; the collector shifts' milk is used
+  assert.deepEqual([bal(db, wh.raw, p.milk).q, bal(db, wh.raw, p.milk).c], [1000, 5000000]);
+  // the chosen collector shifts cannot be counted again
+  const t4 = await post(T.tech, '/api/erp/prod/tasks', { recipeId: r.r5.id, milkQty: 10 });
+  void t4;
+  assert.ok((await call(app, 'GET', '/api/erp/prod/milk-shifts', T.tech)).body.every((x) => x.used));
+  // the whole value is still there: what came in − the spilt milk
   const total = db.prepare('SELECT ROUND(SUM(cost), 2) c FROM stock_moves').get().c;
-  near(total, 1000 * 5000 + 20 * 40000 + 100 * 50 + 100 * 80 + 500 * 800, 'value conserved');
+  near(total, 1000 * 5000 + 600 * 5000 + 200 * 6000 + 20 * 40000 + 100 * 50 + 100 * 80 + 500 * 800 - 30 * unit, 'value conserved');
+  void u;
 });
 
 test('pouring, the keep stages and capping: who-did-it wages, jars taken automatically, a negative cold room settled at real cost, reprocessing from the returns stage', async () => {
@@ -327,7 +355,7 @@ test('monoblock: only people marked for it, a PIN only for them, and no two peop
   void T;
 });
 
-test('three pourers split 170 as 56.67 / 56.67 / 56.66; the recipe base weight; a gain at the shift close lowers the batch cost', async () => {
+test('three pourers split 170 as 56.67 / 56.67 / 56.66; the recipe base weight', async () => {
   const { app, db, u, b, T, post, wh, S, p, r } = await plant();
   assert.equal(r.r5.base_weight, 326.004);
   assert.equal(r.r5.base_milk, 320);
@@ -337,14 +365,6 @@ test('three pourers split 170 as 56.67 / 56.67 / 56.66; the recipe base weight; 
   await post(T.pour1, `/api/erp/prod/tasks/${pt.id}/complete`, { outputQty: 1, workers: [u.pour1, u.pour2, u.cap] });
   const w = (await call(app, 'GET', `/api/erp/prod/tasks/${pt.id}`, b)).body.wages.map((x) => x.amount).sort();
   assert.deepEqual(w, [56.66, 56.67, 56.67]);
-  // 690 kg counted where the books say 680: a 10 kg gain at the shift's milk cost
-  const before = bal(db, S.produce, p.siyro).c + bal(db, S.pour, p.qatiq).c - 1 * 800 - 170; // the whole batch, including the jar's 0.4 kg
-  const sh = (await call(app, 'GET', '/api/erp/prod/shift', T.tech)).body.shift;
-  const r2 = await post(T.tech, `/api/erp/prod/shifts/${sh.id}/close`, { milkLeft: 690, losses: [] });
-  assert.equal(r2.shift.status, 'closed');
-  assert.equal(r2.shift.close_data.gain, 10);
-  near(bal(db, S.produce, p.siyro).c + bal(db, S.pour, p.qatiq).c - 1 * 800 - 170, before - 10 * 5000, 'the gain lowered what the shift made');
-  assert.equal(bal(db, wh.raw, p.milk).q, 690);
 });
 
 test('Tex karta: only finished products; production names the quyma recipe, pouring the pour recipe; several products from one quyma', async () => {

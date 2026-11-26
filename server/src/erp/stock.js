@@ -569,20 +569,24 @@ export function milkWarehouse(db) {
   const set = Number(getSetting(db, 'erp_milk_warehouse'));
   if (set && db.prepare('SELECT 1 FROM warehouses WHERE id = ? AND active = 1').get(set)) return set;
   let w = db.prepare("SELECT id FROM warehouses WHERE kind = 'raw_milk' AND active = 1 ORDER BY sort, id LIMIT 1").get()?.id;
-  if (!w) w = Number(db.prepare("INSERT INTO warehouses (name, kind) VALUES ('Xom sut ombori', 'raw_milk')").run().lastInsertRowid);
+  if (!w) w = Number(db.prepare("INSERT INTO warehouses (name, kind) VALUES ('Sut ombori', 'raw_milk')").run().lastInsertRowid);
   setSetting(db, 'erp_milk_warehouse', w);
   return w;
 }
 
-// The warehouse product all collected milk becomes ("Xom sut").
+// The warehouse product all collected milk becomes ("Yog'li sut", a main raw material).
 export function rawMilkProduct(db) {
-  const id = db.prepare("SELECT id FROM products WHERE kind = 'raw_milk' ORDER BY active DESC, id LIMIT 1").get()?.id;
-  if (id) return id;
-  return Number(db.prepare("INSERT INTO products (name, unit, kind) VALUES ('Xom sut', 'kg', 'raw_milk')").run().lastInsertRowid);
+  const set = Number(getSetting(db, 'erp_milk_product'));
+  if (set && db.prepare('SELECT 1 FROM products WHERE id = ?').get(set)) return set;
+  const old = db.prepare("SELECT id FROM products WHERE kind = 'raw_milk' ORDER BY active DESC, id LIMIT 1").get()?.id;
+  const id = old ?? Number(db.prepare("INSERT INTO products (name, unit, kind) VALUES ('Yog''li sut', 'kg', 'main_raw')").run().lastInsertRowid);
+  if (old) db.prepare("UPDATE products SET kind = 'main_raw' WHERE id = ?").run(old);
+  setSetting(db, 'erp_milk_product', id);
+  return id;
 }
 
 // Called inside the shift-accept transaction. Whatever the collector brought
-// (Yog'li sut, Yog'siz sut...) enters the raw-milk warehouse as ONE product, "Xom sut":
+// (Yog'li sut, Yog'siz sut...) enters "Sut ombori" as ONE product, "Yog'li sut":
 // quantity = the accepted (real) quantities added up, cost = what the households are
 // owed for this shift. So the unit cost is this shift's real average: a real quantity
 // below what was written raises it (the company paid for the full amount), a surplus

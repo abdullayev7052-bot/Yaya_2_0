@@ -7,8 +7,8 @@ import { audit } from '../db/index.js';
 import { makeGuard } from '../auth.js';
 import { StockError } from '../erp/stock.js';
 import {
-  approvals, approveShift, approveTask, cancelTask, closeShift, completeTask, createTask, keepTask, listRecipes, listShifts, myShift, openShift,
-  recipeDetail, rejectShiftApproval, rejectTaskApproval, saveRecipe, shiftDetail, stageJournal, taskDetail,
+  approvals, approveShift, approveTask, cancelTask, closeShift, completeTask, createTask, keepTask, listRecipes, listShifts, milkShifts, myShift, openShift,
+  recipeDetail, rejectShiftApproval, rejectTaskApproval, saveRecipe, separateShift, setShiftMilk, shiftDetail, stageJournal, taskDetail,
 } from '../erp/production.js';
 import { getStage, isKeeper, keptWarehouses, productMap, saveStage, setProductMap, stageBoard, stageList, texRecipes } from '../erp/stages.js';
 import { stripCosts } from './erp.js';
@@ -97,6 +97,22 @@ export default async function productionRoutes(app, { db }) {
     const s = openShift(db, { uuid: req.body?.uuid, userId: req.me.id });
     log(req, 'prod.shift.open', { id: s.id, number: s.number });
     return { shift: shiftDetail(db, s.id) };
+  }));
+  // "Qabul qilingan sut": the accepted collector shifts this shift used (each once).
+  app.get('/milk-shifts', need(), async (req) => {
+    const s = myShift(db, req.me.id);
+    return milkShifts(db, s);
+  });
+  app.put('/shifts/:id/milk', need(), async (req, reply) => run(reply, () => {
+    const d = setShiftMilk(db, Number(req.params.id), req.body?.shiftIds, req.me.id);
+    log(req, 'prod.shift.milk', { id: d.id, shifts: req.body?.shiftIds });
+    return { shift: d };
+  }));
+  // Separation, before closing: skim milk made = skim milk used; the cream is entered.
+  app.post('/shifts/:id/separation', need(), async (req, reply) => run(reply, () => {
+    const d = separateShift(db, Number(req.params.id), req.body ?? {}, { actor: req.actor, userId: req.me.id });
+    log(req, 'prod.shift.separation', { id: d.id });
+    return { shift: d };
   }));
   app.post('/shifts/:id/close', need(), async (req, reply) => {
     const s = db.prepare('SELECT * FROM prod_shifts WHERE id = ?').get(Number(req.params.id));

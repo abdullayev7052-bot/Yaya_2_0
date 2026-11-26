@@ -26,10 +26,10 @@ test("accepted milk (yog'li + yog'siz) enters the warehouse as one Xom sut at th
   // real yog'li sut 29 kg instead of the written 30: the company still pays for 30
   assert.equal((await call(app, 'POST', `/api/admin/shifts/${shift}/accept`, b, { real: { 1: 29 } })).status, 200);
   const wh = db.prepare("SELECT id, name FROM warehouses WHERE kind = 'raw_milk'").get();
-  assert.equal(wh.name, 'Xom sut ombori', 'created on first use');
+  assert.equal(wh.name, 'Sut ombori', 'created on first use');
   const rows = await qtyAt(app, b, { warehouseId: wh.id });
   assert.equal(rows.length, 1, 'one product in the warehouse');
-  assert.equal(rows[0].product, 'Xom sut');
+  assert.equal(rows[0].product, "Yog'li sut");
   assert.equal(rows[0].qty, 39);
   const owed = 20 * 5000 + 10 * 6000 + 10 * 3000;
   assert.equal(rows[0].cost, owed, 'cost = what the households are owed');
@@ -308,5 +308,5 @@ test('a backup of the original (milk-only) Yaya restores into Yaya 2.0 and keeps
   await runShift(app, h, 'r1', [{ supplierId: 1, quantity: 10 }], { close: true });
   const shift = db.prepare("SELECT id FROM shifts WHERE client_uuid = 'r1'").get().id;
   assert.equal((await call(app, 'POST', `/api/admin/shifts/${shift}/accept`, b, {})).status, 200);
-  assert.equal((await qtyAt(app, b, { kind: 'raw_milk' }))[0].qty, 10);
+  assert.equal((await qtyAt(app, b, { kind: 'main_raw' }))[0].qty, 10);
 });

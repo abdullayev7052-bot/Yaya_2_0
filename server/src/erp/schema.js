@@ -316,6 +316,12 @@ CREATE TABLE IF NOT EXISTS neg_links (
   doc_id INTEGER REFERENCES docs(id)
 );
 CREATE INDEX IF NOT EXISTS idx_neg_links ON neg_links(warehouse_id, product_id, open_qty);
+-- Which collector shifts' milk a technologist shift counted ("Qabul qilingan sut"):
+-- each collector shift once.
+CREATE TABLE IF NOT EXISTS prod_shift_milk (
+  shift_id INTEGER PRIMARY KEY REFERENCES shifts(id),
+  prod_shift_id INTEGER NOT NULL REFERENCES prod_shifts(id)
+);
 
 -- ---------------------------------------------------------------- sales (stage 4)
 -- Sales and returns were taken out of Yaya 2.0 (they return in stages 11-12 with
@@ -476,7 +482,7 @@ export const REASON_EFFECTS = { cost: 'Tannarxga (partiya qimmatlashadi)', compa
 
 export const PRODUCT_KINDS = {
   milk: "Yig'uvchilar suti (yog'li / yog'siz)",
-  raw_milk: 'Xom sut (ombor)',
+  main_raw: 'Asosiy xomashyo (sut)',
   raw: 'Xomashyo',
   semi: 'Yarim tayyor (quyma)',
   pack: 'Idish / tara',
@@ -488,7 +494,7 @@ export const PRODUCT_KINDS = {
 };
 
 export const WAREHOUSE_KINDS = {
-  raw_milk: 'Xom sut ombori',
+  raw_milk: 'Sut ombori',
   raw: 'Xomashyo ombori',
   pack: 'Idish ombori',
   incubator: 'Issiqxona',
@@ -575,6 +581,8 @@ export function setupErp(db, addColumn) {
   // Nomenclature flags: sold by weight too (semi / finished), usable as a raw material.
   addColumn('products', 'for_sale', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('products', 'as_raw', 'INTEGER NOT NULL DEFAULT 0');
+  // the collector shifts chosen by an open technologist shift
+  addColumn('prod_shifts', 'milk_shifts', 'TEXT');
   seedErp(db);
 }
 
@@ -655,6 +663,24 @@ export function seedStages(db) {
   db.prepare('UPDATE users SET kiosk = 1 WHERE pin_hash IS NOT NULL').run();
 }
 
+// "Asosiy xomashyo" (stage 10, part 3): the raw materials every production recipe is
+// built on — milk ("Yog'li sut", what all collected milk becomes) and skim milk from
+// separation ("Yog'siz sut"); later water. The other materials of a recipe scale
+// with their total. The old "Xom sut (ombor)" kind becomes this one; the raw-milk
+// warehouse is called "Sut ombori".
+export function seedMainRaw(db) {
+  const legacy = db.prepare("SELECT id, name FROM products WHERE kind = 'raw_milk' ORDER BY active DESC, id LIMIT 1").get();
+  if (legacy && !db.prepare("SELECT 1 FROM settings WHERE key = 'erp_milk_product'").get()) {
+    db.prepare("INSERT INTO settings (key, value) VALUES ('erp_milk_product', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(legacy.id));
+    if (legacy.name === 'Xom sut') db.prepare("UPDATE products SET name = 'Yog''li sut' WHERE id = ?").run(legacy.id);
+  }
+  db.prepare("UPDATE products SET kind = 'main_raw' WHERE kind = 'raw_milk'").run();
+  // separation's "rest" output (skim milk) is a main raw material too
+  db.prepare(`UPDATE products SET kind = 'main_raw' WHERE kind = 'raw' AND id IN
+    (SELECT o.product_id FROM recipe_outputs o JOIN recipes r ON r.id = o.recipe_id WHERE r.kind = 'separation' AND o.cost_mode = 'rest')`).run();
+  db.prepare("UPDATE warehouses SET name = 'Sut ombori' WHERE name = 'Xom sut ombori'").run();
+}
+
 // Tex karta (stage 10, part 2): only finished products have a production map, and
 // each 'change' stage on it names its recipe. Existing maps get their recipes filled
 // in where it is clear: the product's own pour / pack / reprocess recipe, and for
@@ -700,6 +726,7 @@ export function seedErp(db) {
   }
   retireSellers(db);
   seedStages(db);
+  seedMainRaw(db);
   fillTexCards(db);
   if (!db.prepare('SELECT 1 FROM cashboxes WHERE is_main = 1').get()) db.prepare("INSERT INTO cashboxes (name, is_main) VALUES ('Asosiy kassa', 1)").run();
   // Reprocessing: what happened to containers that did not come out.
@@ -741,4 +768,4 @@ function retireSellers(db) {
 export const ERP_SCHEMA_TABLES = [...ERP_SCHEMA.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)].map((m) => m[1]);
 
 // Tables cleared by "clear all history" (children first).
-export const ERP_HISTORY_TABLES = ['alerts', 'cash_entries', 'lot_sources', 'stock_moves', 'pnl_entries', 'party_entries', 'prod_tasks', 'prod_shifts', 'doc_lines', 'lots', 'docs'];
+export const ERP_HISTORY_TABLES = ['prod_shift_milk', 'neg_links', 'alerts', 'cash_entries', 'lot_sources', 'stock_moves', 'pnl_entries', 'party_entries', 'prod_tasks', 'prod_shifts', 'doc_lines', 'lots', 'docs'];

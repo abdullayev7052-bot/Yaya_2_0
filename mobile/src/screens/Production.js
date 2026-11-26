@@ -59,7 +59,7 @@ export function Production({ tick, onTask, onNew, onClose, onMove }) {
   const stages = data?.stages ?? [];
   const sh = data?.shift;
   const produce = stages.find((x) => x.code === 'produce');
-  const skimUsed = (sh?.separation?.outputs ?? []).filter((o) => o.book < -0.0005);
+  const sm = sh?.summary;
   return (
     <ScrollView contentContainerStyle={{ padding: 12, gap: 12 }} refreshControl={<RefreshControl refreshing={busy} onRefresh={load} />}>
       <Err err={err} />
@@ -75,7 +75,7 @@ export function Production({ tick, onTask, onNew, onClose, onMove }) {
           {sh ? (
             <>
               <Text style={s.text}>Sarflangan sut: <Text style={{ fontWeight: '700', fontSize: 20 }}>{fmtQty(sh.milk.used)} kg</Text></Text>
-              <Text style={s.muted}>"{sh.milk.warehouse}"da hisobda: {fmtQty(sh.milk.book)} kg · ochildi {fmtDT(sh.opened_at)}</Text>
+              <Text style={s.muted}>Qabul qilingan (tanlangan smenalar): {fmtQty(sm?.received ?? 0)} kg · ochildi {fmtDT(sh.opened_at)}</Text>
               {sh.status === 'approval' && <Text style={{ color: C.warn }}>Smena yakuni rahbar tasdig'ini kutmoqda</Text>}
               {!!sh.approval_note && <Text style={{ color: C.err }}>Rahbar: {sh.approval_note}</Text>}
             </>
@@ -83,8 +83,9 @@ export function Production({ tick, onTask, onNew, onClose, onMove }) {
           {/* Separation: entered at the end of the shift; skim milk / cream used so far is shown */}
           <View style={{ borderTopWidth: 1, borderColor: C.line, paddingTop: 8, gap: 4 }}>
             <Text style={[s.text, { fontWeight: '700' }]}>Separatsiya</Text>
-            {skimUsed.length ? skimUsed.map((o) => <Text key={o.product_id} style={{ color: C.warn }}>{o.product}: {fmtQty(-o.book)} {o.unit} ishlatildi — smena oxirida kiritasiz</Text>)
-              : <Text style={s.muted}>Qaymoq va yog'siz sut miqdori smena oxirida kiritiladi.</Text>}
+            {sm?.separated ? <Text style={{ color: C.ok }}>Kiritildi: toza qaymoq {fmtQty(sm.cream)} kg, yog'siz sut {fmtQty(sm.skim_used)} kg</Text>
+              : sm?.skim_used > 0 ? <Text style={{ color: C.warn }}>Yog'siz sut: {fmtQty(sm.skim_used)} kg sarflandi — smena oxirida separatsiya kiritasiz</Text>
+              : <Text style={s.muted}>Toza qaymoq smena oxirida kiritiladi; yog'siz sut sarfga qarab o'zi hisoblanadi.</Text>}
           </View>
           {sh?.status === 'open' && <Btn title="Separatsiya va smenani yopish" kind="ghost" onPress={onClose} />}
         </View>
@@ -352,86 +353,142 @@ export function MoveScreen({ stage, item, onBack, onDone }) {
 }
 
 // ---------------------------------------------------------------- separation and the end of the shift
+// "Qabul qilingan sut" is never typed: it comes from the accepted collector shifts the
+// technologist ticks (⬇). Separation is its own step: the skim milk made is what the
+// shift used; only the cream is entered (separation never loses anything). The loss
+// = received − (milk used + skim milk + cream) must be explained in full.
+function MilkShiftPicker({ shift, onBack, onSaved }) {
+  const { data, err } = useLoad(() => prod('GET', '/milk-shifts'), []);
+  const [sel, setSel] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const chosen = sel ?? new Set((data ?? []).filter((x) => x.selected).map((x) => x.id));
+  const total = (data ?? []).filter((x) => chosen.has(x.id)).reduce((a, x) => a + x.qty, 0);
+  const toggle = (x) => { if (x.used) return; const n = new Set(chosen); if (n.has(x.id)) n.delete(x.id); else n.add(x.id); setSel(n); };
+  const save = async () => {
+    setBusy(true);
+    try { await prod('PUT', `/shifts/${shift.id}/milk`, { shiftIds: [...chosen] }); onSaved(); } catch (e) { notify('Xatolik', e.message); } finally { setBusy(false); }
+  };
+  return (
+    <View style={{ flex: 1 }}>
+      <Header title="Qabul qilingan sut" onBack={onBack} />
+      <View style={[s.card, { margin: 12, marginBottom: 0, alignItems: 'center' }]}>
+        <Text style={s.muted}>Tanlangan smenalar: {chosen.size} ta</Text>
+        <Text style={{ fontSize: 30, fontWeight: '700', color: C.text }}>{fmtQty(r3(total))} kg</Text>
+      </View>
+      <ScrollView contentContainerStyle={{ padding: 12, gap: 8 }}>
+        <Err err={err} />
+        {(data ?? []).map((x) => (
+          <Pressable key={x.id} onPress={() => toggle(x)} style={({ pressed }) => [s.card, { flexDirection: 'row', alignItems: 'center', gap: 12, opacity: x.used ? 0.45 : 1 }, pressed && !x.used && { opacity: 0.6 }]}>
+            <View style={{ width: 26, height: 26, borderRadius: 6, borderWidth: 2, borderColor: C.accent, backgroundColor: chosen.has(x.id) ? C.accent : 'transparent', alignItems: 'center', justifyContent: 'center' }}>
+              {chosen.has(x.id) && <Text style={{ color: C.accentText, fontWeight: '700' }}>✓</Text>}
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[s.text, { fontWeight: '700' }]}>Smena {x.label} · {x.collector}</Text>
+              <Text style={s.muted}>{fmtDT(x.accepted_at)}{x.used ? ' · boshqa smenada hisoblangan' : ''}</Text>
+            </View>
+            <Text style={[s.text, { fontWeight: '700' }]}>{fmtQty(x.qty)} kg</Text>
+          </Pressable>
+        ))}
+        {data && !data.length && <Text style={s.muted}>Qabul qilingan smena yo'q</Text>}
+      </ScrollView>
+      <View style={{ padding: 12 }}><Btn title={busy ? '...' : 'Saqlash'} onPress={save} disabled={busy} /></View>
+    </View>
+  );
+}
+
 export function CloseShift({ onBack, onDone }) {
-  const { data, err } = useLoad(async () => {
+  const { data, err, load } = useLoad(async () => {
     const [{ shift }, meta] = await Promise.all([prod('GET', '/shift'), api.erp('GET', '/meta')]);
     return { shift, meta };
   }, []);
-  const [left, setLeft] = useState('');
+  const [picking, setPicking] = useState(false);
+  const [sepVals, setSepVals] = useState({});
   const [loss, setLoss] = useState({});
-  const [sep, setSep] = useState({});
   const [busy, setBusy] = useState(false);
   if (!data?.shift) return <View style={{ flex: 1 }}><Header title="Smenani yopish" onBack={onBack} /><Err err={err} /></View>;
   const { shift, meta } = data;
+  if (picking) return <MilkShiftPicker shift={shift} onBack={() => setPicking(false)} onSaved={() => { setPicking(false); load(); }} />;
+  const sm = shift.summary;
   const reasons = meta.techReasons ?? [];
-  const book = shift.milk.book;
-  const lossSum = reasons.reduce((a, x) => a + toNumber(loss[x.id] || 0), 0);
-  const sepOuts = shift.separation?.outputs ?? [];
-  const sepGiven = sepOuts.some((o) => (sep[o.product_id] ?? '') !== '');
-  const unexplained = left === '' ? null : r3(book - toNumber(left) - lossSum);
+  const lossSum = r3(reasons.reduce((a, x) => a + toNumber(loss[x.id] || 0), 0));
+  const lossQty = Math.max(0, sm.loss_qty);
   const openTasks = shift.tasks.filter((t) => t.status === 'open' || t.status === 'approval');
-  const usedSoFar = shift.milk.used + (sepGiven && unexplained > 0 ? unexplained : 0);
+  const sepRecipe = sm.separation_recipe;
+  const separate = async () => {
+    setBusy(true);
+    try {
+      await prod('POST', `/shifts/${shift.id}/separation`, { outputs: (sepRecipe?.outputs ?? []).filter((o) => o.mode !== 'rest').map((o) => ({ productId: o.product_id, qty: toNumber(sepVals[o.product_id] || 0) })) });
+      await load();
+    } catch (e) { notify('Xatolik', e.message); } finally { setBusy(false); }
+  };
   const submit = async () => {
     setBusy(true);
     try {
-      const res = await prod('POST', `/shifts/${shift.id}/close`, {
-        milkLeft: toNumber(left),
-        losses: reasons.map((x) => ({ reasonId: x.id, qty: toNumber(loss[x.id] || 0) })).filter((l) => l.qty > 0),
-        ...(sepGiven ? { separation: { outputs: sepOuts.map((o) => ({ productId: o.product_id, qty: sep[o.product_id] === '' || sep[o.product_id] == null ? 0 : toNumber(sep[o.product_id]) })) } } : {}),
-      });
-      onDone(res.needApproval ? 'Limitdan oshgan — smena rahbar tasdig\'iga yuborildi' : `${shift.label} yopildi`);
+      const res = await prod('POST', `/shifts/${shift.id}/close`, { losses: reasons.map((x) => ({ reasonId: x.id, qty: toNumber(loss[x.id] || 0) })).filter((l) => l.qty > 0) });
+      onDone(res.needApproval ? 'Limitdan oshgan — smena rahbar tasdig\'iga yuborildi' : `${shift.label} yopildi — haqiqiy tannarx hisoblandi`);
     } catch (e) { notify('Xatolik', e.message); } finally { setBusy(false); }
   };
+  const Row = ({ label, value, bold, sub, color }) => (
+    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3, paddingLeft: sub ? 16 : 0 }}>
+      <Text style={[sub ? s.muted : s.text, bold && { fontWeight: '700' }]}>{label}</Text>
+      <Text style={[s.text, { fontWeight: bold ? '700' : '600' }, color && { color }]}>{value}</Text>
+    </View>
+  );
+  const canClose = !openTasks.length && !sm.need_separation && (sm.total <= 0.0005 || sm.milk_shifts.length) && sm.loss_qty >= -0.0005 && Math.abs(lossSum - lossQty) <= 0.0005;
   return (
     <View style={{ flex: 1 }}>
       <Header title={`${shift.label} — yopish`} onBack={onBack} />
       <ScrollView contentContainerStyle={{ padding: 12, gap: 12 }} keyboardShouldPersistTaps="handled">
         {openTasks.length > 0 && <Text style={s.err}>Avval ochiq topshiriqlarni yakunlang: {openTasks.map((t) => t.label).join(', ')}</Text>}
-        <View style={[s.card, { gap: 6 }]}>
-          <Text style={s.text}>"{shift.milk.warehouse}"da hisob bo'yicha: <Text style={{ fontWeight: '700' }}>{fmtQty(book)} kg</Text></Text>
-          <Text style={s.muted}>Topshiriqlarda ishlatildi {fmtQty(shift.milk.used)} kg.</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text style={[s.text, { flex: 1 }]}>Qolgan sut (o'lchab)</Text>
-            <Num value={left} onChange={setLeft} unit="kg" />
-          </View>
-        </View>
-        {sepOuts.length > 0 && (
+        {/* separation first: the skim milk made is what the shift used */}
+        {sepRecipe && !sm.separated && (
           <View style={[s.card, { gap: 8, borderColor: C.accent }]}>
-            <Text style={[s.text, { fontWeight: '700' }]}>Separatsiya (bo'lgan bo'lsa)</Text>
-            {sepOuts.map((o) => (
-              <View key={o.product_id} style={{ gap: 2 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Text style={[s.text, { flex: 1 }]}>{o.product} — {o.mode === 'rest' ? 'qoldi' : 'chiqdi'}</Text>
-                  <Num value={sep[o.product_id] ?? ''} onChange={(x) => setSep((m) => ({ ...m, [o.product_id]: x }))} unit={o.unit} />
-                </View>
-                {o.mode === 'rest' && o.book < -0.0005 && <Text style={{ fontSize: 13, color: C.muted }}>Smenada {fmtQty(-o.book)} {o.unit} ishlatildi — chiqqani: qolgani + {fmtQty(-o.book)}</Text>}
+            <Text style={[s.text, { fontWeight: '700' }]}>Separatsiya</Text>
+            {sepRecipe.outputs.map((o) => (o.mode === 'rest' ? (
+              <Row key={o.product_id} label={`${o.product} (smenada sarflangan)`} value={`${fmtQty(o.qty ?? 0)} ${o.unit}`} />
+            ) : (
+              <View key={o.product_id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text style={[s.text, { flex: 1 }]}>{o.product} — chiqdi</Text>
+                <Num value={sepVals[o.product_id] ?? ''} onChange={(x) => setSepVals((m) => ({ ...m, [o.product_id]: x }))} unit={o.unit} />
               </View>
-            ))}
-            {sepGiven && unexplained != null && <Text style={{ color: unexplained > 0 ? C.ok : C.err }}>Separatsiyaga ketgan sut: {fmtQty(Math.max(0, unexplained))} kg</Text>}
+            )))}
+            <Text style={s.muted}>Separatsiyada yo'qotish bo'lmaydi: sut = yog'siz sut + toza qaymoq.</Text>
+            <Btn title={busy ? '...' : 'Separatsiya'} onPress={separate} disabled={busy} />
           </View>
         )}
-        <View style={[s.card, { gap: 8 }]}>
-          <Text style={s.muted}>Yo'qotish sababi (bir nechta bo'lishi mumkin)</Text>
-          {reasons.map((x) => {
-            const allowed = x.limit_qty != null && x.limit_base > 0 ? (x.limit_qty * usedSoFar) / x.limit_base : null;
-            const v = toNumber(loss[x.id] || 0);
-            return (
-              <View key={x.id} style={{ gap: 2 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Text style={[s.text, { flex: 1 }]}>{x.name}</Text>
-                  <Num value={loss[x.id] ?? ''} onChange={(y) => setLoss((l) => ({ ...l, [x.id]: y }))} unit="kg" />
-                </View>
-                {allowed != null && <Text style={{ fontSize: 13, color: v > allowed + 0.0005 ? C.err : C.muted }}>Limit: {fmtQty(r3(allowed))} kg gacha{v > allowed + 0.0005 ? ' — oshib ketdi, rahbar tasdiqlaydi' : ''}</Text>}
-              </View>
-            );
-          })}
+        <View style={[s.card, { gap: 2 }]}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 4 }}>
+            <Text style={[s.text, { fontWeight: '700' }]}>Qabul qilingan sut: {fmtQty(sm.received)} kg</Text>
+            <Pressable onPress={() => setPicking(true)} style={[s.card, { paddingVertical: 6, paddingHorizontal: 12 }]}><Text style={{ fontSize: 20 }}>⬇</Text></Pressable>
+          </View>
+          <Row label="Sarflandi" value={`${fmtQty(r3(sm.milk_direct + sm.skim_used))} kg`} bold />
+          <Row label="Yog'li sut" value={`${fmtQty(sm.milk_direct)} kg`} sub />
+          <Row label="Yog'siz sut" value={`${fmtQty(sm.skim_used)} kg`} sub />
+          <Row label="Toza qaymoq" value={sm.cream == null ? 'separatsiya kiritilmagan' : `${fmtQty(sm.cream)} kg`} />
+          <Row label="Jami" value={`${fmtQty(sm.total)} kg`} bold />
+          <Row label="Yo'qotish" value={`${fmtQty(sm.loss_qty)} kg`} bold color={sm.loss_qty < -0.0005 ? C.err : C.warn} />
+          {sm.loss_qty < -0.0005 && <Text style={s.err}>Qabul qilingan sut sarflangandan kam — yana smena tanlang (⬇)</Text>}
         </View>
-        {unexplained != null && !sepGiven && (
-          <Text style={{ fontSize: 18, fontWeight: '700', color: unexplained > 0.0005 ? C.err : C.ok }}>
-            {unexplained > 0.0005 ? `Hisobsiz qoldi: ${fmtQty(unexplained)} kg — separatsiya yoki yo'qotish kiriting` : unexplained < -0.0005 ? `Yutish: +${fmtQty(-unexplained)} kg (hisobdagidan ko'p)` : 'Hammasi hisoblandi'}
-          </Text>
+        {lossQty > 0.0005 && (
+          <View style={[s.card, { gap: 8 }]}>
+            <Text style={s.muted}>Yo'qotish miqdori va sababini kiriting ({fmtQty(lossQty)} kg)</Text>
+            {reasons.map((x) => {
+              const allowed = x.limit_qty != null && x.limit_base > 0 ? (x.limit_qty * sm.total) / x.limit_base : null;
+              const v = toNumber(loss[x.id] || 0);
+              return (
+                <View key={x.id} style={{ gap: 2 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Text style={[s.text, { flex: 1 }]}>{x.name}</Text>
+                    <Num value={loss[x.id] ?? ''} onChange={(y) => setLoss((l) => ({ ...l, [x.id]: y }))} unit="kg" />
+                  </View>
+                  {allowed != null && <Text style={{ fontSize: 13, color: v > allowed + 0.0005 ? C.err : C.muted }}>Limit: {fmtQty(r3(allowed))} kg gacha{v > allowed + 0.0005 ? ' — oshib ketdi, rahbar tasdiqlaydi' : ''}</Text>}
+                </View>
+              );
+            })}
+            <Text style={{ fontWeight: '700', color: Math.abs(lossSum - lossQty) <= 0.0005 ? C.ok : C.err }}>Kiritildi: {fmtQty(lossSum)} / {fmtQty(lossQty)} kg</Text>
+          </View>
         )}
-        <Btn title={busy ? '...' : 'Smenani yopish'} onPress={submit} disabled={busy || left === '' || openTasks.length > 0 || (!sepGiven && unexplained > 0.0005)} />
+        <Btn title={busy ? '...' : 'Smenani yopish'} onPress={submit} disabled={busy || !canClose} />
       </ScrollView>
     </View>
   );

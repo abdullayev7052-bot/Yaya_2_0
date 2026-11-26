@@ -52,17 +52,18 @@ function bindApprovals(v) {
 function closeBlock(s) {
   const c = s.close_data;
   if (!c) return '';
+  const row = (k, val, cls = '') => `<tr><td>${k}</td><td class="num ${cls}">${val}</td></tr>`;
   return `<div class="card"><h2>Smena yakuni — sut hisobi</h2>
-    <p>Xom sut omborida hisobda: <b>${fmtNum(c.book ?? c.milk?.in_hands, 3)} kg</b> · topshiriqlarda ishlatildi: <b>${fmtNum(c.milk?.used, 3)} kg</b></p>
     <table><tbody>
-      ${c.counted != null ? `<tr><td>O'lchab qolgan sut</td><td class="num">${fmtNum(c.counted, 3)} kg</td></tr>` : `<tr><td>Omborga qaytarildi</td><td class="num">${fmtNum(c.returned, 3)} kg</td></tr>`}
-      ${c.sepMilk ? `<tr><td>Separatsiyaga ketgan sut</td><td class="num">${fmtNum(c.sepMilk, 3)} kg</td></tr>` : ''}
-      ${(c.separation?.outputs ?? []).map((o) => `<tr><td class="muted">→ ${esc(o.product)}${o.left != null ? ` (qoldi ${fmtNum(o.left, 3)})` : ''}</td><td class="num">${fmtNum(o.qty, 3)} kg</td></tr>`).join('')}
-      ${(c.losses ?? []).map((l) => `<tr><td>${esc(l.reason)}</td><td class="num err">−${fmtNum(l.qty, 3)} kg</td></tr>`).join('')}
-      ${c.gain ? `<tr><td>Yutish (hisobdagidan ko'p qoldi)</td><td class="num" style="color:var(--ok)">+${fmtNum(c.gain, 3)} kg</td></tr>` : ''}
+      ${c.received != null ? row(`Qabul qilingan sut <span class="muted">(${(c.milk_shifts ?? []).length} ta yig'uvchi smenasi)</span>`, `${fmtNum(c.received, 3)} kg`) : ''}
+      ${c.milk_direct != null ? row("Sarflandi: yog'li sut", `${fmtNum(c.milk_direct, 3)} kg`) : ''}
+      ${c.skim_used != null ? row("Sarflandi: yog'siz sut", `${fmtNum(c.skim_used, 3)} kg`) : ''}
+      ${c.cream != null ? row('Toza qaymoq (separatsiya)', `${fmtNum(c.cream, 3)} kg`) : ''}
+      ${c.total != null ? row('<b>Jami</b>', `<b>${fmtNum(c.total, 3)} kg</b>`) : ''}
+      ${(c.losses ?? []).map((l) => row(esc(l.reason), `−${fmtNum(l.qty, 3)} kg`, 'err')).join('')}
     </tbody></table>
     ${(c.over ?? []).length ? `<p class="warn">Limitdan oshgan: ${c.over.map((o) => `${esc(o.reason)} ${fmtNum(o.qty, 3)} (ruxsat ${typeof o.allowed === 'number' ? fmtNum(o.allowed, 3) : esc(o.allowed)})`).join(', ')}</p>` : ''}
-    ${costs() && (c.spread_cost ?? c.spread) != null ? `<p>Tannarxga taqsimlangan: <b style="color:${(c.spread_cost ?? c.spread) > 0 ? 'var(--err)' : 'var(--ok)'}">${(c.spread_cost ?? c.spread) > 0 ? '+' : ''}${fmtMoney(c.spread_cost ?? c.spread)}</b> so'm · smenadagi sutning o'rtacha 1 kg tannarxi ${money2(c.unit_cost ?? c.unit)}</p>` : ''}
+    ${costs() && c.unit_cost != null ? `<p>Sutning haqiqiy 1 kg tannarxi (tanlangan smenalar bo'yicha): <b>${money2(c.unit_cost)}</b>${c.spread_cost ? ` · yo'qotishdan mahsulotlarga qo'shildi: <b style="color:var(--err)">${fmtMoney(c.spread_cost)}</b> so'm (asosiy xomashyo qiymati ulushiga ko'ra)` : ''}</p>` : ''}
     ${s.approval_note ? `<p class="muted">Rahbar izohi: ${esc(s.approval_note)}</p>` : ''}</div>`;
 }
 
