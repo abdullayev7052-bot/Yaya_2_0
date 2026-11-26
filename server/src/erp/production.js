@@ -35,7 +35,7 @@ import {
   StockError, addAlert, addIn, allowNegative, cancelDocTx, chargeStaff, getDoc, holderName, lastUnitCost, linkNegative, milkWarehouse, nextNumber, pnl,
   negativeAlerts, productBalance, r2, r3, rawMilkProduct, revalueLot, takeOut,
 } from './stock.js';
-import { getStage, keptWarehouses, prevStage, stageByCode } from './stages.js';
+import { getStage, keptWarehouses, prevStage, stageByCode, texRecipe } from './stages.js';
 
 export { revalueLot };
 export const RECIPE_KINDS = { cook: 'Tayyorlash (quyma)', separation: 'Separatsiya', pour: 'Quyish (idishga)', pack: 'Qadoqlash', cap: 'Qopqoq yopish (eski)', reprocess: 'Qayta ishlash' };
@@ -103,15 +103,17 @@ export function saveRecipe(db, id, b) {
   if (!name) throw new StockError('Tarkib nomini yozing');
   const kind = RECIPE_KINDS[b.kind] && b.kind !== 'cap' ? b.kind : 'cook';
   const productId = num(b.productId);
-  if (kind !== 'separation' && !product(db, productId)) throw new StockError('Chiqadigan mahsulotni tanlang');
-  if (kind !== 'separation' && product(db, productId).has_variants) throw new StockError('Chiqadigan mahsulot sifatida variantni tanlang');
+  // Pouring / packing recipes may be for any product: the finished product's Tex karta binds them.
+  const generic = ['pour', 'pack'].includes(kind) && productId == null;
+  if (kind !== 'separation' && !generic && !product(db, productId)) throw new StockError('Chiqadigan mahsulotni tanlang');
+  if (kind !== 'separation' && !generic && product(db, productId).has_variants) throw new StockError('Chiqadigan mahsulot sifatida variantni tanlang');
   let stageId = num(b.stageId);
   if (stageId && !getStage(db, stageId)) throw new StockError('Bosqich topilmadi');
   if (!stageId) stageId = stageByCode(db, DEFAULT_STAGE[kind])?.id ?? null;
   const st = stageId ? getStage(db, stageId) : null;
   if (st && st.stage_type !== 'change') throw new StockError(`"${st.name}" — o'zgarmas bosqich; unda tarkib bo'lmaydi`);
   // One product, one recipe per stage: the worker never has to choose.
-  if (kind !== 'separation' && stageId && (b.active === undefined || b.active)
+  if (kind !== 'separation' && !generic && stageId && (b.active === undefined || b.active)
     && db.prepare('SELECT 1 FROM recipes WHERE stage_id = ? AND product_id = ? AND active = 1 AND id <> ?').get(stageId, productId, id ?? 0)) {
     throw new StockError(`"${product(db, productId).name}" uchun "${st.name}" bosqichida tarkib allaqachon bor (bitta mahsulotga bitta tarkib)`);
   }
@@ -132,6 +134,8 @@ export function saveRecipe(db, id, b) {
     if (!(amount >= 0)) throw new StockError(`${x.name}: ishbay haq noto'g'ri`);
     return { name: String(x.name).trim().slice(0, 60), amount };
   });
+  // Piece wages only for pouring, packing (and capping, a stage rate) — never in production.
+  if (rates.some((x) => x.amount > 0) && ['cook', 'separation'].includes(kind)) throw new StockError("Ishlab chiqarish (quyma) tarkibida ishbay haq bo'lmaydi");
   const outMin = num(b.outMin); const outMax = num(b.outMax);
   if ((outMin != null && !(outMin >= 0)) || (outMax != null && !(outMax >= 0)) || (outMin != null && outMax != null && outMin > outMax)) {
     throw new StockError('Chiqish chegarasi noto\'g\'ri (eng kami ≤ eng ko\'pi)');
@@ -185,14 +189,14 @@ export function saveRecipe(db, id, b) {
     if (rid) {
       if (!db.prepare('SELECT 1 FROM recipes WHERE id = ?').get(rid)) throw new StockError('Tarkib topilmadi');
       db.prepare('UPDATE recipes SET name = ?, kind = ?, product_id = ?, stage_id = ?, out_min = ?, out_max = ?, max_minutes = ?, note = ?, active = COALESCE(?, active), sort = COALESCE(?, sort) WHERE id = ?')
-        .run(name, kind, kind !== 'separation' ? productId : null, stageId, outMin, outMax, maxMinutes, b.note ?? null, b.active == null ? null : Number(!!b.active), num(b.sort), rid);
+        .run(name, kind, kind !== 'separation' && !generic ? productId : null, stageId, outMin, outMax, maxMinutes, b.note ?? null, b.active == null ? null : Number(!!b.active), num(b.sort), rid);
       db.prepare('DELETE FROM recipe_lines WHERE recipe_id = ?').run(rid);
       db.prepare('DELETE FROM recipe_outputs WHERE recipe_id = ?').run(rid);
       db.prepare('DELETE FROM recipe_rates WHERE recipe_id = ?').run(rid);
       db.prepare('DELETE FROM recipe_limits WHERE recipe_id = ?').run(rid);
     } else {
       rid = Number(db.prepare('INSERT INTO recipes (name, kind, product_id, stage_id, out_min, out_max, max_minutes, note, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(name, kind, kind !== 'separation' ? productId : null, stageId, outMin, outMax, maxMinutes, b.note ?? null, num(b.sort) ?? 0).lastInsertRowid);
+        .run(name, kind, kind !== 'separation' && !generic ? productId : null, stageId, outMin, outMax, maxMinutes, b.note ?? null, num(b.sort) ?? 0).lastInsertRowid);
     }
     const insR = db.prepare('INSERT INTO recipe_rates (recipe_id, name, amount, sort) VALUES (?, ?, ?, ?)');
     rates.forEach((x, i) => insR.run(rid, x.name, x.amount, i));
@@ -259,6 +263,7 @@ export function shiftSeparation(db, userId) {
 
 function taskRow(db, t) {
   const plan = J(t.plan) ?? {};
+  const out = plan.productId ? product(db, plan.productId) : null;
   const result = J(t.result);
   if (result?.outputs) result.outputs = result.outputs.map((o) => ({ ...o, product: product(db, o.productId)?.name, unit: product(db, o.productId)?.unit }));
   const recipe = t.recipe_id ? db.prepare('SELECT name FROM recipes WHERE id = ?').get(t.recipe_id)?.name : null;
@@ -272,7 +277,7 @@ function taskRow(db, t) {
   return {
     id: t.id, uuid: t.uuid, number: t.number, label: `TQ-${t.number}`, shift_id: t.shift_id, stage_id: t.stage_id, stage: stage?.name ?? null, stage_type: stage?.stage_type ?? null,
     user_id: t.user_id, user_name: t.user_id ? holderName(db, { userId: t.user_id }) : null,
-    recipe_id: t.recipe_id, recipe, kind: t.kind, status: t.status,
+    recipe_id: t.recipe_id, recipe, kind: t.kind, status: t.status, product_id: plan.productId ?? null, product: out?.name ?? null, product_unit: out?.unit ?? null,
     factor: plan.factor ?? 1, plan: (plan.lines ?? []).map((l) => ({ ...l, product: product(db, l.productId)?.name, unit: product(db, l.productId)?.unit })),
     result, outputs, milk_qty: t.milk_qty, doc_id: t.doc_id, created_at: t.created_at, done_at: t.done_at,
     workers: (result?.workers ?? []).map((id) => ({ id, name: holderName(db, { userId: id }) })),
@@ -322,15 +327,26 @@ export const taskDetail = (db, id) => { const t = getTask(db, id); return t ? ta
 // (or by the milk to use, or the number of units); any line may be changed for this
 // batch, swapped for one of its alternatives, or given its variant. The technologist's
 // tasks (the production stage) belong to their shift, opened on the first task.
-export function createTask(db, { uuid, stageId, recipeId, factor, milkQty, units, lines }, { actor, userId }) {
+export function createTask(db, { uuid, stageId, recipeId, productId, factor, milkQty, units, lines }, { actor, userId }) {
   const u = String(uuid || randomUUID()).slice(0, 80);
   const ex = db.prepare('SELECT * FROM prod_tasks WHERE uuid = ?').get(u);
   if (ex) return ex;
+  // Pouring / packing / reprocessing a finished product: its Tex karta names the recipe.
+  let outProduct = null;
+  if (productId && stageId) {
+    const p = product(db, Number(productId));
+    if (!p) throw new StockError('Mahsulot topilmadi');
+    recipeId = texRecipe(db, p.id, Number(stageId));
+    if (!recipeId) throw new StockError(`"${p.name}" Tex kartasida bu bosqich uchun tarkib tanlanmagan`);
+    outProduct = p.id;
+  }
   const r = recipeDetail(db, Number(recipeId));
   if (!r || !r.active) throw new StockError('Tarkib topilmadi');
   const st = getStage(db, stageId ?? r.stage_id);
   if (!st || st.stage_type !== 'change') throw new StockError('Bosqich topilmadi');
   if (r.stage_id !== st.id) throw new StockError(`"${r.name}" — "${st.name}" bosqichining tarkibi emas`);
+  if (!r.product_id && r.kind !== 'separation' && !outProduct) throw new StockError(`"${r.name}" umumiy tarkib — qaysi tayyor mahsulot chiqishini tanlang`);
+  if (r.kind === 'reprocess') outProduct = null;
   const shift = st.stage_code === 'produce' ? ensureShift(db, userId) : null;
   let f = Number(factor) || 1;
   if (PER_UNIT.has(r.kind) && units != null) f = Number(units);
@@ -351,7 +367,7 @@ export function createTask(db, { uuid, stageId, recipeId, factor, milkQty, units
   });
   const n = db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM prod_tasks').get().n;
   const id = Number(db.prepare('INSERT INTO prod_tasks (uuid, number, shift_id, stage_id, user_id, recipe_id, kind, plan, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(u, n, shift?.id ?? null, st.id, userId, r.id, r.kind, JSON.stringify({ factor: r3(f), lines: planLines }), actor).lastInsertRowid);
+    .run(u, n, shift?.id ?? null, st.id, userId, r.id, r.kind, JSON.stringify({ factor: r3(f), lines: planLines, productId: outProduct ?? r.product_id ?? null }), actor).lastInsertRowid);
   return getTask(db, id);
 }
 
@@ -391,7 +407,8 @@ export function outputRange(db, r, inputs) {
 // anywhere, a previous stage goes below zero; separation outputs may go below zero
 // during the technologist's shift; otherwise the shortage is refused.
 function inputSource(db, { t, r, productId, qty }) {
-  const prevs = [prevStage(db, productId, t.stage_id), r.product_id ? prevStage(db, r.product_id, t.stage_id) : null].filter(Boolean);
+  const out = J(t.plan)?.productId ?? r.product_id;
+  const prevs = [prevStage(db, productId, t.stage_id), out ? prevStage(db, out, t.stage_id) : null].filter(Boolean);
   const list = [...new Set(prevs)];
   const add = (id) => { if (id && !list.includes(id)) list.push(id); };
   if (product(db, productId)?.kind === 'raw_milk') add(milkWarehouse(db));
@@ -483,7 +500,7 @@ export function completeTask(db, taskId, body, { actor, approve = false }) {
     } else if (r.kind !== 'separation') {
       const q = r3(b?.outputQty ?? b?.outputs?.[0]?.qty ?? (PER_UNIT.has(r.kind) ? plan.factor : null));
       if (!(q > 0)) throw new StockError(PER_UNIT.has(r.kind) ? 'Nechta chiqqanini kiriting' : 'Chiqqan mahsulot og\'irligini kiriting');
-      outputs = [{ productId: r.product_id, qty: q, mode: 'rest' }];
+      outputs = [{ productId: plan.productId ?? r.product_id, qty: q, mode: 'rest' }];
     } else {
       const given = new Map((b?.outputs ?? []).map((o) => [Number(o.productId), r3(o.qty)]));
       outputs = r.outputs.map((o) => ({ productId: o.product_id, qty: given.get(o.product_id) ?? 0, mode: o.cost_mode, value: o.cost_value }));
@@ -492,7 +509,8 @@ export function completeTask(db, taskId, body, { actor, approve = false }) {
     const range = outputRange(db, r, inputs);
     const outWeight = r3(outputs.reduce((a, o) => a + weightKg(product(db, o.productId), o.qty), 0));
     const outside = (r.kind !== 'reprocess' && range && ((range.min != null && outWeight < range.min - EPS) || (range.max != null && outWeight > range.max + EPS))) || !!outsideOut;
-    const workers = cleanWorkers(db, b?.workers, t.user_id);
+    // "Who did it with you" only where a piece wage is paid (never in production).
+    const workers = r.rates.some((x) => x.amount > 0) ? cleanWorkers(db, b?.workers, t.user_id) : [t.user_id];
     const stored = { lines: inputs, outputs: outputs.map((o) => ({ productId: o.productId, qty: o.qty })), outputQty: !['separation', 'reprocess'].includes(r.kind) ? outputs[0].qty : undefined,
       shortfall: shortfall.map((x) => ({ reasonId: x.reason.id, reason: x.reason.name, qty: x.qty })), workers, note: b?.note ?? null };
     if (outside && !approve) {

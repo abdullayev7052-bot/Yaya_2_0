@@ -293,7 +293,9 @@ CREATE INDEX IF NOT EXISTS idx_lot_sources_src ON lot_sources(source_lot_id);
 -- 'change' (the product changes: a recipe, materials, limits, piece rate) or 'keep'
 -- (the same product moves on, optionally with a piece rate per unit). The order of
 -- stages is warehouses.sort. Each product has a production map: the stages it goes
--- through, in that order; a stage that is off is skipped.
+-- through, in that order; a stage that is off is skipped. Only finished products
+-- have one ("Tex karta"); a 'change' stage there names its recipe (recipe_id): the
+-- quyma recipe for production, the pouring / packing / reprocessing recipe.
 CREATE TABLE IF NOT EXISTS product_stages (
   product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
   stage_id INTEGER NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
@@ -568,6 +570,11 @@ export function setupErp(db, addColumn) {
   addColumn('prod_tasks', 'stage_id', 'INTEGER REFERENCES warehouses(id)');
   addColumn('prod_tasks', 'user_id', 'INTEGER REFERENCES users(id)');
   addColumn('users', 'kiosk', 'INTEGER NOT NULL DEFAULT 0');
+  // Tex karta: the recipe of each 'change' stage of a finished product.
+  addColumn('product_stages', 'recipe_id', 'INTEGER REFERENCES recipes(id)');
+  // Nomenclature flags: sold by weight too (semi / finished), usable as a raw material.
+  addColumn('products', 'for_sale', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('products', 'as_raw', 'INTEGER NOT NULL DEFAULT 0');
   seedErp(db);
 }
 
@@ -648,6 +655,30 @@ export function seedStages(db) {
   db.prepare('UPDATE users SET kiosk = 1 WHERE pin_hash IS NOT NULL').run();
 }
 
+// Tex karta (stage 10, part 2): only finished products have a production map, and
+// each 'change' stage on it names its recipe. Existing maps get their recipes filled
+// in where it is clear: the product's own pour / pack / reprocess recipe, and for
+// production the cook recipe that makes the quyma the pour recipe uses. Production
+// recipes never pay piece wages (only pouring, packing and capping do).
+export function fillTexCards(db) {
+  db.prepare("DELETE FROM product_stages WHERE product_id IN (SELECT id FROM products WHERE kind <> 'finished')").run();
+  db.prepare("DELETE FROM recipe_rates WHERE recipe_id IN (SELECT id FROM recipes WHERE kind IN ('cook','separation'))").run();
+  const rows = db.prepare(`SELECT ps.product_id, ps.stage_id, w.stage_code FROM product_stages ps JOIN warehouses w ON w.id = ps.stage_id
+    WHERE ps.recipe_id IS NULL AND w.stage_type = 'change'`).all();
+  const set = db.prepare('UPDATE product_stages SET recipe_id = ? WHERE product_id = ? AND stage_id = ?');
+  for (const r of rows) {
+    let rid = null;
+    if (r.stage_code === 'produce') {
+      const quyma = db.prepare(`SELECT l.product_id FROM recipe_lines l JOIN recipes rr ON rr.id = l.recipe_id JOIN products p ON p.id = l.product_id
+        WHERE rr.product_id = ? AND rr.kind IN ('pour','pack') AND rr.active = 1 AND p.kind = 'semi' LIMIT 1`).get(r.product_id)?.product_id;
+      if (quyma) rid = db.prepare("SELECT id FROM recipes WHERE product_id = ? AND kind = 'cook' AND active = 1 AND stage_id = ? ORDER BY id LIMIT 1").get(quyma, r.stage_id)?.id;
+    } else {
+      rid = db.prepare('SELECT id FROM recipes WHERE product_id = ? AND stage_id = ? AND active = 1 ORDER BY id LIMIT 1').get(r.product_id, r.stage_id)?.id;
+    }
+    if (rid) set.run(rid, r.product_id, r.stage_id);
+  }
+}
+
 // Reference rows the warehouse part needs. Safe to run again at any time; it is
 // also run after a backup restore, so an older (milk-only) Yaya backup restores
 // into a working Yaya 2.0.
@@ -669,6 +700,7 @@ export function seedErp(db) {
   }
   retireSellers(db);
   seedStages(db);
+  fillTexCards(db);
   if (!db.prepare('SELECT 1 FROM cashboxes WHERE is_main = 1').get()) db.prepare("INSERT INTO cashboxes (name, is_main) VALUES ('Asosiy kassa', 1)").run();
   // Reprocessing: what happened to containers that did not come out.
   if (!db.prepare("SELECT 1 FROM stock_reasons WHERE section = 'reprocess'").get()) {

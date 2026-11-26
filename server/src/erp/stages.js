@@ -80,19 +80,49 @@ function placeStage(db, sid, after) {
 }
 
 // ---------------------------------------------------------------- the production map
+// The Tex karta of a finished product: its stages in order, and for each 'change'
+// stage the recipe it uses (production: the recipe of its quyma; pouring, packing,
+// reprocessing: that recipe).
 export function productMap(db, productId) {
-  return db.prepare(`SELECT w.id, w.name, w.stage_code AS code, w.stage_type AS type FROM product_stages ps JOIN warehouses w ON w.id = ps.stage_id
+  return db.prepare(`SELECT w.id, w.name, w.stage_code AS code, w.stage_type AS type, ps.recipe_id, r.name AS recipe, r.product_id AS recipe_product_id
+    FROM product_stages ps JOIN warehouses w ON w.id = ps.stage_id LEFT JOIN recipes r ON r.id = ps.recipe_id
     WHERE ps.product_id = ? AND w.is_stage = 1 AND w.active = 1 ORDER BY w.sort, w.id`).all(productId);
 }
-export function setProductMap(db, productId, stageIds) {
-  if (!db.prepare('SELECT 1 FROM products WHERE id = ?').get(productId)) throw new StockError('Mahsulot topilmadi');
-  const ids = [...new Set((Array.isArray(stageIds) ? stageIds : []).map(Number))].filter((id) => getStage(db, id));
+// Which recipes may be chosen for a stage of this product's Tex karta: production →
+// the quyma (cook) recipes; pouring / packing → that stage's recipes made for this
+// product or for any product; reprocessing → the recipes that take this product.
+export function texRecipes(db, productId, stage) {
+  if (stage.stage_code === 'produce') {
+    return db.prepare("SELECT r.id, r.name, r.product_id, p.name AS product FROM recipes r LEFT JOIN products p ON p.id = r.product_id WHERE r.stage_id = ? AND r.kind = 'cook' AND r.active = 1 ORDER BY r.name").all(stage.id);
+  }
+  return db.prepare(`SELECT r.id, r.name, r.product_id, p.name AS product FROM recipes r LEFT JOIN products p ON p.id = r.product_id
+    WHERE r.stage_id = ? AND r.active = 1 AND r.kind <> 'separation' AND (r.product_id = ? OR (r.product_id IS NULL AND r.kind IN ('pour','pack'))) ORDER BY r.product_id IS NULL, r.name`).all(stage.id, productId);
+}
+// entries: [{ stageId, recipeId }] (or plain stage ids). Only finished products.
+export function setProductMap(db, productId, entries) {
+  const p = db.prepare('SELECT id, name, kind FROM products WHERE id = ?').get(productId);
+  if (!p) throw new StockError('Mahsulot topilmadi');
+  if (p.kind !== 'finished') throw new StockError('Tex karta faqat tayyor mahsulot uchun');
+  const list = (Array.isArray(entries) ? entries : []).map((e) => (typeof e === 'object' && e ? { stageId: Number(e.stageId), recipeId: e.recipeId ? Number(e.recipeId) : null } : { stageId: Number(e), recipeId: null }));
+  const seen = new Set();
+  const rows = [];
+  for (const e of list) {
+    const st = getStage(db, e.stageId);
+    if (!st || seen.has(st.id)) continue;
+    seen.add(st.id);
+    if (e.recipeId) {
+      if (st.stage_type !== 'change') throw new StockError(`"${st.name}" — o'zgarmas bosqich, unda tarkib bo'lmaydi`);
+      if (!texRecipes(db, productId, st).some((r) => r.id === e.recipeId)) throw new StockError(`"${st.name}" uchun bu tarkibni tanlab bo'lmaydi`);
+    }
+    rows.push({ stageId: st.id, recipeId: e.recipeId });
+  }
   db.transaction(() => {
     db.prepare('DELETE FROM product_stages WHERE product_id = ?').run(productId);
-    for (const id of ids) db.prepare('INSERT INTO product_stages (product_id, stage_id) VALUES (?, ?)').run(productId, id);
+    for (const r of rows) db.prepare('INSERT INTO product_stages (product_id, stage_id, recipe_id) VALUES (?, ?, ?)').run(productId, r.stageId, r.recipeId);
   })();
   return productMap(db, productId);
 }
+export const texRecipe = (db, productId, stageId) => db.prepare('SELECT recipe_id FROM product_stages WHERE product_id = ? AND stage_id = ?').get(productId, stageId)?.recipe_id ?? null;
 // The stage before / after `stageId` on the product's map (null when there is none,
 // or when the stage is off for this product).
 export function prevStage(db, productId, stageId) {
@@ -117,6 +147,20 @@ export function stageWaiting(db, stage) {
         const qty = from ? productBalance(db, { warehouseId: from }, p.id) : 0;
         return { product_id: p.id, product: p.name, unit: p.unit, from, from_name: from ? holderName(db, { warehouseId: from }) : null, qty };
       }).filter((x) => x.from && x.qty > EPS);
+  }
+  if (stage.stage_code !== 'produce') {
+    // One row per finished product whose Tex karta has a recipe here; what waits is
+    // the recipe's quyma (or other main input) in the stage before on that product's
+    // map. Several products may share one quyma: the worker chooses what to make
+    // (later the plan / orders will say).
+    return db.prepare(`SELECT ps.product_id, p.name AS product, p.unit, r.id AS recipe_id, r.name AS recipe, r.kind FROM product_stages ps
+      JOIN products p ON p.id = ps.product_id JOIN recipes r ON r.id = ps.recipe_id WHERE ps.stage_id = ? AND p.active = 1 AND r.active = 1 ORDER BY p.name`).all(stage.id)
+      .map((x) => {
+        const from = prevStage(db, x.product_id, stage.id);
+        const lines = db.prepare('SELECT l.product_id, p.name, p.unit, p.kind FROM recipe_lines l JOIN products p ON p.id = l.product_id WHERE l.recipe_id = ? ORDER BY l.sort, l.id').all(x.recipe_id);
+        const main = lines.find((l) => from && productBalance(db, { warehouseId: from }, l.product_id) > EPS) ?? lines.find((l) => l.kind === 'semi') ?? lines[0];
+        return { ...x, waiting: from && main ? { product_id: main.product_id, product: main.name, unit: main.unit, from, from_name: holderName(db, { warehouseId: from }), qty: productBalance(db, { warehouseId: from }, main.product_id) } : null };
+      });
   }
   return db.prepare('SELECT * FROM recipes WHERE stage_id = ? AND active = 1 ORDER BY sort, name').all(stage.id).map((r) => {
     const out = r.product_id ? db.prepare('SELECT name, unit FROM products WHERE id = ?').get(r.product_id) : null;

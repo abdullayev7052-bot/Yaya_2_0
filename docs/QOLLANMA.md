@@ -62,10 +62,15 @@ Rol ruxsatlarini **Boshqaruv → Rollar va ruxsatlar**da o'zgartirasiz. Muhim ru
   *O'zgarmas* — o'sha mahsulot keyingi joyga o'tadi (ishbay haq bosqichda, masalan qopqoq 90 so'm; issiqxonada bo'sh).
 - **Mas'ullar:** shu bosqichni kim boshqaradi. Xomashyo / idish olinadigan omborlarga ham shu xodimlarni mas'ul qiling
   (texnolog — Xom sut va Xomashyo ombori; quyuvchi — Idish ombori): tarkib bo'yicha o'zi ayriladi.
-- **Xarita:** pastdagi jadvalda har bir mahsulot qaysi bosqichlardan o'tishini belgilaysiz; o'chiq bosqich o'tkazib yuboriladi.
+- **Tex karta** (faqat tayyor mahsulot uchun): qaysi bosqichlardan o'tishi; "Ishlab chiqarish"da — **quyma mahsuloti**
+  (quyma tarkibi), "Quyish"/"Qadoqlash"da — tarkibi. Bir quymadan bir nechta tayyor mahsulot chiqadi; quyuvchi qaysi birini
+  quyishni tanlaydi. Tex kartani shu sahifadan yoki Ombor → Mahsulotlar'dan ochasiz. O'chiq bosqich o'tkazib yuboriladi.
+- **Ishbay haq** faqat quyish, qadoqlash va qopqoq yopishda; ishlab chiqarish (quyma) tarkibida bo'lmaydi.
 - **Jurnal:** har bir amal — qaysi bosqichda, kim bajardi, kimlar qatnashdi.
 
-**Ishlab chiqarish → Tarkiblar:** har bir tarkib bitta bosqichga tegishli; bir bosqichda bir mahsulotga bitta tarkib.
+**Ishlab chiqarish → Tarkiblar:** har bir tarkib bitta bosqichga tegishli. Quyish / qadoqlash tarkibi "umumiy" bo'lishi
+mumkin (chiqadigan mahsulot bo'sh) — uni tayyor mahsulotning Tex kartasi bog'laydi.
+**Mahsulot belgilari:** "Sotuv uchun mavjud" (kg hisobida ham sotiladi) va "Xomashyo" (xomashyo sifatida ham ishlatiladi).
 - **Tayyorlash (quyma)** — asosiy partiya: xom sut, qaymoq, zakvaska...; har qatorga alternativ;
   chiqish oralig'i (masalan 320–335 kg) — partiyaga qarab o'zi o'zgaradi.
   **Shartli limitlar:** "B zakvaska ishlatilsa — 315–330 kg" kabi; bir nechtasi mos kelsa eng aniqi (ko'p xomashyolisi)

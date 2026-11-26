@@ -65,7 +65,9 @@ async function plant() {
     rep: await R({ name: 'Qayta ishlash', kind: 'reprocess', productId: p.qatiq,
       outputs: [{ productId: p.jar, perUnit: 1, costValue: 800, isContainer: true }, { productId: p.back, minPerUnit: 0.37, maxPerUnit: 0.45, costValue: 0 }] }),
   };
-  await ok(call(app, 'PUT', `/api/erp/prod/map/${p.qatiq}`, b, { stageIds: ['produce', 'pour', 'incubator', 'cold', 'cap', 'finished', 'returns', 'reprocess_bad'].map((c) => S[c]) }), 'map');
+  // Tex karta: production makes its quyma with r5, pouring uses the pour recipe, reprocessing the rep recipe
+  const recipeOf = { produce: r.r5.id, pour: r.pour.id, reprocess_bad: r.rep.id };
+  await ok(call(app, 'PUT', `/api/erp/prod/map/${p.qatiq}`, b, { stages: ['produce', 'pour', 'incubator', 'cold', 'cap', 'finished', 'returns', 'reprocess_bad'].map((c) => ({ stageId: S[c], recipeId: recipeOf[c] ?? null })) }), 'tex karta');
   const reasons = (await ok(call(app, 'GET', '/api/erp/reasons?section=tech', b), 'reasons'));
   return { app, db, ids, u, b, T, ok, post, wh, S, p, v, r, reasons };
 }
@@ -343,4 +345,55 @@ test('three pourers split 170 as 56.67 / 56.67 / 56.66; the recipe base weight; 
   assert.equal(r2.shift.close_data.gain, 10);
   near(bal(db, S.produce, p.siyro).c + bal(db, S.pour, p.qatiq).c - 1 * 800 - 170, before - 10 * 5000, 'the gain lowered what the shift made');
   assert.equal(bal(db, wh.raw, p.milk).q, 690);
+});
+
+test('Tex karta: only finished products; production names the quyma recipe, pouring the pour recipe; several products from one quyma', async () => {
+  const { app, db, u, b, T, ok, post, wh, S, p, r } = await plant();
+  // only finished products have a Tex karta
+  assert.equal((await call(app, 'PUT', `/api/erp/prod/map/${p.siyro}`, b, { stages: [{ stageId: S.produce }] })).status, 400);
+  // the editor offers the right recipes per stage
+  const tex = (await call(app, 'GET', `/api/erp/prod/tex/${p.qatiq}`, b)).body;
+  assert.deepEqual(tex.stages.find((x) => x.code === 'produce').recipes.map((x) => x.name), ['5% siyro', 'Tvorog'], 'quyma recipes');
+  assert.equal(tex.stages.find((x) => x.code === 'produce').recipe_id, r.r5.id);
+  assert.equal(tex.stages.find((x) => x.code === 'cold').recipes.length, 0, 'a keep stage has none');
+  // a keep stage cannot take a recipe; a recipe of another stage cannot be chosen
+  assert.equal((await call(app, 'PUT', `/api/erp/prod/map/${p.qatiq}`, b, { stages: [{ stageId: S.cold, recipeId: r.r5.id }] })).status, 400);
+  assert.equal((await call(app, 'PUT', `/api/erp/prod/map/${p.qatiq}`, b, { stages: [{ stageId: S.pour, recipeId: r.r5.id }] })).status, 400);
+  // two more finished products from the same 5% quyma, poured with a general 800 g recipe
+  const bochka = await post(b, '/api/erp/products', { name: 'Qatiq bochka 800 g', kind: 'finished', unit: 'dona', netto_g: 800 }).then((x) => x.id);
+  const banka = await post(b, '/api/erp/products', { name: 'Qatiq banka 800 g', kind: 'finished', unit: 'dona', netto_g: 800 }).then((x) => x.id);
+  const p800 = await post(b, '/api/erp/prod/recipes', { name: '800 g idishga quyish', kind: 'pour', lines: [{ productId: p.siyro, qty: 0.8 }, { productId: p.jar, qty: 1 }], rates: [{ name: 'Quyish', amount: 200 }] });
+  assert.equal(p800.product_id, null, 'a general pouring recipe');
+  for (const pid of [bochka, banka]) await ok(call(app, 'PUT', `/api/erp/prod/map/${pid}`, b, { stages: [{ stageId: S.produce, recipeId: r.r5.id }, { stageId: S.pour, recipeId: p800.id }, { stageId: S.finished }] }), 'tex');
+  // one quyma batch; the pouring stage shows three products waiting on the same quyma
+  const t1 = await post(T.tech, '/api/erp/prod/tasks', { recipeId: r.r5.id, milkQty: 320 });
+  await post(T.tech, `/api/erp/prod/tasks/${t1.id}/complete`, { outputQty: 326 });
+  const pourBoard = (await call(app, 'GET', '/api/erp/prod/board', T.pour1)).body.stages.find((x) => x.code === 'pour');
+  assert.deepEqual(pourBoard.waiting.map((w) => [w.product, w.waiting.product, w.waiting.qty]),
+    [['5% qatiq 400 g', '5% siyro', 326], ['Qatiq banka 800 g', '5% siyro', 326], ['Qatiq bochka 800 g', '5% siyro', 326]]);
+  // the pourer chooses the product: its Tex karta gives the recipe; the output is that product
+  const pt = await post(T.pour1, '/api/erp/prod/tasks', { stageId: S.pour, productId: bochka, units: 50 });
+  assert.equal(pt.product, 'Qatiq bochka 800 g');
+  await post(T.pour1, `/api/erp/prod/tasks/${pt.id}/complete`, { outputQty: 50 });
+  assert.equal(bal(db, S.pour, bochka).q, 50);
+  assert.equal(bal(db, S.produce, p.siyro).q, 326 - 40);
+  // without a Tex karta recipe for that stage: refused
+  const lone = await post(b, '/api/erp/products', { name: 'Qatiq kosa', kind: 'finished', unit: 'dona' }).then((x) => x.id);
+  assert.equal((await call(app, 'POST', '/api/erp/prod/tasks', T.pour1, { stageId: S.pour, productId: lone, units: 1 })).status, 400);
+  void u; void wh;
+});
+
+test('no piece wage in production: a quyma recipe cannot have one and "who did it" is not asked; pouring pays; product flags', async () => {
+  const { app, db, u, b, T, post, p, r } = await plant();
+  const bad = await call(app, 'POST', '/api/erp/prod/recipes', b, { name: 'x', kind: 'cook', productId: p.back, lines: [{ productId: p.milk, qty: 10 }], rates: [{ name: 'Texnolog', amount: 50 }] });
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.error, /ishbay haq bo'lmaydi/);
+  const t1 = await post(T.tech, '/api/erp/prod/tasks', { recipeId: r.r5.id, milkQty: 320 });
+  const d1 = await post(T.tech, `/api/erp/prod/tasks/${t1.id}/complete`, { outputQty: 326, workers: [u.pour1, u.pour2] });
+  assert.deepEqual(d1.task.workers.map((w) => w.id), [u.tech], 'production: only the person doing it, nobody paid');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM party_entries WHERE kind = 'piece'").get().n, 0);
+  // product flags: sold by weight too, usable as a raw material
+  await call(app, 'PATCH', `/api/erp/products/${p.siyro}`, b, { forSale: true, asRaw: true });
+  const s = db.prepare('SELECT for_sale, as_raw FROM products WHERE id = ?').get(p.siyro);
+  assert.deepEqual([s.for_sale, s.as_raw], [1, 1]);
 });

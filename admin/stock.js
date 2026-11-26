@@ -371,7 +371,7 @@ const stockTabs = {
       ${list.filter((x) => !x.parent_id).map((x) => `<tr class="${x.active ? '' : 'voided'}"><td><b>${esc(x.name)}</b>${x.sku ? ` <span class="muted">${esc(x.sku)}</span>` : ''}</td><td>${esc(x.kind_label)}</td><td>${esc(x.unit)}</td>
         <td class="num">${x.netto_g ?? ''}</td><td class="num">${x.brutto_g ?? ''}</td><td>${x.volume != null ? `${fmtNum(x.volume, 4)} ${esc(x.volume_unit ?? '')}` : ''}</td>
         <td>${esc(m.shapes[x.shape] ?? '')}</td><td class="num">${x.shelf_life_hours ?? ''}</td>
-        <td>${x.has_variants ? list.filter((c) => c.parent_id === x.id).map((c) => `<span class="badge">${esc(c.variant)}</span>`).join(' ') : ''}</td>
+        <td>${x.has_variants ? list.filter((c) => c.parent_id === x.id).map((c) => `<span class="badge">${esc(c.variant)}</span>`).join(' ') : ''}${x.for_sale ? ' <span class="badge sent" title="Kg hisobida ham sotiladi">sotuvda</span>' : ''}${x.as_raw ? ' <span class="badge" title="Xomashyo sifatida ham ishlatiladi">xomashyo</span>' : ''}${x.kind === 'finished' && can('prod.manage') ? ` <button class="ghost small" data-tex="${x.id}">Tex karta</button>` : ''}</td>
         <td>${can('catalog.manage') && x.kind !== 'milk' ? `<button class="ghost small" data-edit="${x.id}">Tahrirlash</button>` : x.kind === 'milk' ? '<span class="muted" title="Sut yig\'ish bo\'limida tahrirlanadi">Sut yig\'ish</span>' : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="muted">Mahsulot yo\'q</td></tr>'}
       </tbody></table></div>
       <p class="muted">"Yig'uvchilar suti" (Yog'li / Yog'siz sut) sut yig'ish bo'limidagi "Mahsulotlar" sahifasida boshqariladi. Omborga ular bitta "Xom sut" bo'lib kiradi.</p>`;
@@ -394,6 +394,8 @@ const stockTabs = {
             { name: 'variants', label: 'Variantlar (vergul bilan)', hint: 'Har bir variant alohida mahsulot: "Zakvaska / 499" — o\'z qoldig\'i va tannarxi bilan.' }]),
         { name: 'sku', label: 'Artikul', value: x?.sku }, { name: 'barcode', label: 'Shtrix-kod', value: x?.barcode },
         { name: 'category', label: 'Turkum', value: x?.category },
+        { name: 'forSale', label: 'Sotuv uchun mavjud — idishga quyilmagan holda kg hisobida ham sotiladi (yarim tayyor / tayyor)', type: 'checkbox', value: !!x?.for_sale },
+        { name: 'asRaw', label: 'Xomashyo — tayyor / yarim tayyor mahsulot boshqa ishlab chiqarishda xomashyo sifatida ham ishlatiladi', type: 'checkbox', value: !!x?.as_raw },
         ...(x ? [{ name: 'active', label: 'Faol', type: 'checkbox', value: !!x.active }] : []),
       ],
       onSubmit: async (d) => {
@@ -407,6 +409,7 @@ const stockTabs = {
     });
     $('#newP', box)?.addEventListener('click', () => edit());
     $('#impP', box)?.addEventListener('click', () => setHash('stock', { tab: 'import' }));
+    $$('[data-tex]', box).forEach((b) => { b.onclick = act(() => texCard(Number(b.dataset.tex))); });
     $$('[data-edit]', box).forEach((b) => { b.onclick = () => edit(list.find((x) => x.id === Number(b.dataset.edit))); });
   },
 

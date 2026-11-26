@@ -148,7 +148,7 @@ views['prod-recipe'] = async (v) => {
         <label>Turi<select name="kind">${[['cook', 'Tayyorlash — quyma (kg)'], ['separation', 'Separatsiya'], ['pour', 'Quyish — idishga (1 dona uchun)'], ['pack', 'Qadoqlash (1 dona uchun)'], ['reprocess', "Qayta ishlash — muddati o'tgan (1 dona uchun)"]]
           .map(([k, t]) => `<option value="${k}" ${(r?.kind ?? 'cook') === k ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         <label>Bosqich<select name="stageId"><option value="">— turiga qarab —</option>${changeStages.map((s) => `<option value="${s.id}" ${r?.stage_id === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
-        <label id="prodWrap"><span id="prodLabel">Chiqadigan mahsulot</span><select name="productId">${popts(r?.product_id, (p) => p.kind !== 'milk')}</select></label></div>
+        <label id="prodWrap"><span id="prodLabel">Chiqadigan mahsulot</span><select name="productId">${popts(r?.product_id, (p) => p.kind !== 'milk' && !p.has_variants).replace('— mahsulot —', '— umumiy (Tex kartada bog\'lanadi) —')}</select></label></div>
       <div class="card" style="margin:0" id="reprocWrap"><h2>1 dona qayta ishlanganda nima chiqadi</h2>
         <p class="muted">Masalan "Smetana 400 g": <b>idish</b> — 1 dona, tannarxi qat'iy 800 so'm, "idish" belgilanadi (kam chiqsa sababi so'raladi va xarajatga yoziladi);
           <b>Vozvrat qatiq</b> — miqdori bo'sh (mahsulotning netto vaznidan: 0,4 kg), chegara 0,37–0,45 kg, tannarxi 0.
@@ -245,7 +245,8 @@ views['prod-recipe'] = async (v) => {
     const sep = kind === 'separation';
     const unit = ['pour', 'pack', 'cap', 'reprocess'].includes(kind);
     $('#prodWrap', v).hidden = sep; $('#outWrap', v).hidden = !sep;
-    $('#rateWrap', v).hidden = sep;
+    // Production (quyma, separation) never pays a piece wage: only pouring, packing, capping.
+    $('#rateWrap', v).hidden = sep || kind === 'cook';
     $('#rangeRow', v).hidden = unit; $('#rangeHint', v).hidden = unit; $('#unitHint', v).hidden = !unit; $('#limWrap', v).hidden = unit;
     $('#linesTitle', v).textContent = unit ? 'Nima ketadi (1 dona uchun)' : 'Nima ketadi (asosiy partiya)';
     if (sep && !outputs.length) { outputs.push({ productId: '', costMode: 'fixed', costValue: '' }, { productId: '', costMode: 'rest', costValue: '' }); drawOuts(); }
@@ -285,7 +286,7 @@ views['prod-recipe'] = async (v) => {
         ? rout.filter((o) => o.productId).map((o) => ({ productId: Number(o.productId), perUnit: o.perUnit === '' ? null : Number(o.perUnit), minPerUnit: o.minPerUnit === '' ? null : Number(o.minPerUnit),
           maxPerUnit: o.maxPerUnit === '' ? null : Number(o.maxPerUnit), costValue: Number(o.costValue) || 0, isContainer: !!o.isContainer }))
         : outputs.filter((o) => o.productId).map((o) => ({ productId: Number(o.productId), costMode: o.costMode, costValue: o.costValue === '' ? null : Number(o.costValue) })),
-      rates: rates.filter((x) => String(x.name).trim()).map((x) => ({ name: x.name, amount: Number(x.amount) || 0 })),
+      rates: ['cook', 'separation'].includes(f.kind.value) ? [] : rates.filter((x) => String(x.name).trim()).map((x) => ({ name: x.name, amount: Number(x.amount) || 0 })),
       limits: ['cook', 'separation'].includes(f.kind.value) ? limits.filter((x) => x.productIds.length).map((x) => ({ name: x.name || null, productIds: x.productIds,
         outMin: x.outMin === '' ? null : Number(x.outMin), outMax: x.outMax === '' ? null : Number(x.outMax) })) : [],
       maxMinutes: f.maxMinutes.value === '' ? null : Number(f.maxMinutes.value),
@@ -337,7 +338,7 @@ views['prod-reasons'] = async (v) => {
 views['prod-stages'] = async (v) => {
   const [stages, meta, products] = await Promise.all([prodApi('GET', '/stages?all=1'), loadMeta(), api('GET', '/products?stock=1', null, '/api/erp')]);
   const manage = can('prod.manage');
-  const mapped = products.filter((p) => ['finished', 'semi', 'returned', 'recycled'].includes(p.kind) || p.stages.length);
+  const finished = products.filter((p) => p.kind === 'finished' && !p.parent_id);
   const live = stages.filter((s) => s.active);
   v.innerHTML = `<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">Bosqichlar</h2>
       ${manage ? '<button id="newSt">+ Bosqich</button>' : ''}</div>
@@ -353,13 +354,13 @@ views['prod-stages'] = async (v) => {
       <td style="white-space:nowrap">${manage ? `<button class="ghost small" data-up="${s.id}" ${i ? '' : 'disabled'}>↑</button><button class="ghost small" data-down="${s.id}" ${i < stages.length - 1 ? '' : 'disabled'}>↓</button>
         <button class="ghost small" data-st="${s.id}">Tahrirlash</button>` : ''}</td></tr>`).join('')}
     </tbody></table></div></div>
-    <div class="card"><h2>Mahsulot ishlab chiqarish xaritasi</h2>
-      <p class="muted">Har bir mahsulot qaysi bosqichlardan o'tadi. O'chiq bosqichdan mahsulot o'tmaydi — keyingisiga sakraydi.
-        Masalan: issiqxonaga kirmaydigan mahsulotda "Issiqxona"ni o'chiring; xarid qilib qadoqlanadiganida faqat "Qadoqlash" va "Tayyor mahsulot ombori"ni yoqing.</p>
-      <div class="table-wrap"><table><thead><tr><th>Mahsulot</th>${live.map((s) => `<th style="font-size:12px;text-align:center">${esc(s.name)}</th>`).join('')}</tr></thead><tbody>
-      ${mapped.map((p) => `<tr data-p="${p.id}"><td>${esc(p.name)} <span class="muted">${esc(p.kind_label)}</span></td>
-        ${live.map((s) => `<td style="text-align:center"><input type="checkbox" data-map="${s.id}" ${p.stages.includes(s.id) ? 'checked' : ''} ${manage ? '' : 'disabled'}></td>`).join('')}</tr>`).join('')
-        || `<tr><td colspan="${live.length + 1}" class="muted">Tayyor yoki yarim tayyor mahsulot yo'q</td></tr>`}
+    <div class="card"><h2>Tex kartalar (tayyor mahsulotlar)</h2>
+      <p class="muted">Har bir <b>tayyor</b> mahsulot qaysi bosqichlardan o'tishi va har bir o'zgaradigan bosqichda qaysi tarkib ishlashi.
+        "Ishlab chiqarish" yoqilsa — mahsulotning <b>quymasi</b> (quyma tarkibi) tanlanadi: bir quymadan bir nechta tayyor mahsulot chiqishi mumkin.
+        "Quyish" / "Qadoqlash" yoqilsa — o'sha tarkib tanlanadi. O'chiq bosqichdan mahsulot o'tmaydi — keyingisiga sakraydi.</p>
+      <div class="table-wrap"><table><thead><tr><th>Mahsulot</th><th>Bosqichlar</th><th></th></tr></thead><tbody>
+      ${finished.map((p) => `<tr><td><b>${esc(p.name)}</b></td><td class="muted">${p.stages.length ? live.filter((s) => p.stages.includes(s.id)).map((s) => esc(s.name)).join(' → ') : '<span class="warn">Tex karta yo\'q</span>'}</td>
+        <td>${manage ? `<button class="ghost small" data-tex="${p.id}">Tex karta</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">Tayyor mahsulot yo\'q</td></tr>'}
       </tbody></table></div></div>`;
   const stEdit = (s = null) => {
     const dlg = $('#dlg'); const keep = new Set((s?.keepers ?? []).map((k) => k.id));
@@ -397,15 +398,33 @@ views['prod-stages'] = async (v) => {
   });
   $$('[data-up]', v).forEach((b) => { b.onclick = move(Number(b.dataset.up), -1); });
   $$('[data-down]', v).forEach((b) => { b.onclick = move(Number(b.dataset.down), 1); });
-  $$('[data-map]', v).forEach((cb) => {
-    cb.onchange = act(async () => {
-      const tr = cb.closest('tr[data-p]');
-      const ids = $$('input[data-map]', tr).filter((x) => x.checked).map((x) => Number(x.dataset.map));
-      await prodApi('PUT', `/map/${tr.dataset.p}`, { stageIds: ids });
-      flash('Xarita saqlandi');
-    });
-  });
+  $$('[data-tex]', v).forEach((b) => { b.onclick = act(() => texCard(Number(b.dataset.tex))); });
 };
+
+// The Tex karta of a finished product: stages on / off; a recipe for each 'change' stage.
+async function texCard(productId) {
+  const t = await prodApi('GET', `/tex/${productId}`);
+  const dlg = $('#dlg');
+  const HINT = { produce: 'Quyma mahsuloti (quyma tarkibi)', pour: 'Quyish tarkibi', pack: 'Qadoqlash tarkibi', reprocess_bad: 'Qayta ishlash tarkibi', reprocess_ok: 'Qayta ishlash tarkibi' };
+  dlg.innerHTML = `<form method="dialog" style="min-width:min(560px,90vw)"><h2>Tex karta — ${esc(t.product.name)}</h2>
+    <div style="display:grid;gap:6px">${t.stages.map((s) => `<div class="row" data-s="${s.id}" style="align-items:center;border-bottom:1px solid var(--line);padding:6px 0">
+      <label style="display:flex;gap:8px;color:var(--text);flex:1;align-items:center"><input type="checkbox" data-on ${s.on ? 'checked' : ''}> <b>${esc(s.name)}</b></label>
+      ${s.type === 'change' ? `<label style="flex:2">${esc(HINT[s.code] ?? 'Tarkib')}<select data-recipe><option value="">— tanlang —</option>${s.recipes.map((r) => `<option value="${r.id}" ${r.id === s.recipe_id ? 'selected' : ''}>${esc(r.name)}${r.product ? ` → ${esc(r.product)}` : r.product_id ? '' : ' (umumiy)'}</option>`).join('')}</select></label>` : '<span class="muted" style="flex:2">tarkibsiz</span>'}
+    </div>`).join('')}</div>
+    <p class="muted">Quyuvchi qaysi mahsulotni quyishni tanlaydi (keyinchalik buyurtma asosidagi reja ko'rsatadi).</p>
+    <p class="err" id="dlgErr"></p><div class="actions"><button type="button" class="ghost" value="cancel">Bekor</button><button value="ok">Saqlash</button></div></form>`;
+  const form = $('form', dlg);
+  const sync = () => $$('[data-s]', form).forEach((row) => { const sel = $('[data-recipe]', row); if (sel) sel.disabled = !$('[data-on]', row).checked; });
+  form.onchange = sync; sync();
+  $('button[value=cancel]', dlg).onclick = () => dlg.close();
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const stages = $$('[data-s]', form).filter((row) => $('[data-on]', row).checked)
+      .map((row) => ({ stageId: Number(row.dataset.s), recipeId: $('[data-recipe]', row)?.value ? Number($('[data-recipe]', row).value) : null }));
+    try { await prodApi('PUT', `/map/${productId}`, { stages }); dlg.close(); flash('Tex karta saqlandi'); route(); } catch (ex) { $('#dlgErr').textContent = ex.message; }
+  };
+  dlg.showModal();
+}
 
 views['prod-journal'] = async (v) => {
   const q = hashParams();

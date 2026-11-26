@@ -192,3 +192,28 @@ buzilmasin (hech bir xarajat yo'qolmaydi yoki ikki marta yozilmaydi).
 11. ✅ Qopqoq yopishda hech narsa ayrilmaydi: qopqoq **quyish bosqichida idishi bilan juft** holda ombordan chiqib
     ketgan va tannarxda allaqachon bor. Idish omborida alohida "qopqoq" turmaydi.
 12. ✅ Variantlar — 8.1 (birlik bir xil, faqat nomi va tannarxi farq qiladi).
+
+## 11. Tex karta (2026-11-26) — xarita qayta tuzildi ✅ qurildi
+- "Ishlab chiqarish xaritasi" endi **Tex karta** deb ataladi va **faqat tayyor mahsulot** uchun bo'ladi.
+- Tex kartada bosqich yoqilsa:
+  - **Ishlab chiqarish** → mahsulotning **quyma mahsuloti** tanlanadi (quyma tarkiblari ro'yxatidan). Bitta quymadan
+    ("5% siyro") bir nechta tayyor mahsulot chiqishi mumkin: "Qatiq banka 1 l", "Qatiq bochka 800 g", "Qatiq ko'za"...
+  - **Quyish** (va Qadoqlash, Qayta ishlash) → o'sha bosqich tarkiblari ro'yxatidan tarkib tanlanadi. Quyish / qadoqlash
+    tarkibi bitta mahsulotga yoki **umumiy** (masalan "800 g idishga quyish") bo'lishi mumkin — qaysi mahsulot chiqishini
+    Tex karta belgilaydi.
+- Quyuvchi "Quyish" bosqichida quyma bo'yicha guruhlangan mahsulotlarni ko'radi va qaysi mahsulotni quyishni tanlaydi.
+  Keyinchalik buni **Reja** (buyurtma asosida) ko'rsatadi.
+- **Ishlab chiqarish bosqichida ishbay haq yo'q** va "kim bilan qildingiz" so'ralmaydi (texnolog faqat quyma ishlab
+  chiqaradi). Ishbay haq faqat **quyish, qadoqlash, qopqoq yopish**da.
+- Nomenklaturada ikki belgi: **"Sotuv uchun mavjud"** (yarim tayyor / tayyor mahsulot idishsiz, kg hisobida ham sotiladi)
+  va **"Xomashyo"** (tayyor / yarim tayyor mahsulot boshqa ishlab chiqarishda xomashyo sifatida ham ishlatiladi —
+  masalan "1% siyro"dan suzma). Hozircha belgi saqlanadi; ta'siri keyingi bosqichlarda (narxlar, sotuv, tarkiblar).
+
+## 12. Keyingi bosqichga (11–12) qoldirildi
+- **Reja** — buyurtmaga ko'ra smenada nima ishlab chiqarilishi kerak:
+  - texnolog uchun — umumiy quyma miqdori (masalan 100 ta bochka + 100 ta "5% 400 g" → 120 kg "5% siyro");
+  - quyuvchi uchun — buyurtmaning o'zi (qaysi tayyor mahsulotdan nechta);
+  - topshiriq jarayonida o'zgarishi mumkin (quyma ortib qolsa — boshqa buyurtmaga ko'proq yoki shu quymadan
+    chiqadigan boshqa mahsulot).
+- Buyurtmalar, sotuv, qaytarish, agent bilan ishlash, **narxlar** (sotuv uchun mavjud yarim tayyor va donali tayyor
+  mahsulotlar narxi), "Xomashyo" belgisining tarkiblardagi ta'siri, yaroqli qayta ishlash.

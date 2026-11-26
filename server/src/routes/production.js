@@ -10,7 +10,7 @@ import {
   approvals, approveShift, approveTask, cancelTask, closeShift, completeTask, createTask, keepTask, listRecipes, listShifts, myShift, openShift,
   recipeDetail, rejectShiftApproval, rejectTaskApproval, saveRecipe, shiftDetail, stageJournal, taskDetail,
 } from '../erp/production.js';
-import { getStage, isKeeper, keptWarehouses, productMap, saveStage, setProductMap, stageBoard, stageList } from '../erp/stages.js';
+import { getStage, isKeeper, keptWarehouses, productMap, saveStage, setProductMap, stageBoard, stageList, texRecipes } from '../erp/stages.js';
 import { stripCosts } from './erp.js';
 
 export default async function productionRoutes(app, { db }) {
@@ -51,8 +51,17 @@ export default async function productionRoutes(app, { db }) {
     tasks: db.prepare("SELECT id FROM prod_tasks WHERE user_id = ? AND status IN ('open','approval') ORDER BY id DESC").all(req.me.id).map((t) => taskDetail(db, t.id)),
   }));
   app.get('/map/:productId', need(), async (req) => productMap(db, Number(req.params.productId)));
+  // The Tex karta editor: every stage, whether it is on, its recipe and the recipes it may use.
+  app.get('/tex/:productId', need(), async (req, reply) => {
+    const p = db.prepare('SELECT id, name, kind FROM products WHERE id = ?').get(Number(req.params.productId));
+    if (!p) return reply.code(404).send({ error: 'Topilmadi' });
+    const on = new Map(productMap(db, p.id).map((s) => [s.id, s]));
+    return { product: p, stages: db.prepare('SELECT * FROM warehouses WHERE is_stage = 1 AND active = 1 ORDER BY sort, id').all().map((w) => ({
+      id: w.id, name: w.name, code: w.stage_code, type: w.stage_type, on: on.has(w.id), recipe_id: on.get(w.id)?.recipe_id ?? null,
+      recipes: w.stage_type === 'change' ? texRecipes(db, p.id, w) : [] })) };
+  });
   app.put('/map/:productId', need('prod.manage'), async (req, reply) => run(reply, () => {
-    const map = setProductMap(db, Number(req.params.productId), req.body?.stageIds);
+    const map = setProductMap(db, Number(req.params.productId), req.body?.stages ?? req.body?.stageIds);
     log(req, 'product.map', { productId: Number(req.params.productId), stages: map.map((s) => s.name) });
     return map;
   }));

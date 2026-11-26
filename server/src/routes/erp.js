@@ -114,6 +114,9 @@ export default async function erpRoutes(app, { db }) {
       d.shape = body.shape || null;
     }
     if (body.unit !== undefined) d.unit = str(body.unit, 10) ?? 'kg';
+    // "Sotuv uchun mavjud" (also sold by weight) and "Xomashyo" (also used as a raw material).
+    if (body.forSale !== undefined) d.for_sale = Number(!!body.forSale);
+    if (body.asRaw !== undefined) d.as_raw = Number(!!body.asRaw);
     for (const k of PRODUCT_FIELDS) if (body[k] !== undefined) d[k] = str(body[k], k === 'note' ? 300 : 60);
     for (const k of PRODUCT_NUMS) {
       if (body[k] === undefined) continue;

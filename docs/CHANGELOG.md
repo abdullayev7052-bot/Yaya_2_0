@@ -2,6 +2,14 @@
 
 Eng yangisi tepada. Qavs ichida Android `versionCode`.
 
+## Yaya 2.0 — Tex karta (10-bosqich, 2-qism), 2026-11-26
+- Ishlab chiqarish xaritasi → **Tex karta**, faqat tayyor mahsulot uchun: "Ishlab chiqarish"da quyma mahsuloti (quyma
+  tarkibi), "Quyish"/"Qadoqlash"da tarkib tanlanadi; bir quymadan bir nechta tayyor mahsulot.
+- Umumiy quyish / qadoqlash tarkiblari (mahsulotni Tex karta bog'laydi). Quyuvchi quyma bo'yicha mahsulotni tanlaydi.
+- Ishlab chiqarish bosqichida ishbay haq va "kim bilan" yo'q; ishbay faqat quyish, qadoqlash, qopqoq yopishda.
+- Mahsulot belgilari: "Sotuv uchun mavjud", "Xomashyo".
+- Reja (buyurtma asosida) — keyingi bosqichga. 72 ta avtomatik test.
+
 ## Yaya 2.0 — bosqichlar va ishlab chiqarish xaritasi (10-bosqich, 1-qism), 2026-11-25
 - **Bosqichlar:** 10 ta bosqich ombor sifatida (o'zgaradigan / o'zgarmas, ishbay haq, mas'ullar, tartib); har bir
   mahsulotning ishlab chiqarish xaritasi; bosqichlar jurnali. Har bir amal oldingi bosqichdan oladi.

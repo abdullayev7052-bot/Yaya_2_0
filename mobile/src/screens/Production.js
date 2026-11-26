@@ -92,7 +92,7 @@ export function Production({ tick, onTask, onNew, onClose, onMove }) {
       {(data?.tasks ?? []).map((t) => (
         <Pressable key={t.id} onPress={() => onTask(t.id)} style={({ pressed }) => [s.card, { gap: 4, borderColor: C.warn }, pressed && { opacity: 0.6 }]}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-            <Text style={[s.text, { fontWeight: '700', flex: 1 }]}>{t.label} · {t.recipe ?? t.stage}</Text>
+            <Text style={[s.text, { fontWeight: '700', flex: 1 }]}>{t.label} · {t.product ?? t.recipe ?? t.stage}</Text>
             <Badge map={TASK} status={t.status} />
           </View>
           <Text style={s.muted}>{t.plan.map((l) => `${l.product} ${fmtQty(l.qty)} ${l.unit}`).join(' · ')}</Text>
@@ -105,14 +105,27 @@ export function Production({ tick, onTask, onNew, onClose, onMove }) {
             <Text style={s.h2}>{st.name}</Text>
             <Text style={s.muted}>{st.type_label}</Text>
           </View>
-          {st.type === 'change' ? (
+          {st.type === 'change' && st.code === 'produce' ? (
             st.waiting.map((w) => (
               <Pressable key={w.recipe_id} onPress={() => onNew({ stageId: st.id, recipeId: w.recipe_id })}
                 style={({ pressed }) => [{ paddingVertical: 10, borderTopWidth: 1, borderColor: C.line, gap: 2 }, pressed && { opacity: 0.6 }]}>
-                <Text style={[s.text, { fontWeight: '600' }]}>{w.recipe}{w.product ? ` → ${w.product}` : ''}</Text>
-                {w.waiting ? <Text style={{ color: w.waiting.qty > 0 ? C.ok : C.muted }}>{w.waiting.from_name}da: {fmtQty(w.waiting.qty)} {w.waiting.unit} {w.waiting.product}</Text> : null}
+                <Text style={[s.text, { fontWeight: '600' }]}>{w.recipe}{w.product && w.product !== w.recipe ? ` → ${w.product}` : ''}</Text>
               </Pressable>
             )).concat(st.waiting.length ? [] : [<Text key="none" style={s.muted}>Bu bosqichda tarkib yo'q</Text>])
+          ) : st.type === 'change' ? (
+            // Grouped by what waits (e.g. one quyma for several products): the worker chooses what to make.
+            Object.values(st.waiting.reduce((g, w) => {
+              const k = w.waiting ? `${w.waiting.product_id}:${w.waiting.from}` : `x${w.product_id}`;
+              (g[k] ??= { head: w.waiting, items: [] }).items.push(w);
+              return g;
+            }, {})).map((grp, gi) => (
+              <View key={gi} style={{ borderTopWidth: 1, borderColor: C.line, paddingTop: 8, gap: 6 }}>
+                {grp.head ? <Text style={{ color: grp.head.qty > 0 ? C.ok : C.muted, fontWeight: '600' }}>{grp.head.product}: {fmtQty(grp.head.qty)} {grp.head.unit} — {grp.head.from_name}da</Text> : null}
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                  {grp.items.map((w) => <Chip key={w.product_id} label={w.product} on={false} onPress={() => onNew({ stageId: st.id, recipeId: w.recipe_id, productId: w.product_id, productName: w.product })} />)}
+                </View>
+              </View>
+            )).concat(st.waiting.length ? [] : [<Text key="none" style={s.muted}>Tex kartalarda bu bosqich uchun mahsulot yo'q</Text>])
           ) : (
             st.waiting.length ? st.waiting.map((w) => (
               <Pressable key={w.product_id} onPress={() => onMove({ stage: st, item: w })}
@@ -135,7 +148,7 @@ export function Production({ tick, onTask, onNew, onClose, onMove }) {
 }
 
 // ---------------------------------------------------------------- start a task at a 'change' stage
-export function NewTask({ stageId, recipeId, onBack, onDone }) {
+export function NewTask({ stageId, recipeId, productId, productName, onBack, onDone }) {
   const { data: r, err } = useLoad(() => prod('GET', `/recipes/${recipeId}`), [recipeId]);
   const [milk, setMilk] = useState('');
   const [factor, setFactor] = useState('');
@@ -157,7 +170,7 @@ export function NewTask({ stageId, recipeId, onBack, onDone }) {
     setBusy(true);
     try {
       const t = await prod('POST', '/tasks', {
-        uuid: randomUUID(), stageId, recipeId: r.id, ...(perUnit ? { units: toNumber(factor) } : r.base_milk > 0 ? { milkQty: toNumber(milk) } : { factor: toNumber(factor) }),
+        uuid: randomUUID(), stageId, recipeId: r.id, ...(productId ? { productId } : {}), ...(perUnit ? { units: toNumber(factor) } : r.base_milk > 0 ? { milkQty: toNumber(milk) } : { factor: toNumber(factor) }),
         lines: lines.map((x) => ({ lineId: x.l.id, productId: x.pid, ...(x.qty !== String(x.auto) ? { qty: toNumber(x.qty) } : {}) })),
       }, { idempotent: true });
       onDone(t.id);
@@ -165,7 +178,7 @@ export function NewTask({ stageId, recipeId, onBack, onDone }) {
   };
   return (
     <View style={{ flex: 1 }}>
-      <Header title={r ? r.name : 'Topshiriq'} onBack={onBack} />
+      <Header title={productName ?? (r ? r.name : 'Topshiriq')} onBack={onBack} />
       <ScrollView contentContainerStyle={{ padding: 12, gap: 12 }} keyboardShouldPersistTaps="handled">
         <Err err={err} />
         {r && (
@@ -242,16 +255,20 @@ export function TaskScreen({ id, onBack, onDone }) {
   const rule = (r?.limits ?? []).filter((x) => x.product_ids.every((pid) => used.has(pid))).sort((x, y) => y.product_ids.length - x.product_ids.length)[0] ?? null;
   const lo = rule ? rule.out_min : r?.out_min; const hi = rule ? rule.out_max : r?.out_max;
   const range = r && !PER_UNIT.has(r.kind) && (lo != null || hi != null) ? { min: lo == null ? null : lo * scale, max: hi == null ? null : hi * scale, rule: rule ? (rule.name || rule.products.join(' + ')) : null } : null;
-  const outs = r?.kind === 'separation' ? r.outputs.map((o) => ({ productId: o.product_id, name: o.product, unit: o.unit })) : [{ productId: r?.product_id, name: r?.product, unit: r?.unit }];
-  const outWeight = perUnit ? toNumber(out[r.product_id] ?? String(t.factor)) : outs.reduce((a, o) => a + weightKg(o.unit, toNumber(out[o.productId] || 0)), 0);
+  // The output: the product chosen for this task (its Tex karta gave the recipe), else the recipe's own.
+  const outId = t.product_id ?? r?.product_id;
+  const outs = r?.kind === 'separation' ? r.outputs.map((o) => ({ productId: o.product_id, name: o.product, unit: o.unit })) : [{ productId: outId, name: t.product ?? r?.product, unit: t.product_unit ?? r?.unit }];
+  const outWeight = perUnit ? toNumber(out[outId] ?? String(t.factor)) : outs.reduce((a, o) => a + weightKg(o.unit, toNumber(out[o.productId] || 0)), 0);
+  // "Who did it with you" only where a piece wage is paid (never in production).
+  const paid = (r?.rates?.length ?? 0) > 0;
   const outside = range && outWeight > 0 && ((range.min != null && outWeight < range.min - 0.0005) || (range.max != null && outWeight > range.max + 0.0005));
   const editable = t.status === 'open';
 
   const finish = async () => {
     setBusy(true);
     try {
-      const body = { lines: inputs.map((l) => ({ productId: l.productId, qty: toNumber(l.qty) })), workers: team };
-      if (r.kind !== 'separation') body.outputQty = toNumber(out[r.product_id] ?? (perUnit ? String(t.factor) : 0));
+      const body = { lines: inputs.map((l) => ({ productId: l.productId, qty: toNumber(l.qty) })), ...(paid ? { workers: team } : {}) };
+      if (r.kind !== 'separation') body.outputQty = toNumber(out[outId] ?? (perUnit ? String(t.factor) : 0));
       else body.outputs = outs.map((o) => ({ productId: o.productId, qty: toNumber(out[o.productId] || 0) }));
       const res = await prod('POST', `/tasks/${t.id}/complete`, body);
       onDone(res.needApproval ? `${t.label}: chiqish limitdan tashqarida — rahbar tasdig'iga yuborildi` : `${t.label} bajarildi`);
@@ -263,7 +280,7 @@ export function TaskScreen({ id, onBack, onDone }) {
 
   return (
     <View style={{ flex: 1 }}>
-      <Header title={`${t.label} · ${t.recipe}`} onBack={onBack} />
+      <Header title={`${t.label} · ${t.product ?? t.recipe}`} onBack={onBack} />
       <ScrollView contentContainerStyle={{ padding: 12, gap: 12 }} keyboardShouldPersistTaps="handled">
         <Badge map={TASK} status={t.status} />
         {!!t.approval_note && <Text style={{ color: t.status === 'open' ? C.err : C.muted }}>Rahbar: {t.approval_note}</Text>}
@@ -288,7 +305,7 @@ export function TaskScreen({ id, onBack, onDone }) {
           {range && editable && <Text style={{ color: outside ? C.err : C.muted }}>Ruxsat etilgan: {fmtQty(range.min ?? 0)} – {range.max == null ? '∞' : fmtQty(range.max)} kg{range.rule ? ` (shartli: ${range.rule})` : ''}{outside ? ' — chegaradan tashqarida, rahbar tasdiqlaydi' : ''}</Text>}
           {t.status === 'approval' && <Text style={{ color: C.warn }}>Chiqish chegaradan tashqarida. Rahbar tasdiqlashini kuting.</Text>}
         </View>
-        {editable && <Workers staff={meta?.staff} team={team} setTeam={setWorkers} />}
+        {editable && paid && <Workers staff={meta?.staff} team={team} setTeam={setWorkers} />}
         {editable && <Btn title={busy ? '...' : 'Yakunlash'} onPress={finish} disabled={busy || !(outWeight > 0 || outs.some((o) => toNumber(out[o.productId] || 0) > 0))} />}
         {(t.status === 'open' || t.status === 'done' || t.status === 'approval') && <Btn title="Bekor qilish" kind="warn" onPress={cancel} />}
       </ScrollView>
