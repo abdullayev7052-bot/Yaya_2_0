@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import * as api from './api';
 import { Btn, fmtDT } from './components';
+import { ask } from './dialog';
 import { C, s } from './ui';
 
 // Header badge for the offline outbox: "⏳ 2" while documents wait for the
@@ -27,7 +28,10 @@ export function OutboxBadge() {
               {waiting.map((x) => (
                 <View key={x.id} style={{ borderBottomWidth: 1, borderColor: C.line, paddingBottom: 6 }}>
                   <Text style={s.text}>⏳ {x.label}</Text>
-                  <Text style={s.muted}>{x.user} · {fmtDT(x.at)} · internet chiqqanda o'zi yuboriladi</Text>
+                  <Text style={s.muted}>{x.user} · {fmtDT(x.at)} · qurilma xotirasida, internet chiqqanda o'zi yuboriladi</Text>
+                  <Pressable onPress={() => ask('Bekor qilish', `"${x.label}" qurilmadan o'chiriladi va serverga yuborilmaydi.`, 'Bekor qilish', () => api.dropWaiting(x.id))}>
+                    <Text style={{ color: C.err, marginTop: 2 }}>Bekor qilish</Text>
+                  </Pressable>
                 </View>
               ))}
               {failed.map((x) => (
@@ -39,7 +43,8 @@ export function OutboxBadge() {
                 </View>
               ))}
             </ScrollView>
-            {waiting.length > 0 && <Btn title="Hozir yuborishga urinish" kind="ghost" onPress={() => api.flushOutbox()} />}
+            <Text style={s.muted}>Har bir hujjatning o'z raqami bor: qayta yuborilsa ham serverda ikki marta saqlanmaydi.</Text>
+            {waiting.length > 0 && <Btn title="Qayta sinxronlash" kind="ghost" onPress={() => api.flushOutbox()} />}
             <Btn title="Yopish" onPress={() => setOpen(false)} />
           </View>
         </View>

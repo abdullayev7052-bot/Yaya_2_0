@@ -5,12 +5,13 @@ import * as lock from '../lock';
 import * as store from '../db';
 import SyncBar from '../SyncBar';
 import { ask, notify } from '../dialog';
-import { Btn, Chip } from '../components';
+import { Btn, Chip, KEY_SIZES, getKeysCfg, setKeysCfg } from '../components';
 import { PinSetup } from './Lock';
 import { s } from '../ui';
 
 // "Profil": who is logged in, app lock (PIN / fingerprint / auto-lock), password, logout.
 export default function Profile({ tick, onLogout, setFull }) {
+  const [keys, setKeys] = useState(getKeysCfg());
   const me = api.me();
   const [cfg, setCfg] = useState(lock.getLock());
   const [settingPin, setSettingPin] = useState(false);
@@ -51,6 +52,21 @@ export default function Profile({ tick, onLogout, setFull }) {
           <Text style={s.h2}>{me?.name || me?.login}</Text>
           <Text style={s.muted}>{me?.role} · login: {me?.login}{me?.isTest ? ' · TEST' : ''}</Text>
         </View>
+
+        {api.getSession()?.kiosk && (
+          <View style={[s.card, { gap: 10 }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Text style={[s.text, { flex: 1, fontWeight: '700' }]}>⌨ Ekrandagi raqamli klaviatura</Text>
+              <Switch value={keys.on} onValueChange={(v) => { setKeysCfg({ on: v }); setKeys(getKeysCfg()); }} />
+            </View>
+            <Text style={s.muted}>Monoblokda son kiritiladigan joy bosilganda burchakda chiqadi. Shu monoblok uchun saqlanadi.</Text>
+            {keys.on && (
+              <View style={{ flexDirection: 'row', gap: 6 }}>
+                {Object.entries(KEY_SIZES).map(([k, [label]]) => <Chip key={k} label={label} on={keys.size === k} onPress={() => { setKeysCfg({ size: k }); setKeys(getKeysCfg()); }} />)}
+              </View>
+            )}
+          </View>
+        )}
 
         <View style={[s.card, { gap: 10 }]}>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>

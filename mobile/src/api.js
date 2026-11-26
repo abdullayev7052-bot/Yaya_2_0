@@ -352,6 +352,7 @@ const outboxEmit = () => outboxListeners.forEach((fn) => fn());
 export const getOutbox = () => store.getKv('outbox', []);
 export const getOutboxFailed = () => store.getKv('outboxFailed', []);
 export const dropFailed = (id) => { store.setKv('outboxFailed', getOutboxFailed().filter((x) => x.id !== id)); outboxEmit(); };
+export const dropWaiting = (id) => { store.setKv('outbox', getOutbox().filter((x) => x.id !== id)); outboxEmit(); };
 
 export async function send(method, path, body, label) {
   try {

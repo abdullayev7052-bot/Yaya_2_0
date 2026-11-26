@@ -209,6 +209,26 @@ buzilmasin (hech bir xarajat yo'qolmaydi yoki ikki marta yozilmaydi).
   va **"Xomashyo"** (tayyor / yarim tayyor mahsulot boshqa ishlab chiqarishda xomashyo sifatida ham ishlatiladi —
   masalan "1% siyro"dan suzma). Hozircha belgi saqlanadi; ta'siri keyingi bosqichlarda (narxlar, sotuv, tarkiblar).
 
+## 13. Reja, asosiy xomashyo, smena yakuni (2026-11-27) ✅ qurildi
+- **Reja** (Ishlab chiqarish → Reja): har bir kun uchun tayyor mahsulotlar soni; qo'shish, o'zgartirish, o'chirish;
+  o'tgan kun yopiq. Texnologga quyma kg bo'lib ("Bugungi rejalar"), quyuvchiga quyma ostida mahsulot bo'yicha (burchakda
+  reja soni) ko'rinadi. **Reja hisoboti**: kunlar bo'yicha reja / chiqdi / farq / %. Keyinchalik reja agent buyurtmalaridan.
+- Texnolog rejani bossa — tarkib ochiladi: asosiy xomashyo tavsiyasi (xira), qolganlari nisbatda (xira); hammasini
+  o'zgartirish, alternativ yoki ro'yxatdan boshqa xomashyo qo'shish mumkin.
+- Quyuvchi: quyma oldindan bosqichdagi miqdor bilan to'ladi; ko'p kiritib bo'lmaydi.
+- **Asosiy xomashyo** — yangi mahsulot turi (Yog'li sut, Yog'siz sut, keyinchalik suv): har bir quyma tarkibida bo'lishi
+  shart; boshqa xomashyolar ularning jamiga nisbatda. "Xom sut (ombor)" turi olib tashlandi; ombor — **Sut ombori**,
+  yig'uvchilardan kelgan barcha sut — **Yog'li sut**.
+- **Separatsiya** — smena yopishdan oldingi alohida qadam: chiqqan yog'siz sut = smenada sarflangani (o'zgartirilmaydi),
+  toza qaymoq kiritiladi; separatsiyada yo'qotish bo'lmaydi.
+- **Qabul qilingan sut** qo'lda yozilmaydi: ⬇ tugmasi orqali qabul qilingan yig'uvchi smenalaridan bir nechtasi tanlanadi
+  (har biri faqat bir marta hisoblanadi). Yo'qotish = qabul − (yog'li sut + yog'siz sut + toza qaymoq) — sabablar bo'yicha
+  to'liq kiritilmaguncha smena yopilmaydi.
+- **Haqiqiy tannarx**: smena yopilganda sut tanlangan smenalardagi tannarxga o'tadi; yo'qotish mahsulotlarga ular
+  ishlatgan asosiy xomashyo qiymati ulushiga ko'ra qo'shiladi (rahbar bergan formula bo'yicha).
+- Oflayn: yuborilmagan yozuvlar ro'yxati ("qurilma xotirasiga saqlandi"), qayta sinxronlash, bekor qilish; ikki marta saqlanmaydi.
+- Monoblok klaviaturasi: Profil'da yoqish / o'chirish va o'lchami (shu monoblok uchun).
+
 ## 12. Keyingi bosqichga (11–12) qoldirildi
 - **Reja** — buyurtmaga ko'ra smenada nima ishlab chiqarilishi kerak:
   - texnolog uchun — umumiy quyma miqdori (masalan 100 ta bochka + 100 ta "5% 400 g" → 120 kg "5% siyro");

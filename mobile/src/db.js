@@ -211,6 +211,25 @@ export function errorDetails() {
   }
   return out;
 }
+// What is saved on this device and not sent yet (each has its own uuid, so sending
+// it again never makes a second copy on the server).
+export function pendingDetails() {
+  const out = [];
+  for (const x of db.getAllSync(`SELECT * FROM collections WHERE ${PENDING.collections}`)) {
+    out.push({ kind: 'pickup', uuid: x.uuid, title: x.supplier_name, detail: `${x.product_name}: ${x.quantity} ${x.unit ?? 'kg'}`, when: x.collected_at });
+  }
+  for (const x of db.getAllSync(`SELECT * FROM ops WHERE ${PENDING.ops}`)) {
+    const c = db.getFirstSync('SELECT supplier_name, product_name FROM collections WHERE uuid = ?', x.target);
+    out.push({ kind: 'fix', uuid: x.uuid, title: c ? c.supplier_name : 'Tuzatish', detail: x.type === 'delete' ? "Yozuvni o'chirish" : `Yozuvni tuzatish: ${x.quantity}`, when: x.created_at });
+  }
+  for (const x of db.getAllSync(`SELECT * FROM payments WHERE ${PENDING.payments}`)) {
+    out.push({ kind: 'payment', uuid: x.uuid, title: x.supplier_name, detail: `To'lov: ${x.amount} so'm`, when: x.paid_at });
+  }
+  for (const x of db.getAllSync('SELECT * FROM shifts WHERE dirty = 1 AND error IS NULL')) {
+    out.push({ kind: 'shift', uuid: x.uuid, title: 'Smena', detail: x.closed_at ? 'yopilgani yuborilmagan' : 'ochilgani yuborilmagan', when: x.closed_at ?? x.opened_at, keep: true });
+  }
+  return out;
+}
 // Drop one refused entry from the phone (it never reached the office).
 export function discardError(kind, uuid) {
   if (kind === 'shift') discardShift(uuid);

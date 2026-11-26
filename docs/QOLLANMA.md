@@ -111,10 +111,11 @@ kamomad — kim hisobiga ekani so'raladi (xodim(lar)ga summa, qolgani "Kassa kam
 ## 9. Kundalik ish oqimi
 1. **Sut yig'uvchi** smena yopadi → **omborchi/buxgalter** qabul qiladi → sut "Xom sut ombori"ga o'zi tushadi va
    texnolog darhol ishlata oladi.
-2. **Texnolog** (ilova → Ishlab chiqarish) tarkibni bosadi, sut miqdorini yozadi, quymani tortib kiritadi — sut va
-   xomashyo omborlardan o'zi ayriladi, quyma "Ishlab chiqarish" bosqichida turadi. Tepada smenada sarflangan sut ko'rinadi.
-   Yog'siz sut / qaymoqni separatsiyadan oldin ham ishlatish mumkin. Smena oxirida: qolgan sutni o'lchab kiritadi,
-   separatsiyani (qaymoq chiqdi, yog'siz sut qoldi) va yo'qotishlarni yozadi — haqiqiy tannarx shunda aniqlanadi.
+2. **Reja** (panel → Ishlab chiqarish → Reja): har kuni tayyor mahsulotlar soni kiritiladi.
+3. **Texnolog** (ilova → Ishlab chiqarish) "Bugungi rejalar"dan quymani bosadi — tarkib tavsiyalari bilan ochiladi; sut
+   va xomashyo omborlardan o'zi ayriladi, quyma "Ishlab chiqarish" bosqichida turadi. Yog'siz sutni separatsiyadan oldin
+   ham ishlatish mumkin. Smena oxirida: **separatsiya** (toza qaymoqni yozadi, yog'siz sut o'zi), **qabul qilingan sut**
+   (⬇ — yig'uvchi smenalarini tanlaydi), so'ng yo'qotishni sabablar bo'yicha to'liq yozadi — haqiqiy tannarx shunda aniqlanadi.
 3. **Quyuvchi** "Quyish" bosqichida kutayotgan quymani ko'radi, nechta quyganini yozadi, "kim bilan" — ishbay haq bo'linadi.
 4. **Issiqxona → Sovuqxona → Qopqoq yopish → Tayyor mahsulot ombori:** har bir bosqich mas'uli oldingi bosqichdan
    nechtasini olganini yozadi. Ko'p yozilsa oldingi bosqich manfiyga tushadi va rahbarga xabar boradi.

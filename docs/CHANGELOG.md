@@ -2,6 +2,14 @@
 
 Eng yangisi tepada. Qavs ichida Android `versionCode`.
 
+## Yaya 2.0 — Reja, asosiy xomashyo, yangi smena yakuni (10-bosqich, 3-qism), 2026-11-27
+- **Reja** va **Reja hisoboti**; texnologga "Bugungi rejalar" (quyma kg), quyuvchiga mahsulot bo'yicha reja soni.
+- Tarkib: asosiy xomashyo tavsiyasi va nisbatdagi tavsiyalar (xira), boshqa xomashyo qo'shish; quyishda quyma bosqichdagidan ko'p emas.
+- **Asosiy xomashyo** turi; "Sut ombori", "Yog'li sut"; "Xom sut (ombor)" turi olib tashlandi.
+- **Separatsiya** alohida qadam; **qabul qilingan sut** yig'uvchi smenalaridan tanlanadi; yo'qotish to'liq kiritiladi;
+  sut tanlangan smenalar tannarxida, yo'qotish asosiy xomashyo qiymati ulushiga ko'ra.
+- Oflayn yozuvlar ro'yxati, qayta sinxronlash, bekor qilish; monoblok klaviaturasi sozlamasi. 73 ta test.
+
 ## Yaya 2.0 — Tex karta (10-bosqich, 2-qism), 2026-11-26
 - Ishlab chiqarish xaritasi → **Tex karta**, faqat tayyor mahsulot uchun: "Ishlab chiqarish"da quyma mahsuloti (quyma
   tarkibi), "Quyish"/"Qadoqlash"da tarkib tanlanadi; bir quymadan bir nechta tayyor mahsulot.

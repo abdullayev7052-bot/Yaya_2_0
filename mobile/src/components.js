@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Image, Modal, Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { getBrand } from './api';
+import * as store from './db';
 import { useBack } from './back';
 import { C, fmtTime, s } from './ui';
 
@@ -327,6 +328,10 @@ export function Btn({ title, onPress, kind = 'main', disabled, style }) {
 let kTarget = null; // { value, onChange }
 const kListeners = new Set();
 const kNotify = () => kListeners.forEach((fn) => fn(kTarget));
+// Settings on this monoblock: on / off and the key size (Profile → "Raqamli klaviatura").
+export const KEY_SIZES = { s: ['Kichik', 52, 22], m: ["O'rta", 66, 28], l: ['Katta', 84, 34] };
+export const getKeysCfg = () => ({ on: true, size: 'm', ...(store.getKv('kioskKeys') ?? {}) });
+export function setKeysCfg(patch) { store.setKv('kioskKeys', { ...getKeysCfg(), ...patch }); kNotify(); }
 export function kioskField(value, onChange) {
   return {
     onFocus: () => { kTarget = { value: String(value ?? ''), onChange }; kNotify(); },
@@ -336,8 +341,11 @@ export function kioskField(value, onChange) {
 const KKEYS = ['7', '8', '9', '4', '5', '6', '1', '2', '3', ',', '0', '⌫'];
 export function KioskKeys() {
   const [target, setTarget] = useState(kTarget);
-  useEffect(() => { kListeners.add(setTarget); return () => kListeners.delete(setTarget); }, []);
-  if (!target) return null;
+  const [, bump] = useState(0);
+  useEffect(() => { const fn = (t) => { setTarget(t); bump((n) => n + 1); }; kListeners.add(fn); return () => kListeners.delete(fn); }, []);
+  const cfg = getKeysCfg();
+  if (!target || !cfg.on) return null;
+  const [, w, fs] = KEY_SIZES[cfg.size] ?? KEY_SIZES.m;
   const press = (k) => {
     let v = kTarget.value;
     if (k === '⌫') v = v.slice(0, -1);
@@ -347,13 +355,13 @@ export function KioskKeys() {
     kTarget.onChange(v);
   };
   return (
-    <View style={{ position: 'absolute', right: 10, bottom: 10, width: 228, padding: 6, gap: 6, borderRadius: 16, backgroundColor: C.card, borderWidth: 1, borderColor: C.line,
+    <View style={{ position: 'absolute', right: 10, bottom: 10, width: w * 3 + 24, padding: 6, gap: 6, borderRadius: 16, backgroundColor: C.card, borderWidth: 1, borderColor: C.line,
       shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 10, elevation: 8 }}>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
         {KKEYS.map((k) => (
-          <Pressable key={k} onPress={() => press(k)} style={({ pressed }) => [{ width: 66, height: 60, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
+          <Pressable key={k} onPress={() => press(k)} style={({ pressed }) => [{ width: w, height: Math.round(w * 0.9), borderRadius: 12, alignItems: 'center', justifyContent: 'center',
             backgroundColor: pressed ? C.line : C.bg, borderWidth: 1, borderColor: C.line }]}>
-            <Text style={{ fontSize: 28, fontWeight: '700', color: C.text }}>{k}</Text>
+            <Text style={{ fontSize: fs, fontWeight: '700', color: C.text }}>{k}</Text>
           </Pressable>
         ))}
       </View>

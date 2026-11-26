@@ -108,6 +108,18 @@ export function errorDetails() {
       detail: `To'lov: ${x.amount} so'm`, when: x.paid_at, error: x.error })),
   ];
 }
+export function pendingDetails() {
+  const cols = collections();
+  return [
+    ...cols.filter(pending).map((x) => ({ kind: 'pickup', uuid: x.uuid, title: x.supplier_name, detail: `${x.product_name}: ${x.quantity} ${x.unit ?? 'kg'}`, when: x.collected_at })),
+    ...ops().filter(pending).map((x) => {
+      const c = cols.find((y) => y.uuid === x.target);
+      return { kind: 'fix', uuid: x.uuid, title: c ? c.supplier_name : 'Tuzatish', detail: x.type === 'delete' ? "Yozuvni o'chirish" : `Yozuvni tuzatish: ${x.quantity}`, when: x.created_at };
+    }),
+    ...payments().filter(pending).map((x) => ({ kind: 'payment', uuid: x.uuid, title: x.supplier_name, detail: `To'lov: ${x.amount} so'm`, when: x.paid_at })),
+    ...shifts().filter((s) => s.dirty && !s.error).map((x) => ({ kind: 'shift', uuid: x.uuid, title: 'Smena', detail: x.closed_at ? 'yopilgani yuborilmagan' : 'ochilgani yuborilmagan', when: x.closed_at ?? x.opened_at, keep: true })),
+  ];
+}
 export function discardError(kind, id) {
   if (kind === 'shift') discardShift(id);
   else if (kind === 'pickup') save('collections', collections().filter((x) => x.uuid !== id));
