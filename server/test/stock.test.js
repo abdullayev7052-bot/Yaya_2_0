@@ -310,3 +310,24 @@ test('a backup of the original (milk-only) Yaya restores into Yaya 2.0 and keeps
   assert.equal((await call(app, 'POST', `/api/admin/shifts/${shift}/accept`, b, {})).status, 200);
   assert.equal((await qtyAt(app, b, { kind: 'main_raw' }))[0].qty, 10);
 });
+
+test('a product is deleted for good only with no stock, no history and no recipe using it', async () => {
+  const { app, db, ids } = setup();
+  const { b, fin, smetana, idish } = await base(app, db, ids);
+  // with stock: refused, and the reason names the warehouse
+  await opening(app, b, fin, [{ productId: smetana, qty: 5, unitCost: 7000 }]);
+  const r1 = await call(app, 'DELETE', `/api/erp/products/${smetana}`, b);
+  assert.equal(r1.status, 400);
+  assert.match(r1.body.error, /qoldig'i bor: Tayyor mahsulot ombori/);
+  // a new product made by mistake, never used: deleted
+  const extra = (await call(app, 'POST', '/api/erp/products', b, { name: 'Xato mahsulot', kind: 'raw', unit: 'kg' })).body.id;
+  assert.equal((await call(app, 'DELETE', `/api/erp/products/${extra}`, b)).status, 200);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM products WHERE id = ?').get(extra).n, 0);
+  // a variant product goes together with its variants
+  const z = (await call(app, 'POST', '/api/erp/products', b, { name: 'Zakvaska', kind: 'raw', unit: 'g', hasVariants: true, variants: '499, 505' })).body.id;
+  assert.equal((await call(app, 'DELETE', `/api/erp/products/${z}`, b)).status, 200);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM products WHERE name LIKE 'Zakvaska%'").get().n, 0);
+  // the storekeeper cannot delete
+  assert.equal((await call(app, 'DELETE', `/api/erp/products/${idish}`, await store(app))).status, 403);
+  void idish;
+});

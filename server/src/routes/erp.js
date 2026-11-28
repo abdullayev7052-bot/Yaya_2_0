@@ -195,6 +195,49 @@ export default async function erpRoutes(app, { db }) {
     return { ok: true };
   });
 
+  // Delete a product for good (Ombor → Mahsulotlar). Only when nothing would be
+  // left pointing at it: no stock in any warehouse or stage, no documents or
+  // movements in its history, not used in a recipe, not the collectors' milk.
+  // A variant parent goes together with its variants. Returns the reasons it
+  // can't be deleted, or [] when it can.
+  const deleteBlockers = (p) => {
+    const ids = [p.id, ...db.prepare('SELECT id FROM products WHERE parent_id = ?').all(p.id).map((x) => x.id)];
+    const inList = `(${ids.map(() => '?').join(',')})`;
+    const why = [];
+    if (p.kind === 'milk') why.push("Yig'uvchilar suti — Sut yig'ish bo'limida boshqariladi");
+    if (ids.map(String).includes(db.prepare("SELECT value FROM settings WHERE key = 'erp_milk_product'").get()?.value)) why.push("Bu Sut omboriga kiradigan asosiy sut (Yog'li sut)");
+    const left = db.prepare(`SELECT w.name, ROUND(SUM(m.qty), 3) AS qty FROM stock_moves m JOIN warehouses w ON w.id = m.warehouse_id
+      WHERE m.product_id IN ${inList} GROUP BY m.warehouse_id HAVING ABS(SUM(m.qty)) > 0.0005`).all(...ids);
+    if (left.length) why.push(`Omborda qoldig'i bor: ${left.map((x) => `${x.name} — ${fmtQ(x.qty)}`).join(', ')}`);
+    const held = db.prepare(`SELECT ROUND(SUM(qty), 3) AS q FROM stock_moves WHERE product_id IN ${inList} AND holder_id IS NOT NULL`).get(...ids).q;
+    if (held && Math.abs(held) > 0.0005) why.push(`Xodim qo'lida: ${fmtQ(held)}`);
+    if (!left.length && (db.prepare(`SELECT 1 FROM doc_lines WHERE product_id IN ${inList} LIMIT 1`).get(...ids)
+      || db.prepare(`SELECT 1 FROM stock_moves WHERE product_id IN ${inList} LIMIT 1`).get(...ids)
+      || db.prepare(`SELECT 1 FROM collections WHERE product_id IN ${inList} LIMIT 1`).get(...ids))) {
+      why.push("Hujjatlar tarixida bor (kirim, chiqim, ishlab chiqarish) — hisobotlar buzilmasligi uchun o'chirib bo'lmaydi; \"Faol\" belgisini olib qo'ying");
+    }
+    const recs = db.prepare(`SELECT DISTINCT r.name FROM recipes r WHERE r.product_id IN ${inList}
+      OR r.id IN (SELECT recipe_id FROM recipe_lines WHERE product_id IN ${inList})
+      OR r.id IN (SELECT recipe_id FROM recipe_outputs WHERE product_id IN ${inList})
+      OR r.id IN (SELECT l.recipe_id FROM recipe_alts a JOIN recipe_lines l ON l.id = a.line_id WHERE a.product_id IN ${inList})`).all(...ids, ...ids, ...ids, ...ids);
+    if (recs.length) why.push(`Tarkiblarda ishlatilgan: ${recs.map((r) => r.name).join(', ')} — avval tarkibdan olib tashlang`);
+    return { ids, why };
+  };
+  const fmtQ = (n) => String(Math.round(n * 1000) / 1000);
+  app.delete('/products/:id', need('catalog.manage'), async (req, reply) => {
+    const p = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
+    if (!p) return reply.code(404).send({ error: 'Topilmadi' });
+    const { ids, why } = deleteBlockers(p);
+    if (why.length) return bad(reply, `"${p.name}" ni o'chirib bo'lmaydi: ${why.join('; ')}`);
+    const inList = `(${ids.map(() => '?').join(',')})`;
+    db.transaction(() => {
+      for (const t of ['plan_lines', 'product_prices', 'product_stages', 'supplier_products']) db.prepare(`DELETE FROM ${t} WHERE product_id IN ${inList}`).run(...ids);
+      db.prepare(`DELETE FROM products WHERE id IN ${inList}`).run(...ids);
+    })();
+    log(req, 'products.delete', { id: p.id, name: p.name, variants: ids.length - 1 });
+    return { ok: true };
+  });
+
   // ---------------------------------------------------------------- warehouses
   const warehouseRow = (w) => ({
     ...w, kind_label: w.is_stage ? 'Bosqich' : WAREHOUSE_KINDS[w.kind] ?? w.kind, stage_type_label: w.is_stage ? STAGE_TYPES[w.stage_type] : null,

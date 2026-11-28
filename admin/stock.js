@@ -372,7 +372,7 @@ const stockTabs = {
         <td class="num">${x.netto_g ?? ''}</td><td class="num">${x.brutto_g ?? ''}</td><td>${x.volume != null ? `${fmtNum(x.volume, 4)} ${esc(x.volume_unit ?? '')}` : ''}</td>
         <td>${esc(m.shapes[x.shape] ?? '')}</td><td class="num">${x.shelf_life_hours ?? ''}</td>
         <td>${x.has_variants ? list.filter((c) => c.parent_id === x.id).map((c) => `<span class="badge">${esc(c.variant)}</span>`).join(' ') : ''}${x.for_sale ? ' <span class="badge sent" title="Kg hisobida ham sotiladi">sotuvda</span>' : ''}${x.as_raw ? ' <span class="badge" title="Xomashyo sifatida ham ishlatiladi">xomashyo</span>' : ''}${x.kind === 'finished' && can('prod.manage') ? ` <button class="ghost small" data-tex="${x.id}">Tex karta</button>` : ''}</td>
-        <td>${can('catalog.manage') && x.kind !== 'milk' ? `<button class="ghost small" data-edit="${x.id}">Tahrirlash</button>` : x.kind === 'milk' ? '<span class="muted" title="Sut yig\'ish bo\'limida tahrirlanadi">Sut yig\'ish</span>' : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="muted">Mahsulot yo\'q</td></tr>'}
+        <td>${can('catalog.manage') && x.kind !== 'milk' ? `<button class="ghost small" data-edit="${x.id}">Tahrirlash</button> <button class="ghost small danger" data-del="${x.id}" title="Butunlay o'chirish (omborda qoldig'i bo'lmasa)">🗑</button>` : x.kind === 'milk' ? '<span class="muted" title="Sut yig\'ish bo\'limida tahrirlanadi">Sut yig\'ish</span>' : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="muted">Mahsulot yo\'q</td></tr>'}
       </tbody></table></div>
       <p class="muted">"Yig'uvchilar suti" (Yog'li / Yog'siz sut) sut yig'ish bo'limidagi "Mahsulotlar" sahifasida boshqariladi. Omborga ("Sut ombori") ular bitta "Yog'li sut" bo'lib kiradi — u "Asosiy xomashyo".</p>`;
     $('#kind', box).onchange = (e) => setHash('stock', { tab: 'mahsulot', kind: e.target.value });
@@ -411,6 +411,16 @@ const stockTabs = {
     $('#impP', box)?.addEventListener('click', () => setHash('stock', { tab: 'import' }));
     $$('[data-tex]', box).forEach((b) => { b.onclick = act(() => texCard(Number(b.dataset.tex))); });
     $$('[data-edit]', box).forEach((b) => { b.onclick = () => edit(list.find((x) => x.id === Number(b.dataset.edit))); });
+    // Delete for good: the server refuses (and says why) while there is stock,
+    // history or a recipe that uses it.
+    $$('[data-del]', box).forEach((b) => { b.onclick = act(async () => {
+      const x = list.find((y) => y.id === Number(b.dataset.del));
+      const vars = list.filter((c) => c.parent_id === x.id).length;
+      if (!confirm(`"${x.name}"${vars ? ` va uning ${vars} ta varianti` : ''} butunlay o'chirilsinmi? Qaytarib bo'lmaydi.`)) return;
+      await erp('DELETE', `/products/${x.id}`);
+      flash(`"${x.name}" o'chirildi`);
+      route();
+    }); });
   },
 
   async ogoh(box) {
