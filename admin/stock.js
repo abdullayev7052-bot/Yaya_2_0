@@ -14,7 +14,7 @@ const DOC_STATUS = {
 };
 const docBadge = (s) => `<span class="badge ${DOC_STATUS[s]?.[1] ?? ''}">${DOC_STATUS[s]?.[0] ?? esc(s)}</span>`;
 const STOCK_TABS = [
-  ['qoldiq', 'Qoldiqlar'], ['hujjat', 'Hujjatlar'], ['ombor', 'Omborlar'], ['mahsulot', 'Mahsulotlar'],
+  ['qoldiq', 'Qoldiqlar'], ['hujjat', 'Hujjatlar'], ['ombor', 'Omborlar'], ['turlar', 'Ombor turlari'], ['mahsulot', 'Mahsulotlar'],
   ['ogoh', 'Ogohlantirishlar'], ['sozlama', 'Sozlamalar'], ['import', 'Excel import'],
 ];
 
@@ -358,21 +358,82 @@ const stockTabs = {
     $$('[data-edit]', box).forEach((b) => { b.onclick = () => edit(list.find((w) => w.id === Number(b.dataset.edit))); });
   },
 
+  // "Ombor turlari": which product kinds live in which warehouse. One warehouse per
+  // type; a product goes to its kind's warehouse (and moves when that changes).
+  async turlar(box) {
+    const [{ types, kinds }, whs] = await Promise.all([erp('GET', '/warehouse-types'), erp('GET', '/warehouses')]);
+    const manage = can('stock.manage');
+    const free = Object.keys(kinds).filter((k) => !types.some((t) => t.product_kinds.includes(k)));
+    box.innerHTML = `
+      <div class="row" style="margin-bottom:12px;justify-content:space-between">
+        <p class="muted" style="margin:0;flex:1">Mahsulot ochilganda yoki turi o'zgartirilganda u o'z turidagi omborga tushadi (masalan "Etiketka" → Etiketka ombori).
+          Har bir turga bitta ombor biriktiriladi. Tur ombori o'zgarsa, mahsulotlar qoldig'i shu zahoti yangi omborga o'tadi.</p>
+        ${manage ? '<button id="newT">+ Ombor turi</button>' : ''}
+      </div>
+      <div class="card table-wrap"><table><thead><tr><th>Ombor turi</th><th>Mahsulot turlari</th><th>Ombori</th><th class="num">Mahsulotlar</th><th></th></tr></thead><tbody>
+      ${types.map((t) => `<tr><td><b>${esc(t.name)}</b></td><td>${t.kind_labels.map((k) => `<span class="badge">${esc(k)}</span>`).join(' ') || '<span class="muted">—</span>'}</td>
+        <td>${t.warehouse ? esc(t.warehouse) : '<span class="warn">biriktirilmagan — birinchi mahsulotda o\'zi yaratiladi</span>'}</td><td class="num">${t.products || ''}</td>
+        <td>${manage ? `<button class="ghost small" data-edit="${t.id}">Tahrirlash</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Ombor turi yo\'q</td></tr>'}
+      </tbody></table></div>
+      ${free.length ? `<p class="warn">Hech bir turga biriktirilmagan mahsulot turlari: ${free.map((k) => esc(kinds[k])).join(', ')} — ular o'z omboriga tushmaydi.</p>` : ''}
+      <p class="muted">"Yarim tayyor (quyma)" bosqichlarda turadi, shuning uchun bu ro'yxatda yo'q. Yig'uvchilar suti faqat Sut yig'ish bo'limida.</p>`;
+    const edit = (t = null) => {
+      const dlg = $('#dlg');
+      const taken = (k) => types.find((x) => x.id !== t?.id && x.product_kinds.includes(k));
+      const usedWh = (w) => types.find((x) => x.id !== t?.id && x.warehouse_id === w.id);
+      dlg.innerHTML = `<form method="dialog"><h2>${t ? 'Ombor turini tahrirlash' : 'Yangi ombor turi'}</h2>
+        <label>Nomi<input name="name" required value="${esc(t?.name ?? '')}" placeholder="masalan Etiketka ombori"></label>
+        <div><div class="muted" style="font-size:13px;margin-bottom:4px">Qaysi mahsulot turlari shu omborga tushadi</div>
+          <div class="checks">${Object.entries(kinds).map(([k, label]) => {
+            const o = taken(k);
+            return `<label title="${o ? esc(`Hozir: ${o.name}`) : ''}"><input type="checkbox" name="kind" value="${k}" ${t?.product_kinds.includes(k) ? 'checked' : ''}> ${esc(label)}${o ? ` <span class="muted">(${esc(o.name)})</span>` : ''}</label>`;
+          }).join('')}</div>
+          <p class="muted" style="margin:4px 0 0">Boshqa turdagi belgini tanlasangiz, avval o'sha turdan olib tashlang.</p></div>
+        <label>Ombori<select name="warehouseId" data-plain><option value="">— tanlanmagan —</option><option value="new">+ Shu nomda yangi ombor yaratish</option>
+          ${whs.filter((w) => w.active).map((w) => { const u = usedWh(w); return `<option value="${w.id}" ${w.id === t?.warehouse_id ? 'selected' : ''} ${u ? 'disabled' : ''}>${esc(w.name)}${w.is_stage ? ' (bosqich)' : ''}${u ? ` — ${esc(u.name)}` : ''}</option>`; }).join('')}</select></label>
+        <p class="err" id="dlgErr"></p>
+        <div class="actions">${t ? '<button type="button" class="ghost danger" id="delT">O\'chirish</button>' : ''}<button type="button" class="ghost" value="cancel">Bekor</button><button value="ok">Saqlash</button></div></form>`;
+      const form = $('form', dlg);
+      $('button[value=cancel]', dlg).onclick = () => dlg.close();
+      $('#delT', dlg)?.addEventListener('click', async () => {
+        if (!confirm(`"${t.name}" turi o'chirilsinmi? (Ombor o'zi qoladi.)`)) return;
+        try { await erp('DELETE', `/warehouse-types/${t.id}`); dlg.close(); route(); } catch (ex) { $('#dlgErr').textContent = ex.message; }
+      });
+      form.onsubmit = async (e) => {
+        e.preventDefault();
+        const f = form.elements;
+        const body = { name: f.name.value, productKinds: $$('input[name=kind]:checked', form).map((x) => x.value), warehouseId: f.warehouseId.value || null };
+        try {
+          const r = await (t ? erp('PATCH', `/warehouse-types/${t.id}`, body) : erp('POST', '/warehouse-types', body));
+          dlg.close();
+          erpMeta = null;
+          flash(r.moved ? `Saqlandi. ${r.moved} ta hujjat bilan qoldiqlar yangi omborga o'tdi.` : 'Saqlandi');
+          route();
+        } catch (ex) { $('#dlgErr').textContent = ex.message; }
+      };
+      dlg.showModal();
+    };
+    $('#newT', box)?.addEventListener('click', () => edit());
+    $$('[data-edit]', box).forEach((b) => { b.onclick = () => edit(types.find((x) => x.id === Number(b.dataset.edit))); });
+  },
+
   async mahsulot(box) {
     const p = hashParams();
     const kind = p.get('kind') || '';
-    const [list, m] = await Promise.all([erp('GET', `/products?active=all${kind ? `&kind=${kind}` : ''}`), loadMeta()]);
+    const [list, m, wt] = await Promise.all([erp('GET', `/products?active=all${kind ? `&kind=${kind}` : ''}`), loadMeta(), erp('GET', '/warehouse-types')]);
+    // where each product kind goes (Ombor turlari)
+    const homeOf = (k) => { const t = wt.types.find((x) => x.product_kinds.includes(k)); return t ? (t.warehouse ?? t.name) : null; };
     box.innerHTML = `
       <div class="row" style="margin-bottom:12px;justify-content:space-between">
         <label style="max-width:280px">Turi<select id="kind"><option value="">Hammasi</option>${optionsHtml(Object.entries(m.productKinds), kind)}</select></label>
         <div class="row" style="flex:none">${can('catalog.manage') ? '<button class="ghost" id="impP">⬆ Excel\'dan import</button><button id="newP">+ Mahsulot</button>' : ''}</div>
       </div>
-      <div class="card table-wrap"><table><thead><tr><th>Nomi</th><th>Turi</th><th>Birlik</th><th class="num">Netto, g</th><th class="num">Brutto, g</th><th>Hajm</th><th>Shakl</th><th class="num">Yaroqlilik, soat</th><th>Variantlar</th><th></th></tr></thead><tbody>
-      ${list.filter((x) => !x.parent_id).map((x) => `<tr class="${x.active ? '' : 'voided'}"><td><b>${esc(x.name)}</b>${x.sku ? ` <span class="muted">${esc(x.sku)}</span>` : ''}</td><td>${esc(x.kind_label)}</td><td>${esc(x.unit)}</td>
+      <div class="card table-wrap"><table><thead><tr><th>Nomi</th><th>Turi</th><th>Ombori</th><th>Birlik</th><th class="num">Netto, g</th><th class="num">Brutto, g</th><th>Hajm</th><th>Shakl</th><th class="num">Yaroqlilik, soat</th><th>Variantlar</th><th></th></tr></thead><tbody>
+      ${list.filter((x) => !x.parent_id).map((x) => `<tr class="${x.active ? '' : 'voided'}"><td><b>${esc(x.name)}</b>${x.sku ? ` <span class="muted">${esc(x.sku)}</span>` : ''}</td><td>${esc(x.kind_label)}</td><td class="muted">${esc(homeOf(x.kind) ?? (x.kind === 'semi' ? 'bosqichda' : '—'))}</td><td>${esc(x.unit)}</td>
         <td class="num">${x.netto_g ?? ''}</td><td class="num">${x.brutto_g ?? ''}</td><td>${x.volume != null ? `${fmtNum(x.volume, 4)} ${esc(x.volume_unit ?? '')}` : ''}</td>
         <td>${esc(m.shapes[x.shape] ?? '')}</td><td class="num">${x.shelf_life_hours ?? ''}</td>
         <td>${x.has_variants ? list.filter((c) => c.parent_id === x.id).map((c) => `<span class="badge">${esc(c.variant)}</span>`).join(' ') : ''}${x.for_sale ? ' <span class="badge sent" title="Kg hisobida ham sotiladi">sotuvda</span>' : ''}${x.as_raw ? ' <span class="badge" title="Xomashyo sifatida ham ishlatiladi">xomashyo</span>' : ''}${x.kind === 'finished' && can('prod.manage') ? ` <button class="ghost small" data-tex="${x.id}">Tex karta</button>` : ''}</td>
-        <td>${can('catalog.manage') && x.kind !== 'milk' ? `<button class="ghost small" data-edit="${x.id}">Tahrirlash</button> <button class="ghost small danger" data-del="${x.id}" title="Butunlay o'chirish (omborda qoldig'i bo'lmasa)">🗑</button>` : x.kind === 'milk' ? '<span class="muted" title="Sut yig\'ish bo\'limida tahrirlanadi">Sut yig\'ish</span>' : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="muted">Mahsulot yo\'q</td></tr>'}
+        <td>${can('catalog.manage') && x.kind !== 'milk' ? `<button class="ghost small" data-edit="${x.id}">Tahrirlash</button> <button class="ghost small danger" data-del="${x.id}" title="Butunlay o'chirish (omborda qoldig'i bo'lmasa)">🗑</button>` : x.kind === 'milk' ? '<span class="muted" title="Sut yig\'ish bo\'limida tahrirlanadi">Sut yig\'ish</span>' : ''}</td></tr>`).join('') || '<tr><td colspan="11" class="muted">Mahsulot yo\'q</td></tr>'}
       </tbody></table></div>
       <p class="muted">Sut yig'uvchilar olib keladigan sut (Yog'li / Yog'siz sut) bu yerda va tarkib, ishlab chiqarish, hujjatlarda ko'rinmaydi —
       u faqat Sut yig'ish bo'limida (xonadonlar, hisobotlar). Qabul qilingan sut omborga ("Sut ombori") bitta "Yog'li sut" bo'lib kiradi — u "Asosiy xomashyo".</p>`;
@@ -408,10 +469,22 @@ const stockTabs = {
         if (x && d.addVariants) await erp('POST', `/products/${x.id}/variants`, { variants: d.addVariants });
       },
     });
-    $('#newP', box)?.addEventListener('click', () => edit());
+    // under "Turi": which warehouse the product will go to
+    const withHint = (x) => {
+      edit(x);
+      const sel = $('#dlg select[name=kind]');
+      if (!sel) return;
+      const hint = document.createElement('span');
+      hint.className = 'muted';
+      const show = () => { const h = homeOf(sel.value); hint.textContent = h ? `→ Ombori: ${h}` : sel.value === 'semi' ? '→ bosqichlarda turadi' : "→ hech bir ombor turiga biriktirilmagan (Ombor turlari)"; };
+      sel.closest('label').append(hint);
+      sel.addEventListener('change', show);
+      show();
+    };
+    $('#newP', box)?.addEventListener('click', () => withHint());
     $('#impP', box)?.addEventListener('click', () => setHash('stock', { tab: 'import' }));
     $$('[data-tex]', box).forEach((b) => { b.onclick = act(() => texCard(Number(b.dataset.tex))); });
-    $$('[data-edit]', box).forEach((b) => { b.onclick = () => edit(list.find((x) => x.id === Number(b.dataset.edit))); });
+    $$('[data-edit]', box).forEach((b) => { b.onclick = () => withHint(list.find((x) => x.id === Number(b.dataset.edit))); });
     // Delete for good: the server refuses (and says why) while there is stock,
     // history or a recipe that uses it.
     $$('[data-del]', box).forEach((b) => { b.onclick = act(async () => {

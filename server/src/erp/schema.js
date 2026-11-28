@@ -233,6 +233,17 @@ CREATE TABLE IF NOT EXISTS recipe_outputs (
 
 -- Piece rates of a recipe, per unit of output (e.g. "Quyish" 170 so'm per jar).
 -- Several workers on one task share it equally.
+-- "Ombor turlari": which product kinds live in which warehouse. Each type lists
+-- product kinds (a kind belongs to one type at most) and has ONE warehouse (a
+-- warehouse serves one type at most). A product goes to its kind's warehouse.
+CREATE TABLE IF NOT EXISTS warehouse_types (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  product_kinds TEXT NOT NULL DEFAULT '[]',
+  warehouse_id INTEGER UNIQUE REFERENCES warehouses(id),
+  sort INTEGER NOT NULL DEFAULT 0
+);
+
 -- "Qo'shimcha xarajatlar": piece-wage types kept once (Quyish, Qopqoq yopish...)
 -- with their rate per unit. A recipe picks them instead of typing a name and sum
 -- every time; the amount added to the cost is the type's rate.

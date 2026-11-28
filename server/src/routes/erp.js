@@ -7,7 +7,7 @@ import { makeGuard } from '../auth.js';
 import { getSetting, setSetting } from '../settings.js';
 import { PRODUCT_KINDS, REASON_EFFECTS, REASON_SECTIONS, SHAPES, STAGE_TYPES, WAREHOUSE_KINDS } from '../erp/schema.js';
 import {
-  DOC_TYPES, StockError, addAlert, cancelDoc, createDoc, createOpeningByKind, docDetail, homeWarehouse, moveToHome, inbox, inventoryPreview, listDocs, lotReport, milkWarehouse, parseHolder, postDoc,
+  DOC_TYPES, StockError, addAlert, cancelDoc, createDoc, createOpeningByKind, docDetail, ensureWarehouseTypes, homeWarehouse, moveToHome, typeOfKind, inbox, inventoryPreview, listDocs, lotReport, milkWarehouse, parseHolder, postDoc,
   rejectDoc, staffBalance, stockCard, stockReport, updateDraft,
 } from '../erp/stock.js';
 import { erpImport, erpTemplate, importKinds, templateFile } from '../erp/importer.js';
@@ -249,6 +249,82 @@ export default async function erpRoutes(app, { db }) {
     return { ok: true };
   });
 
+  // ---------------------------------------------------------------- "Ombor turlari"
+  // Which product kinds live in which warehouse: a type lists product kinds (each
+  // kind in one type at most) and has ONE warehouse (each warehouse in one type).
+  // Products of those kinds go there; when a kind's warehouse changes, their stock
+  // moves there at once.
+  const TYPE_KINDS = Object.keys(PRODUCT_KINDS).filter((k) => k !== 'milk' && k !== 'semi');
+  const typeRow = (t) => {
+    const kinds = JSON.parse(t.product_kinds || '[]');
+    const w = t.warehouse_id ? db.prepare('SELECT id, name, active FROM warehouses WHERE id = ?').get(t.warehouse_id) : null;
+    return { id: t.id, name: t.name, sort: t.sort, product_kinds: kinds, kind_labels: kinds.map((k) => PRODUCT_KINDS[k] ?? k), warehouse_id: w?.id ?? null, warehouse: w?.name ?? null,
+      products: kinds.length ? db.prepare(`SELECT COUNT(*) n FROM products WHERE kind IN (${kinds.map(() => '?').join(',')})`).get(...kinds).n : 0 };
+  };
+  const listTypes = () => { ensureWarehouseTypes(db); return db.prepare('SELECT * FROM warehouse_types ORDER BY sort, id').all().map(typeRow); };
+  app.get('/warehouse-types', need(), async () => ({ types: listTypes(), kinds: Object.fromEntries(TYPE_KINDS.map((k) => [k, PRODUCT_KINDS[k]])) }));
+  const homesOf = () => Object.fromEntries(TYPE_KINDS.map((k) => [k, typeOfKind(db, k)?.warehouse_id ?? null]));
+  const saveType = (req, reply, t) => {
+    const b = req.body ?? {};
+    const name = str(b.name ?? t?.name, 80);
+    if (!name) return bad(reply, 'Nomi shart');
+    if (db.prepare('SELECT 1 FROM warehouse_types WHERE lower(name) = lower(?) AND id <> ?').get(name, t?.id ?? 0)) return bad(reply, 'Bunday nomli tur bor');
+    const kinds = [...new Set(Array.isArray(b.productKinds) ? b.productKinds.map(String) : JSON.parse(t?.product_kinds || '[]'))];
+    const badKind = kinds.find((k) => !TYPE_KINDS.includes(k));
+    if (badKind) return bad(reply, `Mahsulot turi noto'g'ri: ${badKind}`);
+    for (const k of kinds) {
+      const other = db.prepare('SELECT name, product_kinds FROM warehouse_types WHERE id <> ?').all(t?.id ?? 0).find((x) => JSON.parse(x.product_kinds || '[]').includes(k));
+      if (other) return bad(reply, `"${PRODUCT_KINDS[k]}" allaqachon "${other.name}" turida`);
+    }
+    // the warehouse: an existing one (serving no other type), or "new" — one named after the type
+    let wid = b.warehouseId === undefined ? t?.warehouse_id ?? null : b.warehouseId === 'new' ? 'new' : (Number(b.warehouseId) || null);
+    if (wid && wid !== 'new') {
+      if (!db.prepare('SELECT 1 FROM warehouses WHERE id = ? AND active = 1').get(wid)) return bad(reply, 'Ombor topilmadi');
+      const other = db.prepare('SELECT name FROM warehouse_types WHERE warehouse_id = ? AND id <> ?').get(wid, t?.id ?? 0);
+      if (other) return bad(reply, `Bu ombor "${other.name}" turiga biriktirilgan — bitta omborga bitta tur`);
+    }
+    const before = homesOf();
+    let id;
+    let moved = 0;
+    try {
+      db.transaction(() => {
+        if (wid === 'new') wid = Number(db.prepare("INSERT INTO warehouses (name, kind) VALUES (?, 'general')").run(
+          db.prepare('SELECT 1 FROM warehouses WHERE name = ?').get(name) ? `${name} (yangi)` : name).lastInsertRowid);
+        if (t) {
+          db.prepare('UPDATE warehouse_types SET name = ?, product_kinds = ?, warehouse_id = ? WHERE id = ?').run(name, JSON.stringify(kinds), wid, t.id);
+          id = t.id;
+        } else {
+          id = Number(db.prepare('INSERT INTO warehouse_types (name, product_kinds, warehouse_id, sort) VALUES (?, ?, ?, (SELECT COALESCE(MAX(sort), 0) + 1 FROM warehouse_types))')
+            .run(name, JSON.stringify(kinds), wid).lastInsertRowid);
+        }
+        // collected milk goes where the main raw material lives
+        if (kinds.includes('main_raw') && wid) setSetting(db, 'erp_milk_warehouse', wid);
+        const after = homesOf();
+        for (const k of TYPE_KINDS) {
+          if (before[k] === after[k] && !(after[k] == null && typeOfKind(db, k))) continue;
+          for (const pr of db.prepare('SELECT id FROM products WHERE kind = ? AND has_variants = 0').all(k)) moved += moveToHome(db, pr.id, req.actor).length;
+        }
+      })();
+    } catch (e) { return stockErr(reply, e); }
+    log(req, t ? 'warehouse_type.update' : 'warehouse_type.create', { id, name, kinds, warehouseId: wid, moved });
+    return { id, moved, type: listTypes().find((x) => x.id === id) };
+  };
+  app.post('/warehouse-types', need('stock.manage'), async (req, reply) => saveType(req, reply, null));
+  app.patch('/warehouse-types/:id', need('stock.manage'), async (req, reply) => {
+    const t = db.prepare('SELECT * FROM warehouse_types WHERE id = ?').get(Number(req.params.id));
+    if (!t) return reply.code(404).send({ error: 'Topilmadi' });
+    return saveType(req, reply, t);
+  });
+  app.delete('/warehouse-types/:id', need('stock.manage'), async (req, reply) => {
+    const t = db.prepare('SELECT * FROM warehouse_types WHERE id = ?').get(Number(req.params.id));
+    if (!t) return reply.code(404).send({ error: 'Topilmadi' });
+    const kinds = JSON.parse(t.product_kinds || '[]');
+    if (kinds.length) return bad(reply, `Avval mahsulot turlarini boshqa turga o'tkazing: ${kinds.map((k) => PRODUCT_KINDS[k] ?? k).join(', ')}`);
+    db.prepare('DELETE FROM warehouse_types WHERE id = ?').run(t.id);
+    log(req, 'warehouse_type.delete', { id: t.id, name: t.name });
+    return { ok: true };
+  });
+
   // ---------------------------------------------------------------- warehouses
   const warehouseRow = (w) => ({
     ...w, kind_label: w.is_stage ? 'Bosqich' : WAREHOUSE_KINDS[w.kind] ?? w.kind, stage_type_label: w.is_stage ? STAGE_TYPES[w.stage_type] : null,
@@ -296,6 +372,11 @@ export default async function erpRoutes(app, { db }) {
     const id = Number(req.body?.warehouseId);
     if (!db.prepare('SELECT 1 FROM warehouses WHERE id = ? AND active = 1').get(id)) return bad(reply, 'Ombor topilmadi');
     setSetting(db, 'erp_milk_warehouse', id);
+    // the type that holds the main raw material follows
+    const t = typeOfKind(db, 'main_raw');
+    if (t && t.warehouse_id !== id && !db.prepare('SELECT 1 FROM warehouse_types WHERE warehouse_id = ? AND id <> ?').get(id, t.id)) {
+      db.prepare('UPDATE warehouse_types SET warehouse_id = ? WHERE id = ?').run(id, t.id);
+    }
     return { ok: true, warehouseId: milkWarehouse(db) };
   });
 

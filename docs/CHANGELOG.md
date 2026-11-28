@@ -2,6 +2,12 @@
 
 Eng yangisi tepada. Qavs ichida Android `versionCode`.
 
+## Yaya 2.0 — Ombor turlari, 2026-11-28
+- Ombor → **Ombor turlari**: har bir tur qaysi mahsulot turlari (Xomashyo, Idish, Etiketka, Tayyor...) qaysi omborda turishini belgilaydi.
+  Bitta turga bitta ombor (yoki "shu nomda yangi ombor yaratish"); bitta mahsulot turi bitta ombor turida. Boshida hozirgi tartibdan to'ldirildi.
+- Mahsulot ochishda / tahrirlashda "Turi" ostida qaysi omborga tushishi ko'rinadi; Mahsulotlar ro'yxatida "Ombori" ustuni.
+- Tur ombori yoki tarkibi o'zgarsa, mahsulotlar qoldig'i shu zahoti yangi omborga o'tadi. 82 ta test.
+
 ## Yaya 2.0 — Hisobotlar va harakatlarni tozalash, 2026-11-28
 - Sozlamalarda yangi tozalash turi (o'sha 3 qadam: tushundim, misol, parol + "HISOBOTLARNI TOZALASH"): barcha hisobotlar,
   smenalar, topshiriqlar, rejalar, qoldiqlar, hujjatlar (boshlang'ich qoldiq, xarid, o'tkazish, hisobdan chiqarish, inventarizatsiya),

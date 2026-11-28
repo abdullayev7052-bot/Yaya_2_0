@@ -579,17 +579,48 @@ export function milkWarehouse(db) {
 // warehouse, packaging and labels in the packaging warehouse, finished goods in
 // the finished-goods warehouse... (semi-finished goods live on the stages, so
 // they have none). A missing warehouse is created.
-const HOME_NAME = { raw: 'Xomashyo ombori', pack: 'Idish ombori', finished: 'Tayyor mahsulot ombori', recycle: 'Qayta ishlash', general: 'Boshqa ombor' };
-const HOME_KIND = { raw: 'raw', pack: 'pack', label: 'pack', finished: 'finished', returned: 'recycle', recycled: 'recycle', other: 'general' };
+// The first time, the types are made from how things were kept so far.
+const TYPE_SEED = [
+  ['Sut ombori', ['main_raw'], 'raw_milk'], ['Xomashyo ombori', ['raw'], 'raw'], ['Idish ombori', ['pack', 'label'], 'pack'],
+  ['Tayyor mahsulot ombori', ['finished'], 'finished'], ['Qayta ishlash', ['returned', 'recycled'], 'recycle'], ['Boshqa ombor', ['other'], 'general'],
+];
+export function ensureWarehouseTypes(db) {
+  if (getSetting(db, 'warehouse_types_seeded')) return;
+  db.transaction(() => {
+    if (!db.prepare('SELECT 1 FROM warehouse_types LIMIT 1').get()) {
+      const used = new Set();
+      TYPE_SEED.forEach(([name, kinds, wk], i) => {
+        let w = wk === 'raw_milk' ? milkWarehouse(db)
+          : db.prepare('SELECT id FROM warehouses WHERE kind = ? AND active = 1 ORDER BY is_stage, sort, id LIMIT 1').get(wk)?.id ?? null;
+        if (w && used.has(w)) w = null;
+        if (w) used.add(w);
+        db.prepare('INSERT OR IGNORE INTO warehouse_types (name, product_kinds, warehouse_id, sort) VALUES (?, ?, ?, ?)').run(name, JSON.stringify(kinds), w, i);
+      });
+    }
+    setSetting(db, 'warehouse_types_seeded', '1');
+  })();
+}
+export const typeOfKind = (db, kind) => {
+  ensureWarehouseTypes(db);
+  return db.prepare('SELECT * FROM warehouse_types ORDER BY sort, id').all().find((t) => JSON.parse(t.product_kinds || '[]').includes(kind)) ?? null;
+};
+// A type's warehouse; a type without one gets a warehouse of its own name.
+export function typeWarehouse(db, t) {
+  if (t.warehouse_id && db.prepare('SELECT 1 FROM warehouses WHERE id = ? AND active = 1').get(t.warehouse_id)) return t.warehouse_id;
+  const id = Number(db.prepare("INSERT INTO warehouses (name, kind) VALUES (?, 'general')").run(
+    db.prepare('SELECT 1 FROM warehouses WHERE name = ?').get(t.name) ? `${t.name} (${t.id})` : t.name).lastInsertRowid);
+  db.prepare('UPDATE warehouse_types SET warehouse_id = ? WHERE id = ?').run(id, t.id);
+  return id;
+}
+// Every product has its own warehouse by its kind, through "Ombor turlari"
+// (Etiketka → the type that lists labels → its warehouse). A kind no type lists
+// (semi-finished goods live on the stages) has none.
 export function homeWarehouse(db, productId) {
   const p = db.prepare('SELECT kind FROM products WHERE id = ?').get(productId);
   if (!p) return null;
-  if (p.kind === 'main_raw') return milkWarehouse(db);
-  const wk = HOME_KIND[p.kind];
-  if (!wk) return null;
-  const w = db.prepare('SELECT id FROM warehouses WHERE kind = ? AND active = 1 ORDER BY is_stage, sort, id LIMIT 1').get(wk)?.id;
-  if (w) return w;
-  return Number(db.prepare('INSERT INTO warehouses (name, kind) VALUES (?, ?)').run(HOME_NAME[wk], wk).lastInsertRowid);
+  const t = typeOfKind(db, p.kind);
+  if (!t) return p.kind === 'main_raw' ? milkWarehouse(db) : null;
+  return typeWarehouse(db, t);
 }
 
 // Opening stock with "by kind": each line goes to its product's own warehouse —

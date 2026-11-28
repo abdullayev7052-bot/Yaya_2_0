@@ -135,7 +135,7 @@ export const HISTORY_TABLES = [
 export const KEEP_TABLES = [
   'roles', 'users', 'devices', 'settings', 'files', 'audit_log', 'backups',
   'suppliers', 'supplier_products', 'employee_suppliers', 'employee_hidden_suppliers', 'tg_households',
-  'products', 'units', 'warehouses', 'warehouse_keepers', 'product_stages', 'stock_reasons', 'pnl_categories', 'wage_types',
+  'products', 'units', 'warehouses', 'warehouse_keepers', 'warehouse_types', 'product_stages', 'stock_reasons', 'pnl_categories', 'wage_types',
   'recipes', 'recipe_lines', 'recipe_alts', 'recipe_outputs', 'recipe_rates', 'recipe_limits',
   'customer_types', 'customers', 'product_prices', 'return_types', 'payment_methods', 'cashboxes', 'cashbox_keepers', 'vendors',
   'kiosks', 'kiosk_users',

@@ -547,3 +547,31 @@ test('delete the current production work: pouring first (it used the quyma), the
   assert.equal(bal(db, S.produce, p.siyro).q, 0);
   assert.equal((await call(app, 'POST', '/api/erp/prod/delete-active', T.tech, { stage: 'produce', password: 'pass1234' })).status, 403);
 });
+
+test('Ombor turlari: a type lists product kinds and has one warehouse; moving "Etiketka" to its own type moves its stock', async () => {
+  const { app, db, b, post, wh } = await plant();
+  const label = await post(b, '/api/erp/products', { name: 'Etiketka 5%', kind: 'label', unit: 'dona' });
+  await post(b, '/api/erp/docs', { type: 'opening', to: 'auto', lines: [{ productId: label.id, qty: 300, unitCost: 20 }] });
+  assert.equal(bal(db, wh.pack, label.id).q, 300, 'labels start with packaging');
+  const { types } = (await call(app, 'GET', '/api/erp/warehouse-types', b)).body;
+  const packType = types.find((t) => t.product_kinds.includes('label'));
+  assert.equal(packType.warehouse_id, wh.pack);
+  // a kind can be in one type only
+  assert.equal((await call(app, 'POST', '/api/erp/warehouse-types', b, { name: 'Etiketka ombori', productKinds: ['label'], warehouseId: 'new' })).status, 400);
+  // a warehouse serves one type only
+  await call(app, 'PATCH', `/api/erp/warehouse-types/${packType.id}`, b, { productKinds: ['pack'] });
+  assert.equal((await call(app, 'POST', '/api/erp/warehouse-types', b, { name: 'Etiketka ombori', productKinds: ['label'], warehouseId: wh.pack })).status, 400);
+  // its own type with a new warehouse: the labels move there at once
+  const r = await post(b, '/api/erp/warehouse-types', { name: 'Etiketka ombori', productKinds: ['label'], warehouseId: 'new' });
+  assert.equal(r.moved, 1);
+  const lw = r.type.warehouse_id;
+  assert.equal(db.prepare('SELECT name FROM warehouses WHERE id = ?').get(lw).name, 'Etiketka ombori');
+  assert.equal(bal(db, wh.pack, label.id).q, 0);
+  assert.deepEqual(bal(db, lw, label.id), { q: 300, c: 6000 });
+  // a new label product goes there too
+  const l2 = await post(b, '/api/erp/products', { name: 'Etiketka 10%', kind: 'label', unit: 'dona' });
+  await post(b, '/api/erp/docs', { type: 'opening', to: 'auto', lines: [{ productId: l2.id, qty: 10, unitCost: 20 }] });
+  assert.equal(bal(db, lw, l2.id).q, 10);
+  // a type with kinds cannot be deleted; an empty one can
+  assert.equal((await call(app, 'DELETE', `/api/erp/warehouse-types/${r.id}`, b)).status, 400);
+});
