@@ -287,7 +287,7 @@ function cleanLines(db, lines, { needCost = false, allowZero = false } = {}) {
   if (lines.length > 2000) throw new StockError('Juda ko\'p qator');
   return lines.map((l, i) => {
     const productId = Number(l?.productId);
-    const p = Number.isInteger(productId) && db.prepare('SELECT id, name, has_variants FROM products WHERE id = ?').get(productId);
+    const p = Number.isInteger(productId) && db.prepare("SELECT id, name, has_variants FROM products WHERE id = ? AND kind <> 'milk'").get(productId);
     if (!p) throw new StockError(`${i + 1}-qator: mahsulot topilmadi`);
     if (p.has_variants) throw new StockError(`${p.name}: variantini tanlang (masalan "${p.name} / ...")`);
     const qty = r3(l.qty);

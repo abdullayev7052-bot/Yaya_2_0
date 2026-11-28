@@ -49,7 +49,7 @@ export default async function erpRoutes(app, { db }) {
 
   // ---------------------------------------------------------------- reference data
   app.get('/meta', need(), async (req) => ({
-    productKinds: PRODUCT_KINDS,
+    productKinds: Object.fromEntries(Object.entries(PRODUCT_KINDS).filter(([k]) => k !== 'milk')),
     warehouseKinds: WAREHOUSE_KINDS,
     shapes: SHAPES,
     docTypes: Object.fromEntries(Object.entries(DOC_TYPES).map(([k, v]) => [k, v.label])),
@@ -94,7 +94,9 @@ export default async function erpRoutes(app, { db }) {
   const PRODUCT_FIELDS = ['sku', 'barcode', 'category', 'volume_unit', 'note'];
   const PRODUCT_NUMS = ['netto_g', 'brutto_g', 'volume', 'shelf_life_hours', 'dwell_hours'];
   app.get('/products', need(), async (req) => {
-    const where = []; const args = [];
+    // Collectors' milk (Yog'li / Yog'siz sut) is never listed in the warehouse,
+    // production or recipes: it lives only in Sut yig'ish (households, reports).
+    const where = ["kind <> 'milk'"]; const args = [];
     if (req.query.kind) { where.push('kind = ?'); args.push(String(req.query.kind)); }
     if (req.query.active !== 'all') where.push('active = 1');
     // ?stock=1: only products that can hold stock (no variant parents).

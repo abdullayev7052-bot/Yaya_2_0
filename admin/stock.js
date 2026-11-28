@@ -374,7 +374,8 @@ const stockTabs = {
         <td>${x.has_variants ? list.filter((c) => c.parent_id === x.id).map((c) => `<span class="badge">${esc(c.variant)}</span>`).join(' ') : ''}${x.for_sale ? ' <span class="badge sent" title="Kg hisobida ham sotiladi">sotuvda</span>' : ''}${x.as_raw ? ' <span class="badge" title="Xomashyo sifatida ham ishlatiladi">xomashyo</span>' : ''}${x.kind === 'finished' && can('prod.manage') ? ` <button class="ghost small" data-tex="${x.id}">Tex karta</button>` : ''}</td>
         <td>${can('catalog.manage') && x.kind !== 'milk' ? `<button class="ghost small" data-edit="${x.id}">Tahrirlash</button> <button class="ghost small danger" data-del="${x.id}" title="Butunlay o'chirish (omborda qoldig'i bo'lmasa)">🗑</button>` : x.kind === 'milk' ? '<span class="muted" title="Sut yig\'ish bo\'limida tahrirlanadi">Sut yig\'ish</span>' : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="muted">Mahsulot yo\'q</td></tr>'}
       </tbody></table></div>
-      <p class="muted">"Yig'uvchilar suti" (Yog'li / Yog'siz sut) sut yig'ish bo'limidagi "Mahsulotlar" sahifasida boshqariladi. Omborga ("Sut ombori") ular bitta "Yog'li sut" bo'lib kiradi — u "Asosiy xomashyo".</p>`;
+      <p class="muted">Sut yig'uvchilar olib keladigan sut (Yog'li / Yog'siz sut) bu yerda va tarkib, ishlab chiqarish, hujjatlarda ko'rinmaydi —
+      u faqat Sut yig'ish bo'limida (xonadonlar, hisobotlar). Qabul qilingan sut omborga ("Sut ombori") bitta "Yog'li sut" bo'lib kiradi — u "Asosiy xomashyo".</p>`;
     $('#kind', box).onchange = (e) => setHash('stock', { tab: 'mahsulot', kind: e.target.value });
     const kinds = Object.entries(m.productKinds).filter(([k]) => k !== 'milk');
     const edit = (x = null) => openForm({

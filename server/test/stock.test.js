@@ -331,3 +331,16 @@ test('a product is deleted for good only with no stock, no history and no recipe
   assert.equal((await call(app, 'DELETE', `/api/erp/products/${idish}`, await store(app))).status, 403);
   void idish;
 });
+
+test("collectors' milk is never offered in the warehouse, recipes or production", async () => {
+  const { app, db, ids } = setup();
+  const { b, fin } = await base(app, db, ids);
+  const milk = db.prepare("SELECT id FROM products WHERE kind = 'milk' LIMIT 1").get().id;
+  const list = (await call(app, 'GET', '/api/erp/products?active=all', b)).body;
+  assert.ok(list.length && !list.some((p) => p.kind === 'milk'), 'not listed');
+  assert.ok(!('milk' in (await call(app, 'GET', '/api/erp/meta', b)).body.productKinds));
+  // a document with it is refused
+  assert.equal((await opening(app, b, fin, [{ productId: milk, qty: 5, unitCost: 1 }])).status, 400);
+  // still there for collectors
+  assert.ok((await call(app, 'GET', '/api/mobile/bootstrap', await ali(app))).body.products.some((p) => p.id === milk));
+});

@@ -30,7 +30,7 @@ export function savePlan(db, day, lines, actor) {
   if (day < today()) throw new StockError("O'tgan kunning rejasini o'zgartirib bo'lmaydi");
   const clean = new Map();
   for (const l of Array.isArray(lines) ? lines : []) {
-    const p = db.prepare('SELECT id, name, kind FROM products WHERE id = ?').get(Number(l.productId));
+    const p = db.prepare("SELECT id, name, kind FROM products WHERE id = ? AND kind <> 'milk'").get(Number(l.productId));
     if (!p) throw new StockError('Mahsulot topilmadi');
     if (p.kind !== 'finished') throw new StockError(`"${p.name}" — reja faqat tayyor mahsulot uchun`);
     const q = r3(l.qty);

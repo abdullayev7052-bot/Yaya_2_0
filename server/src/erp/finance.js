@@ -148,7 +148,7 @@ export function createPurchase(db, b, { actor, userId }) {
     if (!wh) throw new StockError('Omborni tanlang');
     if (!Array.isArray(b.lines) || !b.lines.length) throw new StockError('Kamida bitta mahsulot kiriting');
     const lines = b.lines.map((l, i) => {
-      const p = db.prepare('SELECT * FROM products WHERE id = ?').get(Number(l.productId));
+      const p = db.prepare("SELECT * FROM products WHERE id = ? AND kind <> 'milk'").get(Number(l.productId));
       if (!p) throw new StockError(`${i + 1}-qator: mahsulot topilmadi`);
       const qty = r3(l.qty); const price = num(l.price);
       if (!(qty > 0)) throw new StockError(`${p.name}: miqdor noto'g'ri`);

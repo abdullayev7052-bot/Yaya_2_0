@@ -57,6 +57,9 @@ const EPS = 0.0005;
 const nowIso = () => new Date().toISOString();
 const J = (v) => (v ? JSON.parse(v) : null);
 const product = (db, id) => db.prepare('SELECT * FROM products WHERE id = ?').get(id);
+// Collectors' milk (Yog'li / Yog'siz sut, kind "milk") lives only in Sut yig'ish: it never
+// goes into a recipe, a production task or a document, so it is "not found" here.
+const usable = (db, id) => { const p = product(db, id); return p && p.kind !== 'milk' ? p : undefined; };
 const variantsOf = (db, id) => db.prepare('SELECT id, name, variant FROM products WHERE parent_id = ? AND active = 1 ORDER BY variant, id').all(id);
 
 // Weight in kg of a quantity in the product's own unit (for limits and loss shares).
@@ -144,12 +147,12 @@ export function saveRecipe(db, id, b) {
   // Reprocessing takes the expired product itself: one unit per unit.
   const rawLines = kind === 'reprocess' ? [{ productId, qty: 1 }] : (Array.isArray(b.lines) ? b.lines : []);
   const lines = rawLines.map((l, i) => {
-    const p = product(db, num(l.productId));
+    const p = usable(db, num(l.productId));
     if (!p) throw new StockError(`${i + 1}-qator: mahsulot topilmadi`);
     const qty = Number(l.qty);
     if (!(qty > 0)) throw new StockError(`${p.name}: miqdor musbat bo'lsin`);
     const alts = (Array.isArray(l.alts) ? l.alts : []).map((a) => {
-      const ap = product(db, num(a.productId));
+      const ap = usable(db, num(a.productId));
       if (!ap) throw new StockError(`${p.name}: alternativ mahsulot topilmadi`);
       const aq = num(a.qty);
       if (aq != null && !(aq > 0)) throw new StockError(`${ap.name}: miqdor musbat bo'lsin`);
@@ -162,7 +165,7 @@ export function saveRecipe(db, id, b) {
     throw new StockError("Tayyorlash tarkibida kamida bitta asosiy xomashyo (Yog'li sut yoki Yog'siz sut) bo'lishi shart");
   }
   const outputs = kind === 'reprocess' ? (Array.isArray(b.outputs) ? b.outputs : []).map((o) => {
-    const p = product(db, num(o.productId));
+    const p = usable(db, num(o.productId));
     if (!p) throw new StockError('Chiqadigan mahsulot topilmadi');
     const value = num(o.costValue) ?? 0;
     if (!(value >= 0)) throw new StockError(`${p.name}: tannarx manfiy bo'lmasin`);
@@ -172,7 +175,7 @@ export function saveRecipe(db, id, b) {
     }
     return { productId: p.id, mode: 'fixed', value, perUnit: per, minPerUnit: mn, maxPerUnit: mx, container: !!o.isContainer };
   }) : kind === 'separation' ? (Array.isArray(b.outputs) ? b.outputs : []).map((o) => {
-    const p = product(db, num(o.productId));
+    const p = usable(db, num(o.productId));
     if (!p) throw new StockError('Chiqadigan mahsulot topilmadi');
     const mode = ['fixed', 'percent', 'rest'].includes(o.costMode) ? o.costMode : 'rest';
     const value = num(o.costValue);
@@ -546,7 +549,7 @@ function resolveVariant(db, t, r, l) {
 function cleanQtyLines(db, lines, what) {
   if (!Array.isArray(lines) || !lines.length) throw new StockError(`${what}: kamida bitta qator`);
   return lines.map((l) => {
-    const p = product(db, Number(l.productId));
+    const p = usable(db, Number(l.productId));
     if (!p) throw new StockError(`${what}: mahsulot topilmadi`);
     const qty = r3(l.qty);
     if (!(qty >= 0)) throw new StockError(`${p.name}: miqdor noto'g'ri`);
