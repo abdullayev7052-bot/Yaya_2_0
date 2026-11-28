@@ -2,6 +2,10 @@
 
 Eng yangisi tepada. Qavs ichida Android `versionCode`.
 
+## Yaya 2.0 — Ishlab chiqarish → Smenalar, 2026-11-28
+- "Texnolog smenalari" endi **Smenalar**: Texnolog (smenalar), Quyish, Qopqoq yopish, Qayta ishlash (Yaroqli / Yaroqsiz) — bajarilgan
+  topshiriqlar kim bajargani bilan; sana va **Xodim** bo'yicha filtr. "Amaldagi ishni o'chirish"da qayta ishlash bosqichlari ham bor.
+
 ## Yaya 2.0 — Ombor turlari, 2026-11-28
 - Ombor → **Ombor turlari**: har bir tur qaysi mahsulot turlari (Xomashyo, Idish, Etiketka, Tayyor...) qaysi omborda turishini belgilaydi.
   Bitta turga bitta ombor (yoki "shu nomda yangi ombor yaratish"); bitta mahsulot turi bitta ombor turida. Boshida hozirgi tartibdan to'ldirildi.

@@ -67,27 +67,53 @@ function closeBlock(s) {
     ${s.approval_note ? `<p class="muted">Rahbar izohi: ${esc(s.approval_note)}</p>` : ''}</div>`;
 }
 
+// "Smenalar": the work of each stage. Texnolog — the technologist's shifts; Quyish,
+// Qopqoq yopish, Qayta ishlash (Yaroqli / Yaroqsiz) — the tasks done there.
+// Filtered by dates and by the worker.
+const SHIFT_STAGES = [['produce', 'Texnolog'], ['pour', 'Quyish'], ['cap', 'Qopqoq yopish'], ['reprocess', 'Qayta ishlash']];
 views.prod = async (v) => {
   const q = hashParams();
-  const f = { status: q.get('status') || '', from: q.get('from') || addDays(todayLocal(), -6), to: q.get('to') || todayLocal() };
-  const [list, staff] = await Promise.all([prodApi('GET', `/shifts?${new URLSearchParams(Object.entries(f).filter(([, x]) => x))}`),
-    can('staff.manage') ? api('GET', '/staff/names') : []]);
-  v.innerHTML = `<div class="card"><div class="presets">${[['', 'Hammasi'], ['open', 'Ochiq'], ['approval', 'Tasdiq kutmoqda'], ['closed', 'Yopilgan']]
-      .map(([k, t]) => `<button class="ghost small ${k === f.status ? 'on' : ''}" data-st="${k}">${t}</button>`).join('')}</div>
-    <div class="row" style="margin-top:8px"><label>Dan <input type="date" id="from" value="${f.from}"></label><label>Gacha <input type="date" id="to" value="${f.to}"></label></div></div>
-    <div class="card table-wrap"><table><thead><tr><th>Smena</th><th>Texnolog</th><th>Holati</th><th>Ochildi</th><th>Yopildi</th><th class="num">Topshiriq</th><th class="num">Sut ishlatildi, kg</th></tr></thead><tbody>
-    ${list.map((s) => `<tr><td><a href="#prod-shift?id=${s.id}">${esc(s.label)}</a></td><td>${esc(s.user_name)}</td><td>${badge(PSHIFT, s.status)}</td>
-      <td>${fmtDate(s.opened_at)}</td><td>${fmtDate(s.closed_at)}</td><td class="num">${s.tasks.n}</td><td class="num">${fmtNum(s.tasks.milk, 3)}</td></tr>`).join('')
-      || '<tr><td colspan="7" class="muted">Smena yo\'q. Texnolog ilovada "Ishlab chiqarish" bo\'limidan smena ochadi.</td></tr>'}
-    </tbody></table></div>
+  const f = { stage: q.get('stage') || 'produce', sub: q.get('sub') || 'reprocess_ok', status: q.get('status') || '', userId: q.get('userId') || '',
+    from: q.get('from') || addDays(todayLocal(), -6), to: q.get('to') || todayLocal() };
+  const code = f.stage === 'reprocess' ? f.sub : f.stage;
+  const [stages, staff] = await Promise.all([prodApi('GET', '/stages'), api('GET', '/staff/names').catch(() => [])]);
+  const st = stages.find((x) => x.code === code);
+  const tech = f.stage === 'produce';
+  const qs = (o) => new URLSearchParams(Object.entries(o).filter(([, x]) => x));
+  const list = tech
+    ? await prodApi('GET', `/shifts?${qs({ status: f.status, userId: f.userId, from: f.from, to: f.to })}`)
+    : st ? await prodApi('GET', `/journal?${qs({ stageId: st.id, userId: f.userId, from: f.from, to: f.to })}`) : [];
+  const go = (patch) => setHash('prod', { ...f, ...patch });
+  v.innerHTML = `<div class="card">
+      <div class="presets">${SHIFT_STAGES.map(([k, t]) => `<button class="ghost small ${k === f.stage ? 'on' : ''}" data-stage="${k}">${t}</button>`).join('')}</div>
+      ${f.stage === 'reprocess' ? `<div class="presets" style="margin-top:8px">${[['reprocess_ok', 'Yaroqli'], ['reprocess_bad', 'Yaroqsiz']]
+        .map(([k, t]) => `<button class="ghost small ${k === f.sub ? 'on' : ''}" data-sub="${k}">${t}</button>`).join('')}</div>` : ''}
+      ${tech ? `<div class="presets" style="margin-top:8px">${[['', 'Hammasi'], ['open', 'Ochiq'], ['approval', 'Tasdiq kutmoqda'], ['closed', 'Yopilgan']]
+        .map(([k, t]) => `<button class="ghost small ${k === f.status ? 'on' : ''}" data-st="${k}">${t}</button>`).join('')}</div>` : ''}
+      <div class="row" style="margin-top:8px"><label>Dan <input type="date" id="from" value="${f.from}"></label><label>Gacha <input type="date" id="to" value="${f.to}"></label>
+        <label>Xodim <select id="emp"><option value="">Hammasi</option>${staff.map((u) => `<option value="${u.id}" ${String(u.id) === f.userId ? 'selected' : ''}>${esc(u.name || u.login)}</option>`).join('')}</select></label></div></div>
+    ${tech ? `<div class="card table-wrap"><table><thead><tr><th>Smena</th><th>Texnolog</th><th>Holati</th><th>Ochildi</th><th>Yopildi</th><th class="num">Topshiriq</th><th class="num">Sut ishlatildi, kg</th></tr></thead><tbody>
+      ${list.map((s) => `<tr><td><a href="#prod-shift?id=${s.id}">${esc(s.label)}</a></td><td>${esc(s.user_name)}</td><td>${badge(PSHIFT, s.status)}</td>
+        <td>${fmtDate(s.opened_at)}</td><td>${fmtDate(s.closed_at)}</td><td class="num">${s.tasks.n}</td><td class="num">${fmtNum(s.tasks.milk, 3)}</td></tr>`).join('')
+        || '<tr><td colspan="7" class="muted">Smena yo\'q. Texnolog ilovada "Ishlab chiqarish" bo\'limidan smena ochadi.</td></tr>'}
+      </tbody></table></div>`
+    : `<div class="card table-wrap">${st ? '' : `<p class="warn">"${esc(code)}" bosqichi topilmadi (Bosqichlar va xarita).</p>`}
+      <p class="muted" style="margin-top:0">${st ? `${esc(st.name)}: bu bosqichda smena ochilmaydi — har bir bajarilgan ish (topshiriq) shu yerda, kim bajargani bilan.` : ''}
+        ${list.length ? ` Jami: <b>${list.length}</b> ta topshiriq, chiqdi <b>${fmtNum(list.filter((t) => t.status === 'done').reduce((a, t) => a + (t.outputs?.[0]?.qty ?? 0), 0), 3)}</b>.` : ''}</p>
+      <table><thead><tr><th>Vaqt</th><th>Topshiriq</th><th>Kim bajardi</th><th>Nima</th><th>Qatnashganlar</th><th>Holati</th></tr></thead><tbody>
+      ${list.map((t) => `<tr><td>${fmtDate(t.done_at || t.created_at)}</td><td>${esc(t.label ?? '')}</td><td>${esc(t.user_name ?? '')}</td>
+        <td>${esc(t.recipe ?? '')} ${(t.outputs.length ? t.outputs : (t.result?.outputs ?? [])).map((o) => `${esc(o.product ?? '')}: <b>${fmtNum(o.qty, 3)} ${esc(o.unit ?? '')}</b>`).join(', ')}</td>
+        <td class="muted">${(t.wages?.length ? t.wages : t.workers).map((w) => `${esc(w.name)}${costs() && w.amount != null ? ` (${fmtMoney(w.amount)})` : ''}`).join(', ')}</td>
+        <td>${badge(PTASK, t.status)}${t.cancel_reason ? `<div class="err">${esc(t.cancel_reason)}</div>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">Bu davrda ish yo\'q</td></tr>'}
+      </tbody></table></div>`}
     ${can('staff.manage') ? `<div class="card"><h3>🗑 Amaldagi ishni o'chirish</h3>
       <p class="muted"><b>Texnolog</b> — yopilmagan (ochiq yoki tasdiq kutayotgan) smenalar: topshiriqlari bekor qilinadi (xomashyo omborga qaytadi),
-        tanlangan yig'uvchi smenalari bo'shaydi, smena o'chadi. <b>Quyish, Qopqoq yopish</b> va boshqa bosqichlar — tugallanmagan va bugungi topshiriqlar bekor qilinadi.
+        tanlangan yig'uvchi smenalari bo'shaydi, smena o'chadi. <b>Quyish, Qopqoq yopish, Qayta ishlash</b> va boshqa bosqichlar — tugallanmagan va bugungi topshiriqlar bekor qilinadi.
         Mahsulot keyingi bosqichga o'tib bo'lgan bo'lsa, hech narsa o'chmaydi — avval keyingi bosqichdagini o'chiring. Tiklash nusxasi 3 kun saqlanadi.</p>
       <form id="delWork" class="row">
-        <label>Bosqich <select name="stage" data-plain><option value="produce">Texnolog (Ishlab chiqarish)</option><option value="pour">Quyuvchi (Quyish)</option>
-          <option value="cap">Qopqoq yopuvchi (Qopqoq yopish)</option><option value="pack">Qadoqlash</option></select></label>
-        <label>Xodim <select name="userId"><option value="">Hammasi</option>${staff.map((u) => `<option value="${u.id}">${esc(u.name || u.login)}</option>`).join('')}</select></label>
+        <label>Bosqich <select name="stage" data-plain>${[['produce', 'Texnolog (Ishlab chiqarish)'], ['pour', 'Quyuvchi (Quyish)'], ['cap', 'Qopqoq yopuvchi (Qopqoq yopish)'], ['pack', 'Qadoqlash'],
+          ['reprocess_ok', 'Qayta ishlash — Yaroqli'], ['reprocess_bad', 'Qayta ishlash — Yaroqsiz']].map(([k, t]) => `<option value="${k}" ${k === code ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+        <label>Xodim <select name="userId"><option value="">Hammasi</option>${staff.map((u) => `<option value="${u.id}" ${String(u.id) === f.userId ? 'selected' : ''}>${esc(u.name || u.login)}</option>`).join('')}</select></label>
         <label>Admin paroli <input name="password" type="password" required autocomplete="current-password"></label>
         <button class="danger">O'chirish</button></form></div>` : ''}`;
   $('#delWork', v) && ($('#delWork', v).onsubmit = async (e) => {
@@ -100,9 +126,12 @@ views.prod = async (v) => {
       route();
     } catch (err) { flash(err.message, 'err'); }
   });
-  $$('[data-st]', v).forEach((b) => { b.onclick = () => setHash('prod', { ...f, status: b.dataset.st }); });
-  $('#from', v).onchange = (e) => setHash('prod', { ...f, from: e.target.value });
-  $('#to', v).onchange = (e) => setHash('prod', { ...f, to: e.target.value });
+  $$('[data-stage]', v).forEach((b) => { b.onclick = () => go({ stage: b.dataset.stage, status: '' }); });
+  $$('[data-sub]', v).forEach((b) => { b.onclick = () => go({ sub: b.dataset.sub }); });
+  $$('[data-st]', v).forEach((b) => { b.onclick = () => go({ status: b.dataset.st }); });
+  $('#from', v).onchange = (e) => go({ from: e.target.value });
+  $('#to', v).onchange = (e) => go({ to: e.target.value });
+  $('#emp', v).onchange = (e) => go({ userId: e.target.value });
 };
 
 views['prod-shift'] = async (v) => {
@@ -573,7 +602,7 @@ PAGES.push(
   ['prod-plan-report', 'Reja hisoboti', ['prod.manage', 'prod.view'], 'prod'],
   ['prod-stages', 'Bosqichlar va xarita', ['prod.manage', 'prod.view'], 'prod'],
   ['prod-journal', 'Jurnal', ['prod.view', 'prod.approve', 'prod.manage'], 'prod'],
-  ['prod', 'Texnolog smenalari', ['prod.view', 'prod.approve', 'prod.manage'], 'prod'],
+  ['prod', 'Smenalar', ['prod.view', 'prod.approve', 'prod.manage'], 'prod'],
   ['prod-approvals', 'Tasdiqlash', 'prod.approve', 'prod'],
   ['prod-recipes', 'Tarkiblar', ['prod.manage', 'prod.view'], 'prod'],
   ['prod-reasons', 'Yo\'qotish sabablari', 'prod.manage', 'prod'],
