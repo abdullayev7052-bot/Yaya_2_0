@@ -424,7 +424,25 @@ const views = {
           <label>Xodim <select id="emp"><option value="">Hammasi</option>${emps.map((e) => `<option value="${e.id}" ${String(e.id) === params.employee ? 'selected' : ''}>${esc(e.name || e.login)}</option>`).join('')}</select></label>
         </div>
       </div>
-      <div class="card">${shiftRows(rows)}</div>`;
+      <div class="card">${shiftRows(rows)}</div>
+      ${can('staff.manage') ? `<div class="card"><h3>🗑 Amaldagi smenalarni o'chirish</h3>
+        <p class="muted">Sut yig'uvchilarning qabul qilinmagan barcha smenalari (ochiq, tahrirda, qabul kutayotgan, bekor qilingan
+        va ularning nusxalari) yozuvlari bilan o'chiriladi. Qabul qilingan smenalar qoladi. Telefonlardagi nusxalar ham keyingi
+        sinxronlashda o'chadi. Tiklash nusxasi 3 kun saqlanadi.</p>
+        <form id="delActive" class="row"><label>Xodim <select name="employee"><option value="">Barcha sut yig'uvchilar</option>
+          ${emps.map((e) => `<option value="${e.id}">${esc(e.name || e.login)}</option>`).join('')}</select></label>
+          <label>Admin paroli <input name="password" type="password" required autocomplete="current-password"></label>
+          <button class="danger">O'chirish</button></form></div>` : ''}`;
+    $('#delActive', v) && ($('#delActive', v).onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      if (!confirm("Amaldagi (qabul qilinmagan) smenalar yozuvlari bilan o'chirilsinmi?")) return;
+      try {
+        const r = await api('POST', '/shifts/delete-active', { password: f.password.value, employee: f.employee.value || null });
+        flash(r.deleted.length ? `O'chirildi: ${r.deleted.join(', ')}. Tiklash nusxasi #${r.safety}.` : "O'chiriladigan smena yo'q");
+        route();
+      } catch (err) { flash(err.message, 'err'); }
+    });
     $$('[data-st]', v).forEach((b) => { b.onclick = () => setHash('shifts', { ...params, status: b.dataset.st }); });
     $('#from', v) && ($('#from', v).onchange = (e) => setHash('shifts', { ...params, from: e.target.value }));
     $('#to', v) && ($('#to', v).onchange = (e) => setHash('shifts', { ...params, to: e.target.value }));

@@ -266,6 +266,32 @@ export function copyShift(db, id, actor) {
   return next;
 }
 
+// Delete the collectors' current shifts: every shift whose number is not settled
+// by an accepted shift (open, editing, waiting, cancelled and its copies), with all
+// its entries. Accepted shifts — real milk in the warehouse, debts to households —
+// are never touched. Optional: only one collector's. Returns the labels deleted.
+export function deleteActiveShifts(db, actor, { employee = null } = {}) {
+  const groups = db.prepare(`SELECT employee_id, number FROM shifts ${employee ? 'WHERE employee_id = ?' : ''}
+    GROUP BY employee_id, number HAVING MAX(status = 'accepted') = 0`).all(...(employee ? [employee] : []));
+  const done = [];
+  db.transaction(() => {
+    const pick = db.prepare('SELECT * FROM shifts WHERE employee_id = ? AND number = ? ORDER BY id DESC');
+    for (const g of groups) {
+      for (const s of pick.all(g.employee_id, g.number)) {
+        db.prepare('UPDATE shifts SET copied_from = NULL WHERE copied_from = ?').run(s.id);
+        db.prepare('DELETE FROM collections WHERE shift_uuid = ?').run(s.client_uuid);
+        db.prepare('DELETE FROM shift_accepts WHERE shift_id = ?').run(s.id);
+        db.prepare('DELETE FROM shifts WHERE id = ?').run(s.id);
+        db.prepare('INSERT OR REPLACE INTO deleted_shifts (client_uuid, employee_id, label, deleted_by) VALUES (?, ?, ?, ?)')
+          .run(s.client_uuid, s.employee_id, shiftLabel(s), actor);
+        done.push(shiftLabel(s));
+      }
+    }
+  })();
+  if (done.length) emitEvent(db, 'shift.deleted', { shifts: done, by: actor });
+  return done;
+}
+
 // Shift list with totals, for reviewers and the live view.
 export function listShifts(db, { from, to, status, employee, limit = 500 }) {
   return db.prepare(`

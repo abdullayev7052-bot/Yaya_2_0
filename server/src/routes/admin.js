@@ -8,7 +8,7 @@ import { summary, exportRows, toCsv, parseRange, dailyCost, todayLocal, diffRepo
 import { balances, statement, supplierBalance } from '../ledger.js';
 import { templateXlsx, importSuppliers, exportSuppliersXlsx } from '../importer.js';
 import { CONFIRM_KEYS, confirmFlags, diffFlags, getSetting, setSetting } from '../settings.js';
-import { ShiftError, acceptShift, cancelShift, copyShift, listShifts, shiftCopyText, shiftDetail, shiftLabel } from '../shifts.js';
+import { ShiftError, acceptShift, cancelShift, copyShift, deleteActiveShifts, listShifts, shiftCopyText, shiftDetail, shiftLabel } from '../shifts.js';
 import { purchaseList, purchaseBreakdown, purchaseRows } from '../purchases.js';
 import { intg, setIntg, reloadBots, sendBackup, checkToken, notifyHousehold } from '../integrations.js';
 import { decrypt, encrypt, listSafety, loadSafety, restore, saveSafety, snapshot } from '../backup.js';
@@ -485,6 +485,18 @@ export default async function adminRoutes(app, { db }) {
       log(req, 'shift.cancel', { shift: shiftLabel(s), employee: u?.name, reason: s.cancel_reason });
       return { ok: true };
     } catch (e) { return shiftErr(reply, e); }
+  });
+
+  // Delete the collectors' current (not accepted) shifts with their entries.
+  // Admin only, re-confirmed with the admin's own password; a safety copy is kept
+  // for 3 days. Phones drop their copies at the next sync.
+  app.post('/shifts/delete-active', need('staff.manage'), async (req, reply) => {
+    const b = req.body ?? {};
+    if (!checkPassword(req, b.password)) return bad(reply, 'Admin paroli noto\'g\'ri');
+    const safety = saveSafety(db, "Amaldagi smenalarni o'chirishdan oldin", req.actor);
+    const deleted = deleteActiveShifts(db, req.actor, { employee: num(b.employee) });
+    log(req, 'shift.delete_active', { count: deleted.length, shifts: deleted, safety });
+    return { ok: true, deleted, safety };
   });
 
   app.post('/shifts/:id/copy', need('shifts.copy'), async (req, reply) => {

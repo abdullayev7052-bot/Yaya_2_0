@@ -187,3 +187,31 @@ test('CSV neutralises formula injection', () => {
   assert.ok(out.includes(`"'=HYPERLINK(""x"")"`));
   assert.ok(out.endsWith(';-5'));
 });
+
+test('delete current collector shifts: accepted ones stay, phones drop theirs, late uploads are ignored', async () => {
+  const { app, db } = setup();
+  const h = await ali(app);
+  const b = await boss(app);
+  await runShift(app, h, 'acc', [{ supplierId: 1, quantity: 20 }], { close: true });
+  await acceptAll(app, b);
+  await runShift(app, h, 'cur', [{ supplierId: 1, quantity: 7 }]);
+  assert.equal(db.prepare("SELECT status FROM shifts WHERE client_uuid = 'cur'").get().status, 'open');
+  assert.equal((await call(app, 'POST', '/api/admin/shifts/delete-active', b, { password: 'nope' })).status, 400);
+  const r = await call(app, 'POST', '/api/admin/shifts/delete-active', b, { password: 'secret123' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.deleted.length, 1);
+  assert.deepEqual(db.prepare('SELECT client_uuid FROM shifts').all().map((x) => x.client_uuid), ['acc'], 'accepted shift stays');
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM collections WHERE shift_uuid = 'cur'").get().n, 0);
+  // the phone is told to drop its copy
+  assert.deepEqual((await call(app, 'GET', '/api/mobile/bootstrap', h)).body.deletedShifts, ['cur']);
+  // a late upload of the deleted shift and its entries is accepted but ignored
+  const late = await runShift(app, h, 'cur', [{ supplierId: 1, quantity: 3 }, { supplierId: 1, quantity: 4 }], { close: true });
+  assert.deepEqual(late.shifts.accepted, ['cur']);
+  assert.equal(late.accepted.length, 2);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM shifts WHERE client_uuid = 'cur'").get().n, 0);
+  // the collector can open a new shift straight away
+  const next = await runShift(app, h, 'new', [{ supplierId: 1, quantity: 5 }]);
+  assert.deepEqual(next.shifts.accepted, ['new']);
+  // a collector cannot delete
+  assert.equal((await call(app, 'POST', '/api/admin/shifts/delete-active', h, { password: '1234' })).status, 403);
+});

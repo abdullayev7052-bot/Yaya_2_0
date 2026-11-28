@@ -2,6 +2,14 @@
 
 Eng yangisi tepada. Qavs ichida Android `versionCode`.
 
+## Yaya 2.0 — Sinxronlash tuzatildi, amaldagi smenalarni o'chirish, 2026-11-28
+- **Xato tuzatildi:** ilova kimdir kirmagan holatda (monoblok ro'yxati yoki chiqib qayta kirish) sinxronlashni boshlasa,
+  keyin internet bo'lsa ham hech narsa yuborilmas va yangilanmas edi — endi internet bo'lsa har bir yozuv darhol serverga ketadi,
+  internet yo'q bo'lsa qurilmada saqlanib, internet qaytgach o'zi yuboriladi.
+- Monoblokda bir xodimning yuborilmagan yozuvlari boshqa xodim nomidan hech qachon yuborilmaydi.
+- **Amaldagi smenalarni o'chirish** (Sut yig'ish → Smenalar, faqat admin, parol bilan): qabul qilinmagan barcha smenalar
+  yozuvlari bilan o'chadi, qabul qilinganlari qoladi; telefonlardagi nusxalar ham o'chadi; tiklash nusxasi 3 kun. 74 ta test.
+
 ## Yaya 2.0 — Reja, asosiy xomashyo, yangi smena yakuni (10-bosqich, 3-qism), 2026-11-27
 - **Reja** va **Reja hisoboti**; texnologga "Bugungi rejalar" (quyma kg), quyuvchiga mahsulot bo'yicha reja soni.
 - Tarkib: asosiy xomashyo tavsiyasi va nisbatdagi tavsiyalar (xira), boshqa xomashyo qo'shish; quyishda quyma bosqichdagidan ko'p emas.

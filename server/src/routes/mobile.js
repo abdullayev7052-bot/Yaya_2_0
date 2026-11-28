@@ -55,6 +55,9 @@ export default async function mobileRoutes(app, { db }) {
     };
     // A shift opened on the server (a copy of a cancelled one, or one reopened for
     // editing) is handed to the phone as its open shift.
+    // Shifts deleted from the panel: the phone throws its copy away.
+    out.deletedShifts = collects ? db.prepare("SELECT client_uuid FROM deleted_shifts WHERE employee_id = ? AND deleted_at > datetime('now', '-60 days')")
+      .all(me.id).map((r) => r.client_uuid) : [];
     const open = collects && db.prepare("SELECT * FROM shifts WHERE employee_id = ? AND status IN ('open', 'editing') ORDER BY opened_at DESC LIMIT 1").get(me.id);
     if (open) {
       out.openShift = {
@@ -235,6 +238,8 @@ export default async function mobileRoutes(app, { db }) {
     const out = { accepted: [], rejected: [], shifts: { accepted: [], rejected: [] }, ops: { accepted: [], rejected: [] }, payments: { accepted: [], rejected: [] } };
     const newPayments = []; // ids to notify households about, after the transaction commits
     const shiftOf = db.prepare('SELECT * FROM shifts WHERE client_uuid = ?');
+    // A shift deleted from the panel never comes back from a late upload.
+    const gone = db.prepare('SELECT 1 FROM deleted_shifts WHERE client_uuid = ?');
     // A household is usable unless it is hidden from this employee.
     const visible = (sid) => can('suppliers.view') || !isHidden(me.id, sid);
     const linked = db.prepare('SELECT 1 FROM supplier_products WHERE supplier_id = ? AND product_id = ?');
@@ -243,6 +248,7 @@ export default async function mobileRoutes(app, { db }) {
       // 1. shifts (closing happens last, after their pickups are in)
       for (const s of req.body.shifts ?? []) {
         if (!can('collect.shift')) { out.shifts.rejected.push({ uuid: s.uuid, error: 'Smena ochishga ruxsat yo\'q' }); continue; }
+        if (gone.get(s.uuid)) { out.shifts.accepted.push(s.uuid); continue; }
         const existing = shiftOf.get(s.uuid);
         if (!existing) {
           const blocking = blockingShift(db, me.id);
@@ -260,6 +266,7 @@ export default async function mobileRoutes(app, { db }) {
       for (const c of req.body.collections ?? []) {
         if (db.prepare('SELECT 1 FROM collections WHERE client_uuid = ?').get(c.uuid)) { out.accepted.push(c.uuid); continue; }
         const reject = (error) => out.rejected.push({ uuid: c.uuid, error });
+        if (gone.get(c.shiftUuid)) { out.accepted.push(c.uuid); continue; }
         const sh = shiftOf.get(c.shiftUuid);
         if (!can('collect.shift')) { reject('Sut qabul qilishga ruxsat yo\'q'); continue; }
         if (!sh || sh.employee_id !== me.id) { reject('Smena topilmadi'); continue; }

@@ -209,6 +209,17 @@ CREATE TABLE IF NOT EXISTS adjustments (
 );
 CREATE INDEX IF NOT EXISTS idx_payments_supplier ON payments(supplier_id, paid_at);
 
+-- Collector shifts deleted from the panel before they were accepted. The phone
+-- that made one drops its copy (bootstrap lists these) and a late upload of it or
+-- its entries is quietly ignored, so a deleted shift never comes back.
+CREATE TABLE IF NOT EXISTS deleted_shifts (
+  client_uuid TEXT PRIMARY KEY,
+  employee_id INTEGER,
+  label TEXT,
+  deleted_by TEXT,
+  deleted_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Offline corrections from phones already applied (makes re-sends harmless).
 CREATE TABLE IF NOT EXISTS applied_ops (
   uuid TEXT PRIMARY KEY,

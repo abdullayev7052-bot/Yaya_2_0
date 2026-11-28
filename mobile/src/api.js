@@ -289,6 +289,9 @@ export async function refreshBootstrap() {
   store.setKv('bootstrap', r);
   const s = getSession();
   if (s) store.setKv('session', { ...s, user: { ...s.user, ...r.user } });
+  // Shifts deleted from the panel go from this phone too (with their entries).
+  const local = new Set(store.allShifts().map((x) => x.uuid));
+  for (const u of r.deletedShifts ?? []) if (local.has(u)) store.discardShift(u);
   // A copy of a cancelled shift made on the server becomes the open shift here.
   if (r.openShift && !store.getOpenShift()) store.adoptShift(r.openShift);
   refreshBrand(r.brand?.version);
@@ -330,7 +333,14 @@ export const cachedKioskStaff = () => store.getKv('kioskStaff', []);
 export const kioskAlerts = () => call('GET', '/api/kiosk/alerts', null, { headers: kioskHeaders() });
 export async function kioskLogin(userId, pin) {
   const r = await call('POST', '/api/kiosk/login', { userId, pin }, { headers: kioskHeaders() });
-  // No "owner" switch here: several people share this screen by design.
+  // Several people share this screen. Field records (shifts, entries) are tied to
+  // the person who made them: with nothing unsent left, the device becomes the new
+  // person's; otherwise the earlier person's records stay and wait for them.
+  const owner = store.getKv('owner');
+  if (owner !== r.user.id && !store.unsyncedCount()) {
+    if (owner != null) store.wipeLocal();
+    store.setKv('owner', r.user.id);
+  }
   store.setKv('session', { token: r.token, user: r.user, kiosk: true });
   store.setKv('logoutReason', null);
   try { await refreshBootstrap(); } catch { /* offline */ }
@@ -417,11 +427,22 @@ export function syncNow() {
   if (inFlight) { resyncQueued = true; return inFlight; }
   inFlight = (async () => {
     flushOutbox();
-    if (!getSession()) return;
+    // NB: this early return must stay inside the async body whose `finally`
+    // clears `inFlight` (below). It used to leave `inFlight` set for ever when the
+    // first sync ran with nobody signed in (the monoblock name list, or right after
+    // a sign-out): every later sync then returned at once and nothing was sent or
+    // refreshed until the app was reloaded.
+    const sx = getSession();
+    if (!sx) return;
     emit({ syncing: true });
     try {
+      // Field records on this device belong to the person who made them. On a
+      // shared monoblock someone else may be signed in now: their records wait for
+      // their owner and are never sent under another person's name.
+      const owner = store.getKv('owner');
+      const mine = owner == null || owner === sx.user?.id;
       // Upload in batches until the queue is empty.
-      for (let i = 0; i < 50; i++) {
+      for (let i = 0; mine && i < 50; i++) {
         const p = store.pendingUpload();
         if (!p.shifts.length && !p.collections.length && !p.ops.length && !p.payments.length) break;
         const r = await call('POST', '/api/mobile/sync', {
@@ -442,10 +463,8 @@ export function syncNow() {
       emit({ syncing: false, online: true, lastSync: now, lastError: null });
     } catch (err) {
       emit({ syncing: false, lastError: err.message, ...(err.offline ? { online: false } : {}) });
-    } finally {
-      inFlight = null;
     }
-  })();
+  })().finally(() => { inFlight = null; });
   inFlight.finally(() => { if (resyncQueued) { resyncQueued = false; syncNow(); } });
   return inFlight;
 }
