@@ -3,11 +3,13 @@
 // shift (milk reconciled at its end). Managers see everything (prod.view), approve
 // over-limit tasks and shifts (prod.approve) and set stages, maps and recipes
 // (prod.manage). Sums are stripped for anyone without stock.costs.
+import bcrypt from 'bcryptjs';
 import { audit } from '../db/index.js';
+import { saveSafety } from '../backup.js';
 import { makeGuard } from '../auth.js';
 import { StockError } from '../erp/stock.js';
 import {
-  approvals, approveShift, approveTask, cancelTask, closeShift, completeTask, createTask, keepTask, listRecipes, listShifts, milkShifts, myShift, openShift,
+  approvals, approveShift, approveTask, cancelTask, closeShift, completeTask, createTask, deleteActiveWork, keepTask, listRecipes, listShifts, milkShifts, myShift, openShift,
   recipeDetail, rejectShiftApproval, rejectTaskApproval, saveRecipe, separateShift, setShiftMilk, shiftDetail, stageJournal, taskDetail,
 } from '../erp/production.js';
 import { getStage, isKeeper, keptWarehouses, productMap, saveStage, setProductMap, stageBoard, stageList, texRecipes } from '../erp/stages.js';
@@ -31,6 +33,50 @@ export default async function productionRoutes(app, { db }) {
   const runs = (req, stageId) => manager(req) || isKeeper(db, req.me.id, Number(stageId));
   const myStages = (req) => keptWarehouses(db, req.me.id).filter((id) => getStage(db, id));
   const taskOf = (id) => db.prepare('SELECT * FROM prod_tasks WHERE id = ?').get(Number(id));
+
+  // ---------------------------------------------------------------- delete the current work of a stage
+  // Admin only, re-confirmed with the admin's own password; a safety copy is kept 3 days.
+  app.post('/delete-active', need('staff.manage'), async (req, reply) => {
+    const b = req.body ?? {};
+    const row = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.me.id);
+    if (!row || !bcrypt.compareSync(String(b.password ?? ''), row.password_hash)) return bad(reply, "Admin paroli noto'g'ri");
+    const userId = Number(b.userId) || null;
+    const safety = saveSafety(db, "Amaldagi ishlab chiqarishni o'chirishdan oldin", req.actor);
+    return run(reply, () => {
+      const deleted = deleteActiveWork(db, req.actor, { stage: String(b.stage ?? ''), userId });
+      log(req, 'prod.delete_active', { stage: b.stage, userId, deleted, safety });
+      return { ok: true, deleted, safety };
+    });
+  });
+
+  // ---------------------------------------------------------------- "Qo'shimcha xarajatlar": piece-wage types
+  // Kept once (Quyish, Qopqoq yopish...) with the rate per unit; recipes pick them.
+  app.get('/wage-types', need(), async (req) => db.prepare(`SELECT w.*, (SELECT COUNT(DISTINCT recipe_id) FROM recipe_rates WHERE wage_type_id = w.id) AS recipes
+    FROM wage_types w ${req.query.all === '1' ? '' : 'WHERE w.active = 1'} ORDER BY w.active DESC, w.sort, w.name`).all());
+  const wageBody = (b, reply) => {
+    const name = String(b?.name ?? '').trim().slice(0, 60);
+    const amount = Number(b?.amount);
+    if (!name) { bad(reply, 'Nomi shart'); return null; }
+    if (!(amount >= 0)) { bad(reply, "1 birlik uchun summa noto'g'ri"); return null; }
+    return { name, amount };
+  };
+  app.post('/wage-types', need('prod.manage'), async (req, reply) => {
+    const d = wageBody(req.body, reply); if (!d) return reply;
+    if (db.prepare('SELECT 1 FROM wage_types WHERE lower(name) = lower(?)').get(d.name)) return bad(reply, 'Bunday nomli tur bor');
+    const id = Number(db.prepare('INSERT INTO wage_types (name, amount) VALUES (?, ?)').run(d.name, d.amount).lastInsertRowid);
+    log(req, 'wage_type.create', { id, ...d });
+    return { id };
+  });
+  app.patch('/wage-types/:id', need('prod.manage'), async (req, reply) => {
+    const w = db.prepare('SELECT * FROM wage_types WHERE id = ?').get(Number(req.params.id));
+    if (!w) return reply.code(404).send({ error: 'Topilmadi' });
+    const d = wageBody({ name: req.body?.name ?? w.name, amount: req.body?.amount ?? w.amount }, reply); if (!d) return reply;
+    if (db.prepare('SELECT 1 FROM wage_types WHERE lower(name) = lower(?) AND id <> ?').get(d.name, w.id)) return bad(reply, 'Bunday nomli tur bor');
+    db.prepare('UPDATE wage_types SET name = ?, amount = ?, active = COALESCE(?, active) WHERE id = ?')
+      .run(d.name, d.amount, req.body?.active == null ? null : Number(!!req.body.active), w.id);
+    log(req, 'wage_type.update', { id: w.id, ...d });
+    return { ok: true };
+  });
 
   // ---------------------------------------------------------------- stages and maps
   app.get('/stages', need(), async (req) => stageList(db, { all: req.query.all === '1' && manager(req) }));
@@ -224,7 +270,7 @@ export default async function productionRoutes(app, { db }) {
   });
   app.get('/plans/:day', need(), async (req, reply) => planOf(db, req.params.day) ?? reply.code(404).send({ error: 'Topilmadi' }));
   app.put('/plans/:day', need('prod.manage'), async (req, reply) => run(reply, () => {
-    const p = savePlan(db, req.params.day, req.body?.lines, req.actor);
+    const p = savePlan(db, req.params.day, req.body?.lines, req.actor, { suggest: req.body?.suggest });
     log(req, 'plan.save', { day: req.params.day, lines: p.lines.length });
     return p;
   }));

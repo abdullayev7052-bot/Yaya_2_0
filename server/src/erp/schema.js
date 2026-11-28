@@ -233,6 +233,16 @@ CREATE TABLE IF NOT EXISTS recipe_outputs (
 
 -- Piece rates of a recipe, per unit of output (e.g. "Quyish" 170 so'm per jar).
 -- Several workers on one task share it equally.
+-- "Qo'shimcha xarajatlar": piece-wage types kept once (Quyish, Qopqoq yopish...)
+-- with their rate per unit. A recipe picks them instead of typing a name and sum
+-- every time; the amount added to the cost is the type's rate.
+CREATE TABLE IF NOT EXISTS wage_types (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  amount REAL NOT NULL DEFAULT 0 CHECK (amount >= 0),
+  active INTEGER NOT NULL DEFAULT 1,
+  sort INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS recipe_rates (
   id INTEGER PRIMARY KEY,
   recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
@@ -564,6 +574,17 @@ export function setupErp(db, addColumn) {
   for (const [c, def] of PRODUCT_COLUMNS) addColumn('products', c, def);
   for (const [c, def] of LOT_COLUMNS) addColumn('lots', c, def);
   for (const [c, def] of REASON_COLUMNS) addColumn('stock_reasons', c, def);
+  // Whether the worker's screen shows suggested quantities (grey numbers): per
+  // recipe ("tavsiya") and per day's plan (the plan as a suggestion).
+  addColumn('recipes', 'suggest', 'INTEGER NOT NULL DEFAULT 1');
+  addColumn('plans', 'suggest', 'INTEGER NOT NULL DEFAULT 1');
+  addColumn('recipe_rates', 'wage_type_id', 'INTEGER REFERENCES wage_types(id)');
+  // Existing hand-typed rates become wage types once (same name → one type).
+  for (const r of db.prepare('SELECT DISTINCT name FROM recipe_rates WHERE wage_type_id IS NULL').all()) {
+    const amt = db.prepare('SELECT amount FROM recipe_rates WHERE name = ? AND wage_type_id IS NULL ORDER BY id DESC LIMIT 1').get(r.name).amount;
+    db.prepare('INSERT OR IGNORE INTO wage_types (name, amount) VALUES (?, ?)').run(r.name, amt);
+    db.prepare('UPDATE recipe_rates SET wage_type_id = (SELECT id FROM wage_types WHERE name = ?) WHERE name = ? AND wage_type_id IS NULL').run(r.name, r.name);
+  }
   migrateRecipeKinds(db);
   addColumn('recipes', 'max_minutes', 'REAL');
   // Reprocessing outputs (stage 5): quantity per input unit (NULL = the input's netto

@@ -118,3 +118,13 @@ code { background: color-mix(in srgb, var(--line) 50%, transparent); padding: 1p
 #subnav a { padding: 4px 10px; border-radius: 6px; color: var(--muted); text-decoration: none; font-size: 14px; }
 #subnav a.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); font-weight: 600; }
 @media (max-width: 760px) { #subnav { flex-wrap: nowrap; overflow-x: auto; } #subnav a { white-space: nowrap; } }
+
+/* Searchable dropdowns (combo.js) */
+select.combo-hidden { position: absolute !important; opacity: 0; pointer-events: none; width: 1px !important; height: 1px; min-width: 0 !important; padding: 0; margin: 0; border: 0; }
+.combo { position: relative; display: block; width: 100%; }
+.combo-in { width: 100%; }
+.combo-list { position: fixed; z-index: 1000; max-height: 280px; overflow: auto;
+  background: var(--card); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); min-width: 220px; }
+.combo-opt { padding: 7px 10px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.combo-opt.on, .combo-opt:hover { background: var(--accent); color: var(--accent-text); }
+.combo-opt.muted { color: var(--muted); }

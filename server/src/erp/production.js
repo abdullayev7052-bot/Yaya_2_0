@@ -32,7 +32,7 @@
 //   Out of range → the task / shift waits for a manager's approval.
 import { randomUUID } from 'node:crypto';
 import {
-  StockError, addAlert, addIn, allowNegative, cancelDocTx, chargeStaff, getDoc, holderName, insertMove, linkNegative, milkWarehouse, nextNumber, pnl,
+  StockError, addAlert, addIn, allowNegative, cancelDocTx, chargeStaff, getDoc, holderName, homeWarehouse, insertMove, linkNegative, milkWarehouse, nextNumber, pnl,
   negativeAlerts, productBalance, r2, r3, rawMilkProduct, revalueLot, takeOut,
 } from './stock.js';
 import { getStage, keptWarehouses, prevStage, stageByCode, texRecipe } from './stages.js';
@@ -83,7 +83,9 @@ export function recipeDetail(db, id) {
   }));
   const outputs = db.prepare(`SELECT o.*, p.name AS product, p.unit FROM recipe_outputs o JOIN products p ON p.id = o.product_id
     WHERE o.recipe_id = ? ORDER BY o.sort, o.id`).all(id);
-  const rates = db.prepare('SELECT id, name, amount FROM recipe_rates WHERE recipe_id = ? ORDER BY sort, id').all(id);
+  // the rate follows its type: changing "Quyish" in Qo'shimcha xarajatlar changes every recipe
+  const rates = db.prepare(`SELECT rr.id, COALESCE(w.name, rr.name) AS name, COALESCE(w.amount, rr.amount) AS amount, rr.wage_type_id
+    FROM recipe_rates rr LEFT JOIN wage_types w ON w.id = rr.wage_type_id WHERE rr.recipe_id = ? ORDER BY rr.sort, rr.id`).all(id);
   const limits = db.prepare('SELECT id, name, product_ids, out_min, out_max FROM recipe_limits WHERE recipe_id = ? ORDER BY sort, id').all(id)
     .map((x) => {
       const ids = JSON.parse(x.product_ids);
@@ -133,10 +135,20 @@ export function saveRecipe(db, id, b) {
     return { name: x.name ? String(x.name).trim().slice(0, 80) : null, ids, mn, mx };
   });
   if (maxMinutes != null && !(maxMinutes > 0)) throw new StockError('Muddat (daqiqa) musbat bo\'lsin');
-  const rates = (Array.isArray(b.rates) ? b.rates : []).filter((x) => String(x?.name ?? '').trim()).map((x) => {
-    const amount = Number(x.amount);
-    if (!(amount >= 0)) throw new StockError(`${x.name}: ishbay haq noto'g'ri`);
-    return { name: String(x.name).trim().slice(0, 60), amount };
+  // Piece wages are picked from the saved types ("Qo'shimcha xarajatlar"); the
+  // amount is the type's rate. (A typed name + amount is still accepted and
+  // becomes a type of its own.)
+  const rates = (Array.isArray(b.rates) ? b.rates : []).filter((x) => x?.wageTypeId || String(x?.name ?? '').trim()).map((x) => {
+    let wt = x.wageTypeId ? db.prepare('SELECT * FROM wage_types WHERE id = ?').get(Number(x.wageTypeId)) : null;
+    if (x.wageTypeId && !wt) throw new StockError("Ishbay haq turi topilmadi");
+    if (!wt) {
+      const name = String(x.name).trim().slice(0, 60);
+      const amount = Number(x.amount);
+      if (!(amount >= 0)) throw new StockError(`${name}: ishbay haq noto'g'ri`);
+      db.prepare('INSERT OR IGNORE INTO wage_types (name, amount) VALUES (?, ?)').run(name, amount);
+      wt = db.prepare('SELECT * FROM wage_types WHERE name = ?').get(name);
+    }
+    return { name: wt.name, amount: wt.amount, wageTypeId: wt.id };
   });
   // Piece wages only for pouring, packing (and capping, a stage rate) — never in production.
   if (rates.some((x) => x.amount > 0) && ['cook', 'separation'].includes(kind)) throw new StockError("Ishlab chiqarish (quyma) tarkibida ishbay haq bo'lmaydi");
@@ -197,6 +209,7 @@ export function saveRecipe(db, id, b) {
       if (!db.prepare('SELECT 1 FROM recipes WHERE id = ?').get(rid)) throw new StockError('Tarkib topilmadi');
       db.prepare('UPDATE recipes SET name = ?, kind = ?, product_id = ?, stage_id = ?, out_min = ?, out_max = ?, max_minutes = ?, note = ?, active = COALESCE(?, active), sort = COALESCE(?, sort) WHERE id = ?')
         .run(name, kind, kind !== 'separation' && !generic ? productId : null, stageId, outMin, outMax, maxMinutes, b.note ?? null, b.active == null ? null : Number(!!b.active), num(b.sort), rid);
+      if (b.suggest !== undefined) db.prepare('UPDATE recipes SET suggest = ? WHERE id = ?').run(Number(!!b.suggest), rid);
       db.prepare('DELETE FROM recipe_lines WHERE recipe_id = ?').run(rid);
       db.prepare('DELETE FROM recipe_outputs WHERE recipe_id = ?').run(rid);
       db.prepare('DELETE FROM recipe_rates WHERE recipe_id = ?').run(rid);
@@ -204,9 +217,10 @@ export function saveRecipe(db, id, b) {
     } else {
       rid = Number(db.prepare('INSERT INTO recipes (name, kind, product_id, stage_id, out_min, out_max, max_minutes, note, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
         .run(name, kind, kind !== 'separation' && !generic ? productId : null, stageId, outMin, outMax, maxMinutes, b.note ?? null, num(b.sort) ?? 0).lastInsertRowid);
+      if (b.suggest !== undefined) db.prepare('UPDATE recipes SET suggest = ? WHERE id = ?').run(Number(!!b.suggest), rid);
     }
-    const insR = db.prepare('INSERT INTO recipe_rates (recipe_id, name, amount, sort) VALUES (?, ?, ?, ?)');
-    rates.forEach((x, i) => insR.run(rid, x.name, x.amount, i));
+    const insR = db.prepare('INSERT INTO recipe_rates (recipe_id, name, amount, sort, wage_type_id) VALUES (?, ?, ?, ?, ?)');
+    rates.forEach((x, i) => insR.run(rid, x.name, x.amount, i, x.wageTypeId));
     const insLim = db.prepare('INSERT INTO recipe_limits (recipe_id, name, product_ids, out_min, out_max, sort) VALUES (?, ?, ?, ?, ?, ?)');
     limits.forEach((x, i) => insLim.run(rid, x.name, JSON.stringify(x.ids), x.mn, x.mx, i));
     const insL = db.prepare('INSERT INTO recipe_lines (recipe_id, product_id, qty, sort) VALUES (?, ?, ?, ?)');
@@ -520,6 +534,8 @@ function inputSource(db, { t, r, productId, qty }) {
   const list = [...new Set(prevs)];
   const add = (id) => { if (id && !list.includes(id)) list.push(id); };
   if (product(db, productId)?.kind === 'main_raw') { add(milkWarehouse(db)); add(sepWarehouse(db, t.user_id)); }
+  // the material's own warehouse (raw materials, packaging, labels...)
+  if (product(db, productId)?.kind !== 'main_raw') add(homeWarehouse(db, productId));
   for (const w of keptWarehouses(db, t.user_id)) if (w !== t.stage_id && !db.prepare('SELECT is_stage FROM warehouses WHERE id = ?').get(w)?.is_stage) add(w);
   for (const w of keptWarehouses(db, t.user_id)) if (w !== t.stage_id) add(w);
   // Materials kept at the stage itself come last.
@@ -539,7 +555,7 @@ function resolveVariant(db, t, r, l) {
   if (!p?.has_variants) return l;
   const vs = variantsOf(db, p.id).map((v) => {
     const prevs = [prevStage(db, v.id, t.stage_id)].filter(Boolean);
-    const places = [...prevs, ...keptWarehouses(db, t.user_id)];
+    const places = [...prevs, homeWarehouse(db, v.id), ...keptWarehouses(db, t.user_id)].filter(Boolean);
     return { id: v.id, q: Math.max(0, ...places.map((w) => productBalance(db, { warehouseId: w }, v.id))) };
   }).sort((a, b) => b.q - a.q);
   if (!vs.length || !(vs[0].q > EPS)) throw new StockError(`${p.name}: variantini tanlang (omborda hech bir varianti yo'q)`);
@@ -677,7 +693,7 @@ function postProduction(db, t, s, r, inputs, outputs, actor, note, workers, shor
   // Piece rates: part of the cost, owed to the workers (split equally).
   if (r.kind !== 'separation' && r.rates.length) {
     const units = r.kind === 'reprocess' ? inputs.reduce((a, l) => a + l.qty, 0) : outputs.reduce((a, o) => a + o.qty, 0);
-    total += payWorkers(db, ctx, workers, r2(r.rate_total * units), `TQ-${t.number}: ${r.rates.map((x) => x.name).join(', ')} (${r3(units)} × ${r.rate_total})`);
+    total += payWorkers(db, ctx, workers, r2(r.rate_total * units), `TQ-${t.number} · ${outName(db, t, r)}: ${r.rates.map((x) => `${x.name} ${x.amount}`).join(' + ')} (${r3(units)} × ${r.rate_total})`);
   }
   total = r2(total);
   // Cost of each output.
@@ -734,6 +750,12 @@ function postProduction(db, t, s, r, inputs, outputs, actor, note, workers, shor
   return id;
 }
 
+// What a task made, for the worker's statement ("TQ-12 · Qatiq 5% 400 gr: Quyish 170").
+function outName(db, t, r) {
+  const pid = J(t.plan)?.productId ?? r.product_id;
+  return (pid && product(db, pid)?.name) || r.name;
+}
+
 // Piece wage split equally between the workers (the last takes the rounding).
 function payWorkers(db, ctx, workers, wage, note) {
   if (!(wage > 0)) return 0;
@@ -779,7 +801,7 @@ export function keepTask(db, { uuid, stageId, productId, qty, workers, note }, {
     const lin = Number(ins.run(docId, p.id, q, JSON.stringify({ role: 'in', from }), 0).lastInsertRowid);
     const lout = Number(ins.run(docId, p.id, q, JSON.stringify({ role: 'out', mode: 'rest', to: st.id }), 100).lastInsertRowid);
     const taken = takeOut(db, ctx, { productId: p.id, h: { warehouseId: from }, qty: q, lineId: lin, kind: 'consume' });
-    const wage = payWorkers(db, ctx, ws, r2((st.piece_rate ?? 0) * q), `TQ-${n}: ${st.name} (${q} × ${st.piece_rate ?? 0})`);
+    const wage = payWorkers(db, ctx, ws, r2((st.piece_rate ?? 0) * q), `TQ-${n} · ${p.name}: ${st.name} ${st.piece_rate ?? 0} (${q} × ${st.piece_rate ?? 0})`);
     let wleft = wage;
     taken.forEach((x, i) => {
       const w = i === taken.length - 1 ? r2(wleft) : r2((wage * x.qty) / q);
@@ -826,7 +848,9 @@ export function cancelTask(db, taskId, actor, reason) {
     if (t.status === 'done') {
       if (t.shift_id && getShift(db, t.shift_id).status !== 'open') throw new StockError('Smena yopilgan; topshiriqni bekor qilib bo\'lmaydi');
       const lots = db.prepare('SELECT id FROM lots WHERE doc_id = ?').all(t.doc_id).map((l) => l.id);
-      if (lots.length && db.prepare(`SELECT 1 FROM stock_moves WHERE lot_id IN (${lots.map(() => '?').join(',')}) AND doc_id <> ? LIMIT 1`).get(...lots, t.doc_id)) {
+      // (uses by documents that were cancelled themselves do not count)
+      if (lots.length && db.prepare(`SELECT 1 FROM stock_moves WHERE lot_id IN (${lots.map(() => '?').join(',')}) AND doc_id <> ?
+        AND doc_id NOT IN (SELECT id FROM docs WHERE status = 'cancelled') LIMIT 1`).get(...lots, t.doc_id)) {
         throw new StockError('Bu topshiriqdan chiqqan mahsulot keyingi bosqichga o\'tgan yoki ishlatilgan');
       }
       cancelDocTx(db, getDoc(db, t.doc_id), actor, reason);
@@ -836,6 +860,48 @@ export function cancelTask(db, taskId, actor, reason) {
     db.prepare("UPDATE prod_tasks SET status = 'cancelled', cancel_reason = ?, milk_qty = 0 WHERE id = ?").run(String(reason).slice(0, 300), t.id);
     closeAlerts(db, 'taskId', t.id, actor);
     return taskDetail(db, t.id);
+  })();
+}
+
+// Delete the current work of a stage from the panel (like the collectors' shifts):
+// - 'produce' (technologist): every shift not closed yet (open or waiting for
+//   approval) — its tasks are cancelled (stock goes back), the chosen collector
+//   shifts are freed, and the shift is removed;
+// - any other stage (pouring, capping...): its unfinished tasks and today's tasks.
+// Newest first, so things made from each other unwind in order. If something made
+// here has already gone on to the next stage, nothing is deleted and the answer
+// says what to delete there first. Returns the labels of what was removed.
+export function deleteActiveWork(db, actor, { stage, userId = null }) {
+  const reason = "Panel orqali o'chirildi";
+  const day = new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10);
+  const who = userId ? ' AND user_id = ?' : '';
+  const args = userId ? [userId] : [];
+  return db.transaction(() => {
+    const out = [];
+    const blocked = [];
+    const cancelAll = (tasks) => {
+      for (const t of tasks) {
+        try { cancelTask(db, t.id, actor, reason); out.push(`TQ-${t.number}`); } catch (e) { blocked.push(`TQ-${t.number}: ${e.message}`); }
+      }
+    };
+    if (stage === 'produce') {
+      for (const s of db.prepare(`SELECT * FROM prod_shifts WHERE status IN ('open', 'approval')${who} ORDER BY id DESC`).all(...args)) {
+        db.prepare("UPDATE prod_shifts SET status = 'open' WHERE id = ?").run(s.id); // a waiting shift's tasks can be cancelled too
+        cancelAll(db.prepare("SELECT * FROM prod_tasks WHERE shift_id = ? AND status <> 'cancelled' ORDER BY id DESC").all(s.id));
+        db.prepare('UPDATE prod_tasks SET shift_id = NULL WHERE shift_id = ?').run(s.id);
+        db.prepare('UPDATE lots SET shift_id = NULL WHERE shift_id = ?').run(s.id);
+        db.prepare('DELETE FROM prod_shift_milk WHERE prod_shift_id = ?').run(s.id);
+        db.prepare('DELETE FROM prod_shifts WHERE id = ?').run(s.id);
+        out.push(`smena #${s.number}`);
+      }
+    } else {
+      const ids = db.prepare('SELECT id FROM warehouses WHERE is_stage = 1 AND stage_code = ?').all(String(stage)).map((w) => w.id);
+      if (!ids.length) throw new StockError('Bosqich topilmadi');
+      cancelAll(db.prepare(`SELECT * FROM prod_tasks WHERE stage_id IN (${ids.map(() => '?').join(',')})${who}
+        AND (status IN ('open', 'approval') OR (status = 'done' AND date(done_at, '+5 hours') = ?)) ORDER BY id DESC`).all(...ids, ...args, day));
+    }
+    if (blocked.length) throw new StockError(`O'chirib bo'lmadi — avval keyingi bosqichdagi ishni o'chiring: ${blocked.join('; ')}`);
+    return out;
   })();
 }
 

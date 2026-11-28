@@ -574,6 +574,55 @@ export function milkWarehouse(db) {
   return w;
 }
 
+// ---------------------------------------------------------------- a product's own warehouse
+// Every product has its own warehouse by its kind: raw materials in the raw
+// warehouse, packaging and labels in the packaging warehouse, finished goods in
+// the finished-goods warehouse... (semi-finished goods live on the stages, so
+// they have none). A missing warehouse is created.
+const HOME_NAME = { raw: 'Xomashyo ombori', pack: 'Idish ombori', finished: 'Tayyor mahsulot ombori', recycle: 'Qayta ishlash', general: 'Boshqa ombor' };
+const HOME_KIND = { raw: 'raw', pack: 'pack', label: 'pack', finished: 'finished', returned: 'recycle', recycled: 'recycle', other: 'general' };
+export function homeWarehouse(db, productId) {
+  const p = db.prepare('SELECT kind FROM products WHERE id = ?').get(productId);
+  if (!p) return null;
+  if (p.kind === 'main_raw') return milkWarehouse(db);
+  const wk = HOME_KIND[p.kind];
+  if (!wk) return null;
+  const w = db.prepare('SELECT id FROM warehouses WHERE kind = ? AND active = 1 ORDER BY is_stage, sort, id LIMIT 1').get(wk)?.id;
+  if (w) return w;
+  return Number(db.prepare('INSERT INTO warehouses (name, kind) VALUES (?, ?)').run(HOME_NAME[wk], wk).lastInsertRowid);
+}
+
+// Opening stock with "by kind": each line goes to its product's own warehouse —
+// one document per warehouse. Returns the documents.
+export function createOpeningByKind(db, input, opts) {
+  const groups = new Map();
+  for (const l of Array.isArray(input?.lines) ? input.lines : []) {
+    const w = homeWarehouse(db, Number(l?.productId));
+    if (!w) throw new StockError(`${productName(db, Number(l?.productId))}: bu turdagi mahsulotning ombori yo'q (bosqichda turadi) — omborni tanlang`);
+    if (!groups.has(w)) groups.set(w, []);
+    groups.get(w).push(l);
+  }
+  if (!groups.size) throw new StockError('Kamida bitta qator kiriting');
+  const base = String(input.uuid || randomUUID()).slice(0, 70);
+  return db.transaction(() => [...groups].map(([w, lines], i) => createDoc(db, { ...input, uuid: i ? `${base}-${i}` : base, to: { warehouseId: w }, lines }, opts)))();
+}
+
+// A product's kind changed: what lies in ordinary warehouses (not stages) moves to
+// the new kind's warehouse straight away, as posted transfers.
+export function moveToHome(db, productId, actor) {
+  const home = homeWarehouse(db, productId);
+  if (!home) return [];
+  const rows = db.prepare(`SELECT m.warehouse_id, ROUND(SUM(m.qty), 6) AS qty FROM stock_moves m JOIN warehouses w ON w.id = m.warehouse_id
+    WHERE m.product_id = ? AND w.is_stage = 0 AND m.warehouse_id <> ? GROUP BY m.warehouse_id HAVING SUM(m.qty) > ${EPS}`).all(productId, home);
+  const out = [];
+  for (const r of rows) {
+    const d = createDoc(db, { type: 'transfer', from: { warehouseId: r.warehouse_id }, to: { warehouseId: home }, lines: [{ productId, qty: r.qty }],
+      note: "Mahsulot turi o'zgardi — o'z omboriga" }, { actor });
+    out.push(postDoc(db, d.id, actor));
+  }
+  return out;
+}
+
 // The warehouse product all collected milk becomes ("Yog'li sut", a main raw material).
 export function rawMilkProduct(db) {
   const set = Number(getSetting(db, 'erp_milk_product'));

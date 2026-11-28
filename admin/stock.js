@@ -56,7 +56,7 @@ async function openDocForm(type, { doc = null, preset = {} } = {}) {
   const prodOpts = (sel) => `<option value="">— mahsulot —</option>${products.map((p) => `<option value="${p.id}" ${String(p.id) === String(sel) ? 'selected' : ''}>${esc(p.name)} (${esc(p.unit)})</option>`).join('')}`;
   const withCost = type === 'opening';
   const head = () => {
-    if (type === 'opening') return `<label>Ombor<select name="to" required>${holderOptions(m, { staff: false })}</select></label>
+    if (type === 'opening') return `<label>Ombor<select name="to" required><option value="auto">Turiga qarab — har bir mahsulot o'z omboriga</option>${holderOptions(m, { staff: false })}</select></label>
       <label>Sana<input type="date" name="date" value="${todayLocal()}"></label>`;
     if (type === 'transfer') return `<div class="row"><label>Kimdan<select name="from" required>${holderOptions(m)}</select></label>
       <label>Kimga<select name="to" required>${holderOptions(m)}</select></label></div>
@@ -125,7 +125,7 @@ async function openDocForm(type, { doc = null, preset = {} } = {}) {
     }));
     const p = { type, lines: clean, note: f.note.value || null };
     if (f.from) p.from = parseHolderValue(f.from.value);
-    if (f.to) p.to = parseHolderValue(f.to.value);
+    if (f.to) p.to = f.to.value === 'auto' ? 'auto' : parseHolderValue(f.to.value);
     if (f.date?.value) p.date = `${f.date.value}T08:00:00+05:00`;
     if (f.reasonId) p.reasonId = Number(f.reasonId.value);
     if (f.chargeUserId?.value) p.chargeUserId = Number(f.chargeUserId.value);
@@ -246,7 +246,7 @@ const stockTabs = {
         <label>Joy<select id="place">${holderOptions(m, { empty: 'Hammasi' })}</select></label>
         <label>Mahsulot turi<select id="kind"><option value="">Hammasi</option>${optionsHtml(Object.entries(m.productKinds), kind)}</select></label>
         <div class="row" style="flex:2;justify-content:flex-end">
-          ${btn('opening', '+ Boshlang\'ich qoldiq', 'stock.opening')} ${btn('transfer', '+ Topshirish', 'stock.transfer')}
+          ${btn('opening', '+ Boshlang\'ich qoldiq', 'stock.opening')}
           ${btn('writeoff', '+ Hisobdan chiqarish', 'stock.writeoff')} ${btn('inventory', '+ Inventarizatsiya', 'stock.inventory')}
         </div>
       </div>

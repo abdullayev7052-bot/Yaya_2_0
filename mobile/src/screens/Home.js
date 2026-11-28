@@ -51,7 +51,7 @@ export default function Home({ tick, refresh, onLogout }) {
   const stockDone = (m) => { setStockForm(null); setToast(m); setTimeout(() => setToast(''), 4000); refresh(); };
   const prodDone = (m) => { setProdView(null); setToast(m); setTimeout(() => setToast(''), 4000); refresh(); };
   if (prodView?.screen === 'new') {
-    body = <NewTask stageId={prodView.stageId} recipeId={prodView.recipeId} productId={prodView.productId} productName={prodView.productName} planKg={prodView.planKg} planUnits={prodView.planUnits} avail={prodView.avail} onBack={() => setProdView(null)} onDone={(id) => setProdView({ screen: 'task', id })} />;
+    body = <NewTask stageId={prodView.stageId} recipeId={prodView.recipeId} productId={prodView.productId} productName={prodView.productName} planKg={prodView.planKg} planUnits={prodView.planUnits} planHint={prodView.planHint !== false} avail={prodView.avail} onBack={() => setProdView(null)} onDone={(id) => setProdView({ screen: 'task', id })} />;
   } else if (prodView?.screen === 'move') {
     body = <MoveScreen stage={prodView.stage} item={prodView.item} onBack={() => setProdView(null)} onDone={prodDone} />;
   } else if (prodView?.screen === 'task') {

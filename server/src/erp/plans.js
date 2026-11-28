@@ -25,7 +25,7 @@ export function planOf(db, day) {
 export function listPlans(db, { from, to } = {}) {
   return db.prepare('SELECT day FROM plans WHERE day BETWEEN ? AND ? ORDER BY day DESC').all(from ?? '0000', to ?? '9999').map((r) => planOf(db, r.day));
 }
-export function savePlan(db, day, lines, actor) {
+export function savePlan(db, day, lines, actor, { suggest } = {}) {
   if (!isDay(day)) throw new StockError("Sana noto'g'ri");
   if (day < today()) throw new StockError("O'tgan kunning rejasini o'zgartirib bo'lmaydi");
   const clean = new Map();
@@ -44,6 +44,7 @@ export function savePlan(db, day, lines, actor) {
     else db.prepare("UPDATE plans SET updated_at = datetime('now'), created_by = ? WHERE id = ?").run(actor, p.id);
     db.prepare('DELETE FROM plan_lines WHERE plan_id = ?').run(p.id);
     for (const [pid, q] of clean) db.prepare('INSERT INTO plan_lines (plan_id, product_id, qty) VALUES (?, ?, ?)').run(p.id, pid, q);
+    if (suggest !== undefined) db.prepare('UPDATE plans SET suggest = ? WHERE id = ?').run(Number(!!suggest), p.id);
   })();
   return planOf(db, day);
 }
@@ -77,7 +78,7 @@ function madeOn(db, day, productId) {
 // The day's plan for the technologist (quyma) and for the pourer (products by quyma).
 export function planView(db, day = today()) {
   const plan = planOf(db, day);
-  if (!plan) return { day, tech: [], pour: [] };
+  if (!plan) return { day, tech: [], pour: [], suggest: true };
   const groups = new Map();
   const pour = [];
   for (const l of plan.lines) {
@@ -93,7 +94,7 @@ export function planView(db, day = today()) {
   // quyma made today by the production stage
   const tech = [...groups.values()].map((g) => ({ ...g, made: r3(db.prepare(`SELECT COALESCE(SUM(dl.qty), 0) AS q FROM prod_tasks t JOIN doc_lines dl ON dl.doc_id = t.doc_id
     WHERE t.status = 'done' AND t.recipe_id = ? AND date(t.done_at, '+5 hours') = ? AND dl.product_id = ? AND json_extract(dl.meta, '$.role') = 'out'`).get(g.recipe_id, day, g.quyma_id).q) }));
-  return { day, tech, pour };
+  return { day, tech, pour, suggest: !!plan.suggest };
 }
 
 // The plan report: for each day, each product: planned, made, the difference and %.

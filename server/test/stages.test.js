@@ -459,3 +459,91 @@ test('Reja: finished products per day; the technologist sees quyma kg, the poure
   await ok(call(app, 'DELETE', `/api/erp/prod/plans/${today}`, b), 'delete');
   void wh; void db;
 });
+
+test("each product has its own warehouse by kind: opening by kind, a new kind moves the stock; production takes from it", async () => {
+  const { app, db, b, T, post, wh, p, r } = await plant();
+  const glue = await post(b, '/api/erp/products', { name: 'Yelim', kind: 'raw', unit: 'kg' });
+  const lid = await post(b, '/api/erp/products', { name: 'Qopqoq', kind: 'pack', unit: 'dona' });
+  const d = await post(b, '/api/erp/docs', { type: 'opening', to: 'auto', lines: [{ productId: glue.id, qty: 5, unitCost: 100 }, { productId: lid.id, qty: 50, unitCost: 10 }] });
+  assert.equal(d.docs.length, 2, 'one document per warehouse');
+  assert.equal(bal(db, wh.store, glue.id).q, 5);
+  assert.equal(bal(db, wh.pack, lid.id).q, 50);
+  // semi-finished goods have no warehouse of their own
+  assert.equal((await call(app, 'POST', '/api/erp/docs', b, { type: 'opening', to: 'auto', lines: [{ productId: p.siyro, qty: 1, unitCost: 1 }] })).status, 400);
+  // the glue becomes packaging: its stock moves to the packaging warehouse at once, value kept
+  const ch = await call(app, 'PATCH', `/api/erp/products/${glue.id}`, b, { kind: 'pack' });
+  assert.equal(ch.body.moved, 1);
+  assert.equal(bal(db, wh.store, glue.id).q, 0);
+  assert.deepEqual(bal(db, wh.pack, glue.id), { q: 5, c: 500 });
+  // the technologist takes cream from the raw warehouse even without keeping it
+  db.prepare('DELETE FROM warehouse_keepers WHERE warehouse_id = ?').run(wh.store);
+  const t = await post(T.tech, '/api/erp/prod/tasks', { recipeId: r.r5.id, milkQty: 320 });
+  await post(T.tech, `/api/erp/prod/tasks/${t.id}/complete`, { outputQty: 326 });
+  assert.equal(bal(db, wh.store, p.cream).q, 14);
+});
+
+test("piece-wage types (Qo'shimcha xarajatlar): recipes pick them, the rate follows the type, the statement names the product", async () => {
+  const { app, db, u, b, T, post, p, r } = await plant();
+  // the typed "Quyish 170" of the plant became a type
+  const types = (await call(app, 'GET', '/api/erp/prod/wage-types', b)).body;
+  const q = types.find((x) => x.name === 'Quyish');
+  assert.equal(q.amount, 170);
+  assert.equal(q.recipes, 1);
+  // a new type, picked by id; then the rate changes in one place
+  const lid = await post(b, '/api/erp/prod/wage-types', { name: 'Qopqoq yopish', amount: 40 });
+  const pr = (await call(app, 'GET', `/api/erp/prod/recipes/${r.pour.id}`, b)).body;
+  const up = await call(app, 'PUT', `/api/erp/prod/recipes/${r.pour.id}`, b, { name: pr.name, kind: 'pour', productId: p.qatiq,
+    lines: [{ productId: p.siyro, qty: 0.4 }, { productId: p.jar, qty: 1 }], rates: [{ wageTypeId: q.id }, { wageTypeId: lid.id }] });
+  assert.equal(up.status, 200, JSON.stringify(up.body));
+  await call(app, 'PATCH', `/api/erp/prod/wage-types/${q.id}`, b, { amount: 200 });
+  const rec = (await call(app, 'GET', `/api/erp/prod/recipes/${r.pour.id}`, b)).body;
+  assert.equal(rec.rate_total, 240);
+  // pour 10: 2 400 to Malika, and her statement says which task and product
+  const t1 = await post(T.tech, '/api/erp/prod/tasks', { recipeId: r.r5.id, milkQty: 320 });
+  await post(T.tech, `/api/erp/prod/tasks/${t1.id}/complete`, { outputQty: 326 });
+  const pt = await post(T.pour1, '/api/erp/prod/tasks', { recipeId: r.pour.id, units: 10 });
+  await post(T.pour1, `/api/erp/prod/tasks/${pt.id}/complete`, { outputQty: 10 });
+  const e = db.prepare("SELECT amount, note FROM party_entries WHERE kind = 'piece' AND party_id = ?").get(u.pour1);
+  assert.equal(e.amount, -2400);
+  assert.match(e.note, /5% qatiq 400 g: Quyish 200 \+ Qopqoq yopish 40/);
+});
+
+test('settings: a recipe without suggestions, a plan not used as a suggestion', async () => {
+  const { app, b, post, r } = await plant();
+  const tv = (await call(app, 'GET', `/api/erp/prod/recipes/${r.tv.id}`, b)).body;
+  const up = await call(app, 'PUT', `/api/erp/prod/recipes/${r.tv.id}`, b, { name: tv.name, kind: 'cook', productId: tv.product_id, suggest: false,
+    lines: tv.lines.map((l) => ({ productId: l.product_id, qty: l.qty })) });
+  assert.equal(up.status, 200, JSON.stringify(up.body));
+  assert.equal((await call(app, 'GET', `/api/erp/prod/recipes/${r.tv.id}`, b)).body.suggest, 0);
+  const day = new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10);
+  const qatiq = (await call(app, 'GET', '/api/erp/products?kind=finished', b)).body[0].id;
+  await call(app, 'PUT', `/api/erp/prod/plans/${day}`, b, { lines: [{ productId: qatiq, qty: 10 }], suggest: false });
+  assert.equal((await call(app, 'GET', `/api/erp/prod/plans/view?day=${day}`, b)).body.suggest, false);
+});
+
+test('delete the current production work: pouring first (it used the quyma), then the technologist shift; stock comes back', async () => {
+  const { app, db, b, T, post, wh, S, p, r } = await plant();
+  const t1 = await post(T.tech, '/api/erp/prod/tasks', { recipeId: r.r5.id, milkQty: 320 });
+  await post(T.tech, `/api/erp/prod/tasks/${t1.id}/complete`, { outputQty: 326 });
+  const pt = await post(T.pour1, '/api/erp/prod/tasks', { recipeId: r.pour.id, units: 10 });
+  await post(T.pour1, `/api/erp/prod/tasks/${pt.id}/complete`, { outputQty: 10 });
+  const open = await post(T.pour1, '/api/erp/prod/tasks', { recipeId: r.pour.id, units: 5 });
+  assert.equal((await call(app, 'POST', '/api/erp/prod/delete-active', b, { stage: 'produce', password: 'nope' })).status, 400);
+  // the quyma went on to pouring: the technologist's shift cannot go first
+  const r1 = await call(app, 'POST', '/api/erp/prod/delete-active', b, { stage: 'produce', password: 'secret123' });
+  assert.equal(r1.status, 400);
+  assert.match(r1.body.error, /keyingi bosqich/);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM prod_shifts WHERE status = 'open'").get().n, 1, 'nothing deleted');
+  // pouring: today's and the unfinished task
+  const r2 = await call(app, 'POST', '/api/erp/prod/delete-active', b, { stage: 'pour', password: 'secret123' });
+  assert.equal(r2.status, 200);
+  assert.deepEqual(r2.body.deleted.sort(), [`TQ-${open.number}`, `TQ-${pt.number}`].sort());
+  assert.equal(bal(db, wh.pack, p.jar).q, 500);
+  // then the technologist's shift: milk and cream back, the shift gone
+  const r3 = await call(app, 'POST', '/api/erp/prod/delete-active', b, { stage: 'produce', password: 'secret123' });
+  assert.equal(r3.status, 200, JSON.stringify(r3.body));
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM prod_shifts').get().n, 0);
+  assert.equal(bal(db, wh.raw, p.milk).q, 1000);
+  assert.equal(bal(db, S.produce, p.siyro).q, 0);
+  assert.equal((await call(app, 'POST', '/api/erp/prod/delete-active', T.tech, { stage: 'produce', password: 'pass1234' })).status, 403);
+});

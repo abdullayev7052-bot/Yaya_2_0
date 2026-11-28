@@ -70,7 +70,8 @@ function closeBlock(s) {
 views.prod = async (v) => {
   const q = hashParams();
   const f = { status: q.get('status') || '', from: q.get('from') || addDays(todayLocal(), -6), to: q.get('to') || todayLocal() };
-  const list = await prodApi('GET', `/shifts?${new URLSearchParams(Object.entries(f).filter(([, x]) => x))}`);
+  const [list, staff] = await Promise.all([prodApi('GET', `/shifts?${new URLSearchParams(Object.entries(f).filter(([, x]) => x))}`),
+    can('staff.manage') ? api('GET', '/staff/names') : []]);
   v.innerHTML = `<div class="card"><div class="presets">${[['', 'Hammasi'], ['open', 'Ochiq'], ['approval', 'Tasdiq kutmoqda'], ['closed', 'Yopilgan']]
       .map(([k, t]) => `<button class="ghost small ${k === f.status ? 'on' : ''}" data-st="${k}">${t}</button>`).join('')}</div>
     <div class="row" style="margin-top:8px"><label>Dan <input type="date" id="from" value="${f.from}"></label><label>Gacha <input type="date" id="to" value="${f.to}"></label></div></div>
@@ -78,7 +79,27 @@ views.prod = async (v) => {
     ${list.map((s) => `<tr><td><a href="#prod-shift?id=${s.id}">${esc(s.label)}</a></td><td>${esc(s.user_name)}</td><td>${badge(PSHIFT, s.status)}</td>
       <td>${fmtDate(s.opened_at)}</td><td>${fmtDate(s.closed_at)}</td><td class="num">${s.tasks.n}</td><td class="num">${fmtNum(s.tasks.milk, 3)}</td></tr>`).join('')
       || '<tr><td colspan="7" class="muted">Smena yo\'q. Texnolog ilovada "Ishlab chiqarish" bo\'limidan smena ochadi.</td></tr>'}
-    </tbody></table></div>`;
+    </tbody></table></div>
+    ${can('staff.manage') ? `<div class="card"><h3>🗑 Amaldagi ishni o'chirish</h3>
+      <p class="muted"><b>Texnolog</b> — yopilmagan (ochiq yoki tasdiq kutayotgan) smenalar: topshiriqlari bekor qilinadi (xomashyo omborga qaytadi),
+        tanlangan yig'uvchi smenalari bo'shaydi, smena o'chadi. <b>Quyish, Qopqoq yopish</b> va boshqa bosqichlar — tugallanmagan va bugungi topshiriqlar bekor qilinadi.
+        Mahsulot keyingi bosqichga o'tib bo'lgan bo'lsa, hech narsa o'chmaydi — avval keyingi bosqichdagini o'chiring. Tiklash nusxasi 3 kun saqlanadi.</p>
+      <form id="delWork" class="row">
+        <label>Bosqich <select name="stage" data-plain><option value="produce">Texnolog (Ishlab chiqarish)</option><option value="pour">Quyuvchi (Quyish)</option>
+          <option value="cap">Qopqoq yopuvchi (Qopqoq yopish)</option><option value="pack">Qadoqlash</option></select></label>
+        <label>Xodim <select name="userId"><option value="">Hammasi</option>${staff.map((u) => `<option value="${u.id}">${esc(u.name || u.login)}</option>`).join('')}</select></label>
+        <label>Admin paroli <input name="password" type="password" required autocomplete="current-password"></label>
+        <button class="danger">O'chirish</button></form></div>` : ''}`;
+  $('#delWork', v) && ($('#delWork', v).onsubmit = async (e) => {
+    e.preventDefault();
+    const fm = e.target;
+    if (!confirm(`"${fm.stage.selectedOptions[0].text}" — amaldagi ish o'chirilsinmi?`)) return;
+    try {
+      const r = await prodApi('POST', '/delete-active', { stage: fm.stage.value, userId: fm.userId.value || null, password: fm.password.value });
+      flash(r.deleted.length ? `O'chirildi: ${r.deleted.join(', ')}. Tiklash nusxasi #${r.safety}.` : "O'chiriladigan ish yo'q");
+      route();
+    } catch (err) { flash(err.message, 'err'); }
+  });
   $$('[data-st]', v).forEach((b) => { b.onclick = () => setHash('prod', { ...f, status: b.dataset.st }); });
   $('#from', v).onchange = (e) => setHash('prod', { ...f, from: e.target.value });
   $('#to', v).onchange = (e) => setHash('prod', { ...f, to: e.target.value });
@@ -131,12 +152,12 @@ views['prod-recipes'] = async (v) => {
 
 views['prod-recipe'] = async (v) => {
   const id = Number(hashParams().get('id')) || null;
-  const [r, products, stages] = await Promise.all([id ? prodApi('GET', `/recipes/${id}`) : null, api('GET', '/products', null, '/api/erp'), prodApi('GET', '/stages')]);
+  const [r, products, stages, wageTypes] = await Promise.all([id ? prodApi('GET', `/recipes/${id}`) : null, api('GET', '/products', null, '/api/erp'), prodApi('GET', '/stages'), prodApi('GET', '/wage-types')]);
   const changeStages = stages.filter((s) => s.type === 'change');
   const lines = (r?.lines ?? []).map((l) => ({ productId: l.product_id, qty: l.qty, alts: l.alts.map((a) => ({ productId: a.product_id, qty: a.qty ?? '' })) }));
   if (!lines.length) lines.push({ productId: '', qty: '', alts: [] });
   const outputs = (r?.outputs ?? []).map((o) => ({ productId: o.product_id, costMode: o.cost_mode, costValue: o.cost_value ?? '' }));
-  const rates = (r?.rates ?? []).map((x) => ({ name: x.name, amount: x.amount }));
+  const rates = (r?.rates ?? []).map((x) => ({ wageTypeId: x.wage_type_id ?? '', name: x.name, amount: x.amount }));
   // Conditional limits: when these products are used, the output must be min–max (for the base batch).
   const limits = (r?.limits ?? []).map((x) => ({ name: x.name ?? '', productIds: x.product_ids, outMin: x.out_min ?? '', outMax: x.out_max ?? '' }));
   // Reprocessing outputs: per input unit (blank = the input's netto weight), range, fixed cost, container.
@@ -167,6 +188,7 @@ views['prod-recipe'] = async (v) => {
       <div class="card" style="margin:0" id="rateWrap"><h2>Ishbay haq (1 birlik uchun)</h2>
         <p class="muted">Masalan "Quyish" 170 so'm. Bir nechta xodim birga bajarsa, teng bo'linadi (2 kishi — 85 dan). Tannarxga qo'shiladi; topshiriq bekor qilinsa haq ham bekor bo'ladi.</p>
         <table><tbody id="rates"></tbody></table><button type="button" class="ghost small" id="addRate">+ Amal</button></div>
+      <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="suggest" ${r?.suggest === 0 ? '' : 'checked'}> Ishlab chiqarishda tavsiya ko'rsatilsin — xodim ekranida xira raqamlar (miqdorlar tarkibga ko'ra taklif qilinadi)</label>
       <label style="max-width:320px">Topshiriq muddati, daqiqa<input name="maxMinutes" type="number" step="1" min="0" value="${r?.max_minutes ?? ''}"></label>
       <p class="muted" style="margin:0">Topshiriq shu vaqtdan uzoq davom etsa, xodim ismi bilan ogohlantirish chiqadi. Bo'sh — muddat yo'q.</p>
       <p class="muted" style="margin:0" id="rangeHint">Masalan "5%": 320 kg sut + 6 kg qaymoq + 4,2 g zakvaska = 326,0042 kg; chiqishi 320–335 kg. Yarim partiyada tizim o'zi 160–167,5 kg deb biladi.
@@ -214,12 +236,15 @@ views['prod-recipe'] = async (v) => {
   $('#lims', v).onchange = $('#lims', v).oninput;
   $('#lims', v).onclick = (e) => { const row = e.target.closest('[data-li]'); if (row && e.target.hasAttribute('data-lidel')) { limits.splice(Number(row.dataset.li), 1); drawLims(); } };
   const drawRates = () => {
-    $('#rates', v).innerHTML = rates.map((x, i) => `<tr data-r="${i}"><td><input data-k="name" value="${esc(x.name)}" placeholder="Amal (Quyish, Qopqoq yopish...)"></td>
-      <td><input data-k="amount" type="number" step="0.01" min="0" value="${esc(x.amount)}" placeholder="so'm" style="width:120px"></td><td><button type="button" class="ghost small" data-rdel>✕</button></td></tr>`).join('');
+    // picked from "Qo'shimcha xarajatlar" — the rate comes from the type
+    $('#rates', v).innerHTML = rates.map((x, i) => `<tr data-r="${i}"><td><select data-k="wageTypeId"><option value="">— ishbay haq turini tanlang —</option>${wageTypes.map((w) => `<option value="${w.id}" ${String(w.id) === String(x.wageTypeId) ? 'selected' : ''}>${esc(w.name)} — ${fmtNum(w.amount)} so'm</option>`).join('')}</select></td>
+      <td><button type="button" class="ghost small" data-rdel>✕</button></td></tr>`).join('')
+      + (wageTypes.length ? '' : `<tr><td class="muted">Ishbay haq turlari yo'q — avval <a href="#prod-wages">Qo'shimcha xarajatlar</a>da qo'shing</td></tr>`);
   };
   drawRates();
-  $('#addRate', v).onclick = () => { rates.push({ name: '', amount: '' }); drawRates(); };
+  $('#addRate', v).onclick = () => { rates.push({ wageTypeId: '', name: '', amount: '' }); drawRates(); };
   $('#rates', v).oninput = (e) => { const tr = e.target.closest('tr[data-r]'); if (tr && e.target.dataset.k) rates[tr.dataset.r][e.target.dataset.k] = e.target.value; };
+  $('#rates', v).onchange = $('#rates', v).oninput;
   $('#rates', v).onclick = (e) => { const tr = e.target.closest('tr[data-r]'); if (tr && e.target.hasAttribute('data-rdel')) { rates.splice(Number(tr.dataset.r), 1); drawRates(); } };
   const drawRout = () => {
     $('#rout', v).innerHTML = rout.map((o, i) => `<tr data-ro="${i}"><td><select data-k="productId">${popts(o.productId, (p) => p.kind !== 'milk')}</select></td>
@@ -287,10 +312,11 @@ views['prod-recipe'] = async (v) => {
         ? rout.filter((o) => o.productId).map((o) => ({ productId: Number(o.productId), perUnit: o.perUnit === '' ? null : Number(o.perUnit), minPerUnit: o.minPerUnit === '' ? null : Number(o.minPerUnit),
           maxPerUnit: o.maxPerUnit === '' ? null : Number(o.maxPerUnit), costValue: Number(o.costValue) || 0, isContainer: !!o.isContainer }))
         : outputs.filter((o) => o.productId).map((o) => ({ productId: Number(o.productId), costMode: o.costMode, costValue: o.costValue === '' ? null : Number(o.costValue) })),
-      rates: ['cook', 'separation'].includes(f.kind.value) ? [] : rates.filter((x) => String(x.name).trim()).map((x) => ({ name: x.name, amount: Number(x.amount) || 0 })),
+      rates: ['cook', 'separation'].includes(f.kind.value) ? [] : rates.filter((x) => x.wageTypeId).map((x) => ({ wageTypeId: Number(x.wageTypeId) })),
       limits: ['cook', 'separation'].includes(f.kind.value) ? limits.filter((x) => x.productIds.length).map((x) => ({ name: x.name || null, productIds: x.productIds,
         outMin: x.outMin === '' ? null : Number(x.outMin), outMax: x.outMax === '' ? null : Number(x.outMax) })) : [],
       maxMinutes: f.maxMinutes.value === '' ? null : Number(f.maxMinutes.value),
+      suggest: f.suggest.checked,
       ...(f.active ? { active: f.active.checked } : {}),
     };
     try {
@@ -332,6 +358,32 @@ views['prod-reasons'] = async (v) => {
     },
   });
   $('#newR', v)?.addEventListener('click', () => edit());
+  $$('[data-edit]', v).forEach((b) => { b.onclick = () => edit(list.find((x) => x.id === Number(b.dataset.edit))); });
+};
+
+// ------------------------------------------------------------------ Qo'shimcha xarajatlar (piece-wage types)
+// Kept once with the rate per unit (Quyish, Qopqoq yopish...). Recipes pick them;
+// changing a rate here changes it in every recipe that uses the type. The worker's
+// statement shows which task and product each wage came from.
+views['prod-wages'] = async (v) => {
+  const list = await prodApi('GET', '/wage-types?all=1');
+  v.innerHTML = `<div class="card"><h2>Ishbay haq turlari</h2>
+    <p class="muted">Tannarxga qo'shiladigan qo'shimcha xarajat — 1 birlik (dona) uchun xodimga yoziladi. Tarkibda tur tanlanadi, summani har safar yozish shart emas.
+      Bir nechta xodim birga bajarsa, teng bo'linadi. Xodimning akt sverkasida qaysi topshiriq va mahsulotdan olgani ko'rinadi.</p>
+    <table><thead><tr><th>Nomi</th><th class="num">1 birlik uchun, so'm</th><th class="num">Tarkiblarda</th><th></th></tr></thead><tbody>
+    ${list.map((w) => `<tr class="${w.active ? '' : 'voided'}"><td><b>${esc(w.name)}</b></td><td class="num">${fmtNum(w.amount)}</td><td class="num">${w.recipes || ''}</td>
+      <td><button class="ghost small" data-edit="${w.id}">Tahrirlash</button></td></tr>`).join('') || '<tr><td colspan="4" class="muted">Hali tur yo\'q</td></tr>'}
+    </tbody></table><button class="small" id="newW" style="margin-top:8px">+ Tur</button></div>`;
+  const edit = (w = null) => openForm({
+    title: w ? 'Ishbay haq turi' : 'Yangi ishbay haq turi',
+    fields: [
+      { name: 'name', label: 'Nomi (masalan Quyish, Qopqoq yopish)', value: w?.name, required: true },
+      { name: 'amount', label: '1 birlik uchun, so\'m', type: 'number', step: '0.01', min: 0, value: w?.amount ?? '', required: true },
+      ...(w ? [{ name: 'active', label: 'Faol', type: 'checkbox', value: !!w.active }] : []),
+    ],
+    onSubmit: (d) => { const body = { ...d, amount: Number(d.amount) }; return w ? prodApi('PATCH', `/wage-types/${w.id}`, body) : prodApi('POST', '/wage-types', body); },
+  });
+  $('#newW', v).onclick = () => edit();
   $$('[data-edit]', v).forEach((b) => { b.onclick = () => edit(list.find((x) => x.id === Number(b.dataset.edit))); });
 };
 
@@ -447,7 +499,9 @@ views['prod-plans'] = async (v) => {
         <td class="muted">${x.lines.length} ta mahsulot · ${fmtNum(x.lines.reduce((a, l) => a + l.qty, 0))} dona</td><td>${x.editable ? '' : '<span class="muted">yopiq</span>'}</td></tr>`).join('') || '<tr><td class="muted">Reja yo&#39;q</td></tr>'}</tbody></table></div>
     <div class="card"><h2>${dmy(day)} — reja</h2>
       <div id="pl"></div>
-      ${editable ? `<button class="ghost small" id="addL" style="margin-top:8px">+ Mahsulot</button><div class="row" style="margin-top:12px"><button id="saveP">Saqlash</button>${plan ? '<button class="ghost" id="delP">O&#39;chirish</button>' : ''}</div>` : (plan ? '' : '<p class="muted">Bu kun uchun reja yo&#39;q</p>')}
+      ${editable ? `<button class="ghost small" id="addL" style="margin-top:8px">+ Mahsulot</button>
+        <label style="display:flex;gap:8px;align-items:center;color:var(--text);margin-top:10px"><input type="checkbox" id="pSuggest" ${plan?.suggest === 0 ? '' : 'checked'}> Reja ishlab chiqarishda tavsiya bo'lib chiqsin — texnolog / quyuvchi ekranida rejaga ko'ra xira raqamlar</label>
+        <div class="row" style="margin-top:12px"><button id="saveP">Saqlash</button>${plan ? '<button class="ghost" id="delP">O&#39;chirish</button>' : ''}</div>` : (plan ? '' : '<p class="muted">Bu kun uchun reja yo&#39;q</p>')}
       <p class="err" id="pErr"></p>
       <div id="tv"></div></div></div>`;
   const draw = () => {
@@ -470,7 +524,7 @@ views['prod-plans'] = async (v) => {
   $('#pl', v).onclick = (e) => { const tr = e.target.closest('tr[data-i]'); if (tr && e.target.hasAttribute('data-del')) { lines.splice(Number(tr.dataset.i), 1); draw(); } };
   $('#addL', v).onclick = () => { lines.push({ productId: '', qty: '' }); draw(); };
   $('#saveP', v).onclick = act(async () => {
-    try { await prodApi('PUT', `/plans/${day}`, { lines: lines.filter((l) => l.productId && Number(l.qty) > 0).map((l) => ({ productId: Number(l.productId), qty: Number(l.qty) })) }); flash('Reja saqlandi'); route(); }
+    try { await prodApi('PUT', `/plans/${day}`, { suggest: $('#pSuggest', v).checked, lines: lines.filter((l) => l.productId && Number(l.qty) > 0).map((l) => ({ productId: Number(l.productId), qty: Number(l.qty) })) }); flash('Reja saqlandi'); route(); }
     catch (ex) { $('#pErr', v).textContent = ex.message; }
   });
   $('#delP', v)?.addEventListener('click', act(async () => { if (!confirm("Shu kunning rejasi o'chirilsinmi?")) return; await prodApi('DELETE', `/plans/${day}`); flash("O'chirildi"); setHash('prod-plans', {}); }));
@@ -523,6 +577,7 @@ PAGES.push(
   ['prod-approvals', 'Tasdiqlash', 'prod.approve', 'prod'],
   ['prod-recipes', 'Tarkiblar', ['prod.manage', 'prod.view'], 'prod'],
   ['prod-reasons', 'Yo\'qotish sabablari', 'prod.manage', 'prod'],
+  ['prod-wages', "Qo'shimcha xarajatlar", 'prod.manage', 'prod'],
 );
 Object.assign(PAGE_PARENT, { 'prod-shift': 'prod', 'prod-recipe': 'prod-recipes' });
 if (me) show();

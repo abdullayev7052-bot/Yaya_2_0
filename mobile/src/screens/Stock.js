@@ -60,7 +60,6 @@ export function Stock({ onForm, tick }) {
     <ScrollView contentContainerStyle={{ padding: 12, gap: 12 }} refreshControl={<RefreshControl refreshing={busy} onRefresh={load} />}>
       <Err err={err} />
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-        {api.can('stock.transfer') && <Btn title="Topshirish" onPress={() => onForm('transfer')} style={{ flexGrow: 1 }} />}
         {api.can('stock.writeoff') && <Btn title="Hisobdan chiqarish" kind="ghost" onPress={() => onForm('writeoff')} style={{ flexGrow: 1 }} />}
         {api.can('stock.inventory') && keeps && <Btn title="Inventarizatsiya" kind="ghost" onPress={() => onForm('inventory')} style={{ flexGrow: 1 }} />}
       </View>

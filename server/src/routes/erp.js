@@ -7,7 +7,7 @@ import { makeGuard } from '../auth.js';
 import { getSetting, setSetting } from '../settings.js';
 import { PRODUCT_KINDS, REASON_EFFECTS, REASON_SECTIONS, SHAPES, STAGE_TYPES, WAREHOUSE_KINDS } from '../erp/schema.js';
 import {
-  DOC_TYPES, StockError, addAlert, cancelDoc, createDoc, docDetail, inbox, inventoryPreview, listDocs, lotReport, milkWarehouse, parseHolder, postDoc,
+  DOC_TYPES, StockError, addAlert, cancelDoc, createDoc, createOpeningByKind, docDetail, homeWarehouse, moveToHome, inbox, inventoryPreview, listDocs, lotReport, milkWarehouse, parseHolder, postDoc,
   rejectDoc, staffBalance, stockCard, stockReport, updateDraft,
 } from '../erp/stock.js';
 import { erpImport, erpTemplate, importKinds, templateFile } from '../erp/importer.js';
@@ -194,7 +194,16 @@ export default async function erpRoutes(app, { db }) {
       }
     })();
     log(req, 'products.update', { id: p.id, name: d.name ?? p.name });
-    return { ok: true };
+    // A new kind means a new place: its stock moves to that kind's warehouse now.
+    let moved = 0;
+    if (d.kind !== undefined && d.kind !== p.kind) {
+      const ids = p.has_variants ? db.prepare('SELECT id FROM products WHERE parent_id = ?').all(p.id).map((x) => x.id) : [p.id];
+      try {
+        for (const id of ids) moved += moveToHome(db, id, req.actor).length;
+      } catch (e) { return stockErr(reply, e); }
+      if (moved) log(req, 'products.moved_home', { id: p.id, docs: moved });
+    }
+    return { ok: true, moved };
   });
 
   // Delete a product for good (Ombor → Mahsulotlar). Only when nothing would be
@@ -428,6 +437,12 @@ export default async function erpRoutes(app, { db }) {
       if (b.charges !== undefined && !has(req, 'stock.costs')) return reply.code(403).send({ error: "Kamomadni taqsimlash uchun ruxsat yo'q" });
     }
     try {
+      // Opening stock "by kind": every line goes to its product's own warehouse.
+      if (b.type === 'opening' && (b.to === 'auto' || b.to?.auto)) {
+        const docs = createOpeningByKind(db, b, { actor: req.actor, userId: req.me.id });
+        for (const d of docs) log(req, 'doc.opening', { id: d.id, number: d.number, status: d.status });
+        return { ...docDetail(db, docs[0].id), docs: docs.map((d) => ({ id: d.id, number: d.number })) };
+      }
       const d = createDoc(db, b, { actor: req.actor, userId: req.me.id });
       log(req, `doc.${d.type}`, { id: d.id, number: d.number, status: d.status });
       return docDetail(db, d.id);

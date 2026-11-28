@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Image, Modal, Platform, Pressable, Text, TextInput, View } from 'react-native';
+import { Dimensions, Image, Modal, PanResponder, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { getBrand } from './api';
 import * as store from './db';
 import { useBack } from './back';
@@ -243,6 +243,37 @@ const shiftMonth = (m, n) => {
 
 // A plain month grid. Tap one day for a single day, a second day to make a range;
 // a further tap starts over. Future days are disabled. Apply confirms {from,to}.
+// A half-screen list with a search box: pick one item. items: [{ key, label, sub?, on? }].
+export function PickSheet({ visible, title, items, onPick, onClose, placeholder = '🔍  Qidirish' }) {
+  const [q, setQ] = useState('');
+  useEffect(() => { if (visible) setQ(''); }, [visible]);
+  const n = q.trim().toLowerCase();
+  const list = n ? items.filter((x) => `${x.label} ${x.sub ?? ''}`.toLowerCase().includes(n)) : items;
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' }} onPress={onClose} />
+      <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '60%', minHeight: '45%', backgroundColor: C.card,
+        borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 14, gap: 10 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <Text style={[s.h2, { flex: 1 }]}>{title}</Text>
+          <Pressable onPress={onClose} hitSlop={12}><Text style={{ fontSize: 20, color: C.muted }}>✕</Text></Pressable>
+        </View>
+        {items.length > 5 && <SearchBar value={q} onChange={setQ} placeholder={placeholder} />}
+        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 6, paddingBottom: 10 }}>
+          {list.map((x) => (
+            <Pressable key={x.key} onPress={() => onPick(x)}
+              style={({ pressed }) => [{ padding: 12, borderRadius: 12, borderWidth: 1, borderColor: x.on ? C.accent : C.line, backgroundColor: x.on ? C.accent : C.bg }, pressed && { opacity: 0.6 }]}>
+              <Text style={[s.text, { fontWeight: '600', color: x.on ? C.accentText : C.text }]}>{x.label}</Text>
+              {!!x.sub && <Text style={{ color: x.on ? C.accentText : C.muted }}>{x.sub}</Text>}
+            </Pressable>
+          ))}
+          {!list.length && <Text style={s.muted}>Topilmadi</Text>}
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+}
+
 export function CalendarModal({ visible, from, to, onClose, onApply }) {
   const today = todayLocal();
   const [month, setMonth] = useState(() => ym(from || today));
@@ -328,24 +359,60 @@ export function Btn({ title, onPress, kind = 'main', disabled, style }) {
 let kTarget = null; // { value, onChange }
 const kListeners = new Set();
 const kNotify = () => kListeners.forEach((fn) => fn(kTarget));
-// Settings on this monoblock: on / off and the key size (Profile → "Raqamli klaviatura").
-export const KEY_SIZES = { s: ['Kichik', 52, 22], m: ["O'rta", 66, 28], l: ['Katta', 84, 34] };
-export const getKeysCfg = () => ({ on: true, size: 'm', ...(store.getKv('kioskKeys') ?? {}) });
-export function setKeysCfg(patch) { store.setKv('kioskKeys', { ...getKeysCfg(), ...patch }); kNotify(); }
+// Settings on this monoblock (Profile → "Raqamli klaviatura" and the keypad itself):
+// on / off, the key size (w = key width in px) and where it sits (x, y; null = the
+// bottom-right corner).
+export const KEY_SIZES = { s: ['Kichik', 52], m: ["O'rta", 66], l: ['Katta', 84] };
+const KEY_MIN = 40;
+const KEY_MAX = 120;
+export const getKeysCfg = () => {
+  const c = { on: true, size: 'm', x: null, y: null, ...(store.getKv('kioskKeys') ?? {}) };
+  return { ...c, w: Math.min(KEY_MAX, Math.max(KEY_MIN, Number(c.w) || (KEY_SIZES[c.size] ?? KEY_SIZES.m)[1])) };
+};
+export function setKeysCfg(patch) {
+  // choosing a named size (Profile) sets the key width too
+  const extra = patch.size && KEY_SIZES[patch.size] ? { w: KEY_SIZES[patch.size][1] } : {};
+  store.setKv('kioskKeys', { ...getKeysCfg(), ...patch, ...extra });
+  kNotify();
+}
 export function kioskField(value, onChange) {
   return {
     onFocus: () => { kTarget = { value: String(value ?? ''), onChange }; kNotify(); },
     onChangeText: (v) => { if (kTarget?.onChange === onChange) kTarget.value = v; onChange(v); },
   };
 }
-const KKEYS = ['7', '8', '9', '4', '5', '6', '1', '2', '3', ',', '0', '⌫'];
+// The usual 4 × 3 number pad, in rows: 1 2 3 / 4 5 6 / 7 8 9 / , 0 ⌫.
+const KROWS = [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], [',', '0', '⌫']];
 export function KioskKeys() {
   const [target, setTarget] = useState(kTarget);
   const [, bump] = useState(0);
+  const [drag, setDrag] = useState(null); // live position while being moved
+  const box = useRef({ w: 0, h: 0 });
+  const start = useRef(null);
   useEffect(() => { const fn = (t) => { setTarget(t); bump((n) => n + 1); }; kListeners.add(fn); return () => kListeners.delete(fn); }, []);
   const cfg = getKeysCfg();
+  const win = Dimensions.get('window');
+  const gap = Math.max(4, Math.round(cfg.w * 0.09));
+  const keyH = Math.round(cfg.w * 0.82);
+  const width = cfg.w * 3 + gap * 2 + 16; // keys + gaps + padding and border
+  const clamp = (x, y) => ({
+    x: Math.min(Math.max(0, x), Math.max(0, win.width - (box.current.w || width))),
+    y: Math.min(Math.max(0, y), Math.max(0, win.height - (box.current.h || 300))),
+  });
+  const pos = drag ?? (cfg.x == null || cfg.y == null ? null : clamp(cfg.x, cfg.y));
+  // Moving: hold the top bar and drag. The place is kept for this monoblock.
+  const pan = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderGrant: () => {
+      const c = getKeysCfg(); const w2 = Dimensions.get('window');
+      start.current = { x: c.x ?? w2.width - box.current.w - 10, y: c.y ?? w2.height - box.current.h - 10 };
+    },
+    onPanResponderMove: (_e, g) => setDrag(clamp(start.current.x + g.dx, start.current.y + g.dy)),
+    onPanResponderRelease: (_e, g) => { const p = clamp(start.current.x + g.dx, start.current.y + g.dy); setKeysCfg(p); setDrag(null); },
+    onPanResponderTerminate: () => setDrag(null),
+  })).current;
   if (!target || !cfg.on) return null;
-  const [, w, fs] = KEY_SIZES[cfg.size] ?? KEY_SIZES.m;
   const press = (k) => {
     let v = kTarget.value;
     if (k === '⌫') v = v.slice(0, -1);
@@ -354,20 +421,30 @@ export function KioskKeys() {
     kTarget.value = v;
     kTarget.onChange(v);
   };
+  const resize = (d) => setKeysCfg({ w: Math.min(KEY_MAX, Math.max(KEY_MIN, cfg.w + d)), size: null });
+  const small = { minWidth: 40, height: 34, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: C.bg, borderWidth: 1, borderColor: C.line };
   return (
-    <View style={{ position: 'absolute', right: 10, bottom: 10, width: w * 3 + 24, padding: 6, gap: 6, borderRadius: 16, backgroundColor: C.card, borderWidth: 1, borderColor: C.line,
-      shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 10, elevation: 8 }}>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-        {KKEYS.map((k) => (
-          <Pressable key={k} onPress={() => press(k)} style={({ pressed }) => [{ width: w, height: Math.round(w * 0.9), borderRadius: 12, alignItems: 'center', justifyContent: 'center',
-            backgroundColor: pressed ? C.line : C.bg, borderWidth: 1, borderColor: C.line }]}>
-            <Text style={{ fontSize: fs, fontWeight: '700', color: C.text }}>{k}</Text>
-          </Pressable>
-        ))}
+    <View onLayout={(e) => { box.current = { w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height }; }}
+      style={[{ position: 'absolute', width, padding: 7, gap, borderRadius: 16, backgroundColor: C.card, borderWidth: 1, borderColor: C.line,
+        shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 12, elevation: 10 }, pos ? { left: pos.x, top: pos.y } : { right: 10, bottom: 10 }]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <View {...pan.panHandlers} style={[small, { flex: 1, ...(Platform.OS === 'web' ? { cursor: 'move' } : {}) }]}>
+          <Text numberOfLines={1} style={{ color: C.muted, fontWeight: '700', fontSize: 18, letterSpacing: 2 }}>⠿⠿⠿</Text>
+        </View>
+        <Pressable onPress={() => resize(-8)} style={small}><Text style={{ fontSize: 20, fontWeight: '700', color: C.text }}>−</Text></Pressable>
+        <Pressable onPress={() => resize(8)} style={small}><Text style={{ fontSize: 20, fontWeight: '700', color: C.text }}>+</Text></Pressable>
+        <Pressable onPress={() => { kTarget = null; kNotify(); }} style={small}><Text style={{ fontSize: 16, fontWeight: '700', color: C.muted }}>✕</Text></Pressable>
       </View>
-      <Pressable onPress={() => { kTarget = null; kNotify(); }} style={{ alignItems: 'center', paddingVertical: 6 }}>
-        <Text style={{ color: C.muted, fontWeight: '600' }}>Yopish ✕</Text>
-      </Pressable>
+      {KROWS.map((row) => (
+        <View key={row.join('')} style={{ flexDirection: 'row', gap }}>
+          {row.map((k) => (
+            <Pressable key={k} onPress={() => press(k)} style={({ pressed }) => [{ width: cfg.w, height: keyH, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
+              backgroundColor: pressed ? C.line : C.bg, borderWidth: 1, borderColor: C.line }]}>
+              <Text style={{ fontSize: Math.round(cfg.w * 0.42), fontWeight: '700', color: C.text }}>{k}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ))}
     </View>
   );
 }

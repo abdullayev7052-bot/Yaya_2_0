@@ -3,7 +3,8 @@ import { Pressable, RefreshControl, ScrollView, Text, TextInput, View } from 're
 import { randomUUID } from 'expo-crypto';
 import * as api from '../api';
 import { ask, notify } from '../dialog';
-import { Btn, Chip, Err, Header, fmtDT, kioskField, textMatch, toNumber, useLoad } from '../components';
+import { Btn, Chip, Err, Header, PickSheet, fmtDT, kioskField, textMatch, toNumber, useLoad } from '../components';
+import * as store from '../db';
 import { C, fmtQty, s } from '../ui';
 
 // Stages (Yaya 2.0, stage 10): every person runs the stages they are responsible
@@ -62,6 +63,9 @@ export function Production({ tick, onTask, onNew, onClose, onMove }) {
   const sh = data?.shift;
   const produce = stages.find((x) => x.code === 'produce');
   const sm = sh?.summary;
+  const today = useToday();
+  const [adding, setAdding] = useState(null); // the produce stage while "+ Qo'shish" is open
+  const planned = new Set((data?.plan?.tech ?? []).map((t) => t.recipe_id));
   return (
     <ScrollView contentContainerStyle={{ padding: 12, gap: 12 }} refreshControl={<RefreshControl refreshing={busy} onRefresh={load} />}>
       <Err err={err} />
@@ -99,7 +103,7 @@ export function Production({ tick, onTask, onNew, onClose, onMove }) {
             {data.plan.tech.map((t) => {
               const left = Math.max(0, r3(t.qty - t.made));
               return (
-                <Pressable key={t.recipe_id} onPress={() => onNew({ stageId: produce.id, recipeId: t.recipe_id, planKg: left || t.qty })}
+                <Pressable key={t.recipe_id} onPress={() => onNew({ stageId: produce.id, recipeId: t.recipe_id, planKg: left || t.qty, planHint: data.plan.suggest !== false })}
                   style={({ pressed }) => [s.card, { minWidth: 150, flexGrow: 1, flexDirection: 'row', gap: 10, alignItems: 'center', padding: 12, borderColor: left > 0 ? C.accent : C.line }, pressed && { opacity: 0.6 }]}>
                   <View style={{ backgroundColor: left > 0 ? C.accent : C.line, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 6, minWidth: 64, alignItems: 'center' }}>
                     <Text style={{ color: left > 0 ? C.accentText : C.text, fontWeight: '700' }}>{fmtQty(t.qty)} {t.unit}</Text>
@@ -131,12 +135,23 @@ export function Production({ tick, onTask, onNew, onClose, onMove }) {
             <Text style={s.muted}>{st.type_label}</Text>
           </View>
           {st.type === 'change' && st.code === 'produce' ? (
-            st.waiting.map((w) => (
-              <Pressable key={w.recipe_id} onPress={() => onNew({ stageId: st.id, recipeId: w.recipe_id })}
-                style={({ pressed }) => [{ paddingVertical: 10, borderTopWidth: 1, borderColor: C.line, gap: 2 }, pressed && { opacity: 0.6 }]}>
-                <Text style={[s.text, { fontWeight: '600' }]}>{w.recipe}{w.product && w.product !== w.recipe ? ` → ${w.product}` : ''}</Text>
-              </Pressable>
-            )).concat(st.waiting.length ? [] : [<Text key="none" style={s.muted}>Bu bosqichda tarkib yo'q</Text>])
+            // Few details on the technologist's screen: only what was added for today
+            // (besides the plan above), and "+ Qo'shish" to pick another quyma by search.
+            <>
+              {today.list.map((rid) => {
+                const w = st.waiting.find((x) => x.recipe_id === rid);
+                if (!w) return null;
+                return (
+                  <View key={rid} style={{ flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderColor: C.line }}>
+                    <Pressable onPress={() => onNew({ stageId: st.id, recipeId: rid })} style={({ pressed }) => [{ flex: 1, paddingVertical: 10 }, pressed && { opacity: 0.6 }]}>
+                      <Text style={[s.text, { fontWeight: '600' }]}>{w.recipe}{w.product && w.product !== w.recipe ? ` → ${w.product}` : ''}</Text>
+                    </Pressable>
+                    <Pressable onPress={() => today.remove(rid)} hitSlop={10} style={{ padding: 8 }}><Text style={{ color: C.muted, fontSize: 16 }}>✕</Text></Pressable>
+                  </View>
+                );
+              })}
+              <Btn title="+ Qo'shish" kind="ghost" onPress={() => setAdding(st)} />
+            </>
           ) : st.type === 'change' ? (
             // Grouped by what waits (e.g. one quyma for several products): the worker chooses what to make.
             Object.values(st.waiting.reduce((g, w) => {
@@ -151,7 +166,7 @@ export function Production({ tick, onTask, onNew, onClose, onMove }) {
                     const pl = planOf(w);
                     const left = pl ? Math.max(0, r3(pl.plan - pl.made)) : null;
                     return (
-                      <Pressable key={w.product_id} onPress={() => onNew({ stageId: st.id, recipeId: w.recipe_id, productId: w.product_id, productName: w.product, planUnits: left || null, avail: grp.head?.qty ?? null })}
+                      <Pressable key={w.product_id} onPress={() => onNew({ stageId: st.id, recipeId: w.recipe_id, productId: w.product_id, productName: w.product, planUnits: left || null, planHint: data?.plan?.suggest !== false, avail: grp.head?.qty ?? null })}
                         style={({ pressed }) => [{ borderWidth: 1, borderColor: pl ? C.accent : C.line, borderRadius: 99, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', gap: 6, alignItems: 'center' }, pressed && { opacity: 0.6 }]}>
                         <Text style={s.text}>{w.product}</Text>
                         {pl && <View style={{ backgroundColor: C.accent, borderRadius: 99, paddingHorizontal: 6 }}><Text style={{ color: C.accentText, fontSize: 12, fontWeight: '700' }}>{fmtQty(left)}</Text></View>}
@@ -170,7 +185,7 @@ export function Production({ tick, onTask, onNew, onClose, onMove }) {
               </Pressable>
             )) : <Text style={s.muted}>Oldingi bosqichda kutayotgan mahsulot yo'q</Text>
           )}
-          {!!st.contents.length && (
+          {!!st.contents.length && st.code !== 'produce' && (
             <View style={{ borderTopWidth: 1, borderColor: C.line, paddingTop: 6 }}>
               <Text style={s.muted}>Shu bosqichda turibdi:</Text>
               {st.contents.map((c) => <Text key={c.product_id} style={{ color: c.qty < 0 ? C.err : C.text }}>{c.product}: {fmtQty(c.qty)} {c.unit}</Text>)}
@@ -178,12 +193,25 @@ export function Production({ tick, onTask, onNew, onClose, onMove }) {
           )}
         </View>
       ))}
+      <PickSheet visible={!!adding} title="Bugungi ishlab chiqarishga qo'shish" placeholder="🔍  Tarkib yoki mahsulot nomi"
+        items={(adding?.waiting ?? []).filter((w) => !today.list.includes(w.recipe_id) && !planned.has(w.recipe_id))
+          .map((w) => ({ key: w.recipe_id, label: w.recipe, sub: w.product && w.product !== w.recipe ? `→ ${w.product}` : null }))}
+        onPick={(x) => { today.add(x.key); setAdding(null); }} onClose={() => setAdding(null)} />
     </ScrollView>
   );
 }
 
+// What the technologist added to today's production (besides the plan), kept on
+// this device per person and day.
+function useToday() {
+  const key = `prodToday:${api.me()?.id ?? 0}:${new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10)}`;
+  const [list, setList] = useState(() => store.getKv(key, []));
+  const save = (next) => { store.setKv(key, next); setList(next); };
+  return { list, add: (id) => save([...list.filter((x) => x !== id), id]), remove: (id) => save(list.filter((x) => x !== id)) };
+}
+
 // ---------------------------------------------------------------- start a task at a 'change' stage
-export function NewTask({ stageId, recipeId, productId, productName, planKg, planUnits, avail, onBack, onDone }) {
+export function NewTask({ stageId, recipeId, productId, productName, planKg, planUnits, planHint = true, avail, onBack, onDone }) {
   const { data, err } = useLoad(() => Promise.all([prod('GET', `/recipes/${recipeId}`), api.erp('GET', '/products?stock=1')]), [recipeId]);
   const [r, products] = data ?? [null, []];
   const [units, setUnits] = useState('');
@@ -191,14 +219,20 @@ export function NewTask({ stageId, recipeId, productId, productName, planKg, pla
   const [extra, setExtra] = useState([]);
   const [search, setSearch] = useState('');
   const [busy, setBusy] = useState(false);
+  const [altFor, setAltFor] = useState(null); // the line whose ⇄ list is open
   const perUnit = r && PER_UNIT.has(r.kind);
+  // Grey suggested numbers: off for a recipe set so in the panel; the plan is used
+  // as a suggestion unless that day's plan says not to.
+  const sug = r?.suggest !== 0;
+  const planKgS = planHint ? planKg : null;
+  const planUnitsS = planHint ? planUnits : null;
   // Main raw materials (milk, skim milk) lead; the rest follow their total.
   const mains = r ? r.lines.filter((l) => l.product_kind === 'main_raw') : [];
   const expected = r ? (r.out_min != null && r.out_max != null ? (r.out_min + r.out_max) / 2 : r.base_weight) : 0;
-  const mainSuggest = (l) => (planKg && r.base_milk > 0 && expected > 0 ? r3((planKg * r.base_milk / expected) * (l.qty / r.base_milk)) : null);
+  const mainSuggest = (l) => (sug && planKgS && r.base_milk > 0 && expected > 0 ? r3((planKgS * r.base_milk / expected) * (l.qty / r.base_milk)) : null);
   const mainVal = (l) => (over[l.id]?.qty ?? '') !== '' ? toNumber(over[l.id].qty) : (mainSuggest(l) ?? 0);
   const mainTotal = mains.reduce((a, l) => a + mainVal(l), 0);
-  const f = !r ? 0 : perUnit ? toNumber(units || (planUnits ?? 0)) : r.base_milk > 0 ? mainTotal / r.base_milk : toNumber(units || 1);
+  const f = !r ? 0 : perUnit ? toNumber(units || (sug ? planUnitsS ?? 0 : 0)) : r.base_milk > 0 ? mainTotal / r.base_milk : toNumber(units || 1);
   const lines = r ? r.lines.map((l) => {
     const o = over[l.id] ?? {};
     const pid = o.productId ?? l.product_id;
@@ -208,7 +242,7 @@ export function NewTask({ stageId, recipeId, productId, productName, planKg, pla
     const main = l.product_kind === 'main_raw';
     // pouring: the quyma starts as everything the stage before holds
     const semiDefault = perUnit && avail != null && products.find((x) => x.id === pid)?.kind === 'semi' ? String(avail) : null;
-    const suggest = main ? mainSuggest(l) : r3((alt?.qty ?? l.qty) * f);
+    const suggest = !sug ? null : main ? mainSuggest(l) : r3((alt?.qty ?? l.qty) * f);
     return { l, base, pid, main, name: variant?.name ?? base.product, unit: base.unit, variants: base.variants ?? [],
       typed: o.qty ?? semiDefault ?? '', suggest };
   }) : [];
@@ -219,7 +253,8 @@ export function NewTask({ stageId, recipeId, productId, productName, planKg, pla
       const t = await prod('POST', '/tasks', {
         uuid: randomUUID(), stageId, recipeId: r.id, ...(productId ? { productId } : {}),
         ...(perUnit ? { units: f } : r.base_milk > 0 ? { milkQty: r3(mainTotal) } : { factor: f }),
-        lines: lines.map((x) => ({ lineId: x.l.id, productId: x.pid, ...(x.typed !== '' ? { qty: toNumber(x.typed) } : x.main ? { qty: x.suggest ?? 0 } : {}) })),
+        // without suggestions an empty line means nothing of it was used
+        lines: lines.map((x) => ({ lineId: x.l.id, productId: x.pid, ...(x.typed !== '' ? { qty: toNumber(x.typed) } : x.main || !sug ? { qty: x.suggest ?? 0 } : {}) })),
         extra: extra.filter((e) => toNumber(e.qty || 0) > 0).map((e) => ({ productId: e.productId, qty: toNumber(e.qty) })),
       }, { idempotent: true });
       onDone(t.id);
@@ -236,7 +271,7 @@ export function NewTask({ stageId, recipeId, productId, productName, planKg, pla
             {perUnit && (
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                 <Text style={s.text}>Nechta dona?{planUnits ? ` (reja: ${fmtQty(planUnits)})` : ''}</Text>
-                <Num value={units} onChange={setUnits} unit="dona" placeholder={planUnits ? String(planUnits) : '0'} />
+                <Num value={units} onChange={setUnits} unit="dona" placeholder={sug && planUnitsS ? String(planUnitsS) : '0'} />
               </View>
             )}
             {!perUnit && !(r.base_milk > 0) && (
@@ -245,32 +280,22 @@ export function NewTask({ stageId, recipeId, productId, productName, planKg, pla
                 <Num value={units} onChange={setUnits} unit="×" placeholder="1" />
               </View>
             )}
-            <Text style={s.muted}>Tarkib — xira raqamlar tavsiya, bosib o'zgartirasiz:</Text>
+            <Text style={s.muted}>{sug ? "Tarkib — xira raqamlar tavsiya, bosib o'zgartirasiz:" : 'Tarkib — sarflangan miqdorlarni kiriting:'}</Text>
             {lines.map((x) => (
               <View key={x.l.id} style={{ gap: 6, paddingVertical: 6, borderBottomWidth: 1, borderColor: C.line }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                  <Text style={[s.text, { flex: 1 }, x.main && { fontWeight: '700' }]}>{x.name}{x.main ? '  · asosiy' : ''}</Text>
+                  <Pressable disabled={!(x.l.alts.length || x.variants.length)} onPress={() => setAltFor(x)} style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={[s.text, { flexShrink: 1 }, x.main && { fontWeight: '700' }]}>{x.name}{x.main ? '  · asosiy' : ''}</Text>
+                    {(x.l.alts.length > 0 || x.variants.length > 0) && (
+                      <View style={{ borderWidth: 1, borderColor: C.accent, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 2 }}>
+                        <Text style={{ color: C.accent, fontSize: 18, fontWeight: '700' }}>⇄</Text>
+                      </View>
+                    )}
+                  </Pressable>
                   <Num value={x.typed} placeholder={x.suggest != null ? String(x.suggest) : '0'} unit={x.unit}
                     onChange={(v) => setOver((o) => ({ ...o, [x.l.id]: { ...(o[x.l.id] ?? {}), qty: v } }))} />
                 </View>
-                {x.l.alts.length > 0 && (
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-                    {[{ product_id: x.l.product_id, product: x.l.product }, ...x.l.alts].map((a) => (
-                      <Chip key={a.product_id} label={a.product} on={a.product_id === x.base.product_id}
-                        onPress={() => setOver((o) => ({ ...o, [x.l.id]: { ...(o[x.l.id] ?? {}), productId: a.product_id } }))} />
-                    ))}
-                  </View>
-                )}
-                {x.variants.length > 0 && (
-                  <View style={{ gap: 4 }}>
-                    <Text style={s.muted}>Qaysi varianti?</Text>
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-                      {x.variants.map((v) => <Chip key={v.id} label={v.variant} on={v.id === x.pid}
-                        onPress={() => setOver((o) => ({ ...o, [x.l.id]: { ...(o[x.l.id] ?? {}), productId: v.id } }))} />)}
-                    </View>
-                    {!x.variants.some((v) => v.id === x.pid) && <Text style={{ color: C.warn, fontSize: 13 }}>Tanlanmasa — omborda ko'pi olinadi</Text>}
-                  </View>
-                )}
+                {x.variants.length > 0 && !x.variants.some((v) => v.id === x.pid) && <Text style={{ color: C.warn, fontSize: 13 }}>⇄ bosib variantini tanlang — tanlanmasa omborda ko'pi olinadi</Text>}
               </View>
             ))}
             {extra.map((e, i) => (
@@ -291,9 +316,25 @@ export function NewTask({ stageId, recipeId, productId, productName, planKg, pla
             <Btn title={busy ? '...' : 'Boshlash'} onPress={start} disabled={busy || !(f > 0)} />
           </View>
         )}
+        <PickSheet visible={!!altFor} title={altFor ? `${altFor.l.product} — o'rniga` : ''} placeholder="🔍  Xomashyo nomi"
+          items={altFor ? altOptions(altFor) : []}
+          onPick={(o) => { setOver((v) => ({ ...v, [altFor.l.id]: { ...(v[altFor.l.id] ?? {}), productId: o.key } })); setAltFor(null); }}
+          onClose={() => setAltFor(null)} />
       </ScrollView>
     </View>
   );
+}
+
+// The ⇄ list of a recipe line: the material itself, its alternatives, and the
+// variants of whichever is a variant product (e.g. Zakvaska / 499, / 505).
+function altOptions(x) {
+  const out = [];
+  for (const a of [{ product_id: x.l.product_id, product: x.l.product, variants: x.l.variants ?? [] }, ...x.l.alts]) {
+    const vs = a.variants ?? [];
+    if (vs.length) for (const v of vs) out.push({ key: v.id, label: v.name ?? `${a.product} / ${v.variant}`, on: v.id === x.pid });
+    else out.push({ key: a.product_id, label: a.product, sub: a.product_id === x.l.product_id ? 'tarkibdagi' : 'alternativ', on: a.product_id === x.pid });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- finish a task

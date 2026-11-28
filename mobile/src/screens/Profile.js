@@ -59,10 +59,11 @@ export default function Profile({ tick, onLogout, setFull }) {
               <Text style={[s.text, { flex: 1, fontWeight: '700' }]}>⌨ Ekrandagi raqamli klaviatura</Text>
               <Switch value={keys.on} onValueChange={(v) => { setKeysCfg({ on: v }); setKeys(getKeysCfg()); }} />
             </View>
-            <Text style={s.muted}>Monoblokda son kiritiladigan joy bosilganda burchakda chiqadi. Shu monoblok uchun saqlanadi.</Text>
+            <Text style={s.muted}>Monoblokda son kiritiladigan joy bosilganda chiqadi. Tepadagi ⠿⠿⠿ ni ushlab istalgan joyga suring, − / + bilan kattalashtiring. Shu monoblok uchun saqlanadi.</Text>
             {keys.on && (
               <View style={{ flexDirection: 'row', gap: 6 }}>
                 {Object.entries(KEY_SIZES).map(([k, [label]]) => <Chip key={k} label={label} on={keys.size === k} onPress={() => { setKeysCfg({ size: k }); setKeys(getKeysCfg()); }} />)}
+                <Chip label="Joyini tiklash" on={false} onPress={() => { setKeysCfg({ x: null, y: null }); setKeys(getKeysCfg()); }} />
               </View>
             )}
           </View>

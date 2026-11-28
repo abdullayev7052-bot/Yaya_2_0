@@ -2,6 +2,20 @@
 
 Eng yangisi tepada. Qavs ichida Android `versionCode`.
 
+## Yaya 2.0 — O'z ombori, qidiruv, monoblok klaviaturasi, ishbay haq turlari, 2026-11-28
+- Ombor → Qoldiqlar: "Topshirish" olib tashlandi.
+- **Har bir mahsulotning o'z ombori turiga qarab** (xomashyo → Xomashyo ombori, idish va etiketka → Idish ombori, tayyor →
+  Tayyor mahsulot ombori...; yo'q bo'lsa o'zi yaratiladi). Boshlang'ich qoldiqda "Turiga qarab" — har bir qator o'z omboriga.
+  Turi o'zgarsa qoldig'i shu zahoti yangi omboriga o'tadi. Ishlab chiqarish xomashyoni o'z omboridan oladi. (Xaridlar — keyingi bosqichda.)
+- Paneldagi barcha uzun ro'yxatlarda (mahsulot, xomashyo, idish, ombor, xodim) yozib qidirish va tanlash.
+- Monoblok klaviaturasi: odatdagi 4×3 (1 2 3 / 4 5 6 / 7 8 9 / , 0 ⌫); ⠿⠿⠿ ni ushlab istalgan joyga surish, − / + bilan o'lcham.
+- Texnolog ekrani: tarkiblar ro'yxati o'rniga "+ Qo'shish" — qidirib bugungi ishlab chiqarishga qo'shadi.
+- Sozlamalar: tarkibda "tavsiya ko'rsatilsin", rejada "reja tavsiya bo'lib chiqsin".
+- Alternativ / variant xomashyo: katta tugmalar o'rniga ⇄ belgisi — yarim oynada ro'yxat.
+- **Qo'shimcha xarajatlar** (Ishlab chiqarish): ishbay haq turlari (Quyish, Qopqoq yopish...) bir marta kiritiladi, tarkibda tanlanadi;
+  akt sverkada qaysi topshiriq va mahsulotdan olingani ko'rinadi.
+- **Amaldagi ishni o'chirish** texnolog, quyuvchi, qopqoq yopuvchi va qadoqlash uchun (Texnolog smenalari sahifasida). 80 ta test.
+
 ## Yaya 2.0 — Sinxronlash tuzatildi, amaldagi smenalarni o'chirish, 2026-11-28
 - **Xato tuzatildi:** ilova kimdir kirmagan holatda (monoblok ro'yxati yoki chiqib qayta kirish) sinxronlashni boshlasa,
   keyin internet bo'lsa ham hech narsa yuborilmas va yangilanmas edi — endi internet bo'lsa har bir yozuv darhol serverga ketadi,
