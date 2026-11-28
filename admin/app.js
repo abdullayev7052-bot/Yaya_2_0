@@ -1259,7 +1259,7 @@ const views = {
         </form>
       </div>
       <div class="card danger-zone" style="max-width:760px">
-        <h2>⚠️ Barcha hisobotlar tarixini tozalash</h2>
+        <h2>⚠️ Butun tizimni tozalash (hamma ma'lumot)</h2>
         <div id="wipe"></div>
       </div>
       <div class="card" style="max-width:760px">
@@ -1354,15 +1354,18 @@ const views = {
   },
 };
 
-// Three deliberate steps before history is wiped: understand, prove you are a
-// person (arithmetic), confirm with your password and the exact phrase.
+// Three deliberate steps before EVERYTHING is wiped: understand, prove you are a
+// person (arithmetic), confirm with your password and the exact phrase, and give
+// the login and password of the one admin who remains.
 function wipeWizard(box) {
   let step = 1;
   let ch = null;
   const render = () => {
     if (step === 1) {
-      box.innerHTML = `<p class="err"><b>Diqqat!</b> Barcha smenalar, sut yozuvlari, to'lovlar va hisobotlar o'chiriladi.
-        Xodimlar, xonadonlar, narxlar va sozlamalar qoladi.</p>
+      box.innerHTML = `<p class="err"><b>Diqqat!</b> Tizimdagi <b>hamma narsa</b> o'chiriladi: xodimlar va ularning parollari, PIN kodlar,
+        xonadonlar va qarzlar, smenalar, sut yozuvlari, to'lovlar, kassadagi pullar, omborlar va qoldiqlar, mahsulotlar,
+        tarkiblar, rejalar, sozlamalar, integratsiyalar, logo va jurnal. Tizim yangi o'rnatilgandek bo'ladi —
+        faqat siz kiritgan <b>bitta admin</b> qoladi.</p>
         <p class="muted">Tozalashdan oldin avtomatik zaxira olinadi va <b>3 kun</b> ichida tiklash mumkin. Shundan keyin qaytarib bo'lmaydi.
           Avval "Zaxirani yuklab olish" orqali o'zingizda ham nusxa saqlashni tavsiya qilamiz.</p>
         <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" id="w1"> Tushundim, davom etmoqchiman</label>
@@ -1379,16 +1382,19 @@ function wipeWizard(box) {
       box.innerHTML = `<form class="row" style="align-items:end" id="wf">
         <label>Admin parolingiz <input name="password" type="password" required autocomplete="current-password"></label>
         <label>Aynan <b>${esc(ch.phrase)}</b> deb yozing <input name="confirm" required autocomplete="off"></label>
-        <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="resetOpening"> Boshlang'ich qarzlarni ham nolga tushirish</label>
-        <button class="danger">TOZALASH (3/3)</button><button type="button" class="ghost" id="wBack">Bekor</button></form>`;
+        <label>Tozalangandan keyingi admin logini <input name="newLogin" required autocomplete="off" placeholder="admin"></label>
+        <label>Yangi admin paroli (kamida 6 belgi) <input name="newPassword" type="password" required minlength="6" autocomplete="new-password"></label>
+        <button class="danger">HAMMASINI O'CHIRISH (3/3)</button><button type="button" class="ghost" id="wBack">Bekor</button></form>`;
       $('#wBack', box).onclick = () => { step = 1; render(); };
       $('#wf', box).onsubmit = act(async (e) => {
         e.preventDefault();
         const f = e.target.elements;
         try {
-          const r = await api('POST', '/data/wipe', { password: f.password.value, confirm: f.confirm.value, resetOpening: f.resetOpening.checked, challengeId: ch.id, answer: ch.answer });
-          flash(`Tarix tozalandi. Tiklash nusxasi #${r.safety} — 3 kun saqlanadi.`);
-          route();
+          const r = await api('POST', '/data/wipe', { password: f.password.value, confirm: f.confirm.value, newLogin: f.newLogin.value, newPassword: f.newPassword.value, challengeId: ch.id, answer: ch.answer });
+          alert(`Tizim tozalandi. Endi "${r.login}" logini va yangi parol bilan kiring.\nTiklash nusxasi #${r.safety} — 3 kun saqlanadi (Sozlamalar → Avtomatik zaxiralar).`);
+          // every old sign-in is gone: back to the login screen
+          store.set('yaya_token', null);
+          location.reload();
         } catch (err) {
           step = 1;
           render();

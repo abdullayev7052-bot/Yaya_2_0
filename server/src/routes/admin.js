@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import ExcelJS from 'exceljs';
 import { randomInt, randomUUID } from 'node:crypto';
-import { audit, ensureDeviceSlots, roleIdByCode } from '../db/index.js';
+import { audit, ensureDeviceSlots, resetAll, roleIdByCode } from '../db/index.js';
 import { makeGuard, normalizeLogin } from '../auth.js';
 import { PERMISSIONS, PERMISSION_KEYS } from '../permissions.js';
 import { summary, exportRows, toCsv, parseRange, dailyCost, todayLocal, diffReport } from '../reports.js';
@@ -11,7 +11,7 @@ import { CONFIRM_KEYS, confirmFlags, diffFlags, getSetting, setSetting } from '.
 import { ShiftError, acceptShift, cancelShift, copyShift, listShifts, shiftCopyText, shiftDetail, shiftLabel } from '../shifts.js';
 import { purchaseList, purchaseBreakdown, purchaseRows } from '../purchases.js';
 import { intg, setIntg, reloadBots, sendBackup, checkToken, notifyHousehold } from '../integrations.js';
-import { decrypt, encrypt, listSafety, loadSafety, restore, saveSafety, snapshot, wipeHistory } from '../backup.js';
+import { decrypt, encrypt, listSafety, loadSafety, restore, saveSafety, snapshot } from '../backup.js';
 import { bookHouseholdPayment, voidHouseholdPayment } from '../erp/finance.js';
 import { actorName, describe } from '../auditText.js';
 
@@ -29,7 +29,7 @@ function stripMoney(v) {
 }
 
 const METHODS = ['cash', 'card', 'transfer'];
-const WIPE_PHRASE = 'TARIXNI TOZALASH';
+const WIPE_PHRASE = "HAMMASINI O'CHIRISH";
 
 // Management API, used by the web panel (admin) and by the mobile app for
 // everyone else, each within their role's permissions.
@@ -843,10 +843,14 @@ export default async function adminRoutes(app, { db }) {
     if (!checkPassword(req, b.password)) return bad(reply, 'Admin paroli noto\'g\'ri');
     if (!passChallenge(b.challengeId, b.answer)) return bad(reply, 'Misol javobi noto\'g\'ri yoki eskirgan. Qaytadan urinib ko\'ring.');
     if (b.confirm !== WIPE_PHRASE) return bad(reply, `Tasdiqlash uchun aynan "${WIPE_PHRASE}" deb yozing`);
-    const safety = saveSafety(db, 'Tarixni tozalashdan oldin', req.actor);
-    wipeHistory(db, { resetOpening: !!b.resetOpening });
-    log(req, 'data.wipe', { safety, resetOpening: !!b.resetOpening });
-    return { ok: true, safety };
+    // The one admin who remains afterwards: a new login and password.
+    const login = normalizeLogin(b.newLogin);
+    if (!/^[a-z0-9_.-]{3,32}$/.test(login)) return bad(reply, "Yangi admin logini 3–32 belgi: kichik harf, raqam, _ . -");
+    if (String(b.newPassword ?? '').length < 6) return bad(reply, "Yangi admin paroli kamida 6 belgi bo'lsin");
+    const safety = saveSafety(db, "Butun tizimni tozalashdan oldin", req.actor);
+    resetAll(db, { login, password: String(b.newPassword) });
+    audit(db, req.actor, 'data.reset', { safety, newAdmin: login });
+    return { ok: true, safety, login };
   });
 
   app.get('/data/safety', need('data.backup'), async () => listSafety(db));

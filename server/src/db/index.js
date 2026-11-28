@@ -4,7 +4,8 @@ import { dirname } from 'node:path';
 import { BUILTIN_ROLES, V3_TO_V4, PERMISSION_KEYS } from '../permissions.js';
 import { moveHandsToStages } from '../erp/stages.js';
 import { upgradeToV3 } from './legacy.js';
-import { setupErp } from '../erp/schema.js';
+import { seedErp, setupErp } from '../erp/schema.js';
+import bcrypt from 'bcryptjs';
 
 export const SCHEMA_VERSION = 4;
 
@@ -289,6 +290,32 @@ export function retireRole(db, code) {
     try { db.prepare('DELETE FROM users WHERE id = ?').run(u.id); } catch { db.prepare('UPDATE users SET active = 0 WHERE id = ?').run(u.id); }
   }
   if (!db.prepare('SELECT 1 FROM users WHERE role_id = ?').get(role.id)) db.prepare('DELETE FROM roles WHERE id = ?').run(role.id);
+}
+
+// Full reset ("Butun tizimni tozalash"): every row of every table goes — staff and
+// their passwords / PINs, households, shifts, payments, cash, warehouses, products,
+// recipes, plans, settings, integrations, the logo, the journal. Only the automatic
+// safety copies stay (so the reset can be undone for 3 days) and the server's own
+// token secret. Then the system starts as if new: built-in roles, units, reasons,
+// the main cashbox and the stages, and ONE admin with the login and password given.
+export function resetAll(db, { login, password }) {
+  const keep = new Set(['backups', 'sqlite_sequence']);
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map((t) => t.name).filter((t) => !keep.has(t));
+  const secret = db.prepare("SELECT value FROM settings WHERE key = 'jwt_secret'").get()?.value;
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.transaction(() => {
+      for (const t of tables) db.exec(`DELETE FROM ${t}`);
+      if (secret) db.prepare("INSERT INTO settings (key, value) VALUES ('jwt_secret', ?)").run(secret);
+      seedRoles(db);
+      seedErp(db);
+      const id = Number(db.prepare('INSERT INTO users (login, name, password_hash, role_id) VALUES (?, ?, ?, ?)')
+        .run(login, 'Admin', bcrypt.hashSync(password, 10), roleIdByCode(db, 'admin')).lastInsertRowid);
+      ensureDeviceSlots(db, id);
+    })();
+  } finally {
+    db.pragma('foreign_keys = ON');
+  }
 }
 
 export const roleIdByCode = (db, code) => db.prepare('SELECT id FROM roles WHERE code = ?').get(code)?.id;
