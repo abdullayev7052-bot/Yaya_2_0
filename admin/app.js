@@ -1277,6 +1277,10 @@ const views = {
         </form>
       </div>
       <div class="card danger-zone" style="max-width:760px">
+        <h2>🧹 Hisobotlar va harakatlarni tozalash</h2>
+        <div id="wipeHist"></div>
+      </div>
+      <div class="card danger-zone" style="max-width:760px">
         <h2>⚠️ Butun tizimni tozalash (hamma ma'lumot)</h2>
         <div id="wipe"></div>
       </div>
@@ -1355,6 +1359,7 @@ const views = {
         flash(`Tiklandi (zaxira sanasi: ${fmtDate(r.exportedAt)}). Avvalgi holat #${r.safety} sifatida 3 kun saqlanadi.`);
         setTimeout(() => location.reload(), 1500);
       });
+      wipeWizard($('#wipeHist', v), 'history');
       wipeWizard($('#wipe', v));
       $$('[data-restore]', v).forEach((b) => { b.onclick = () => openForm({
         title: `Zaxira #${b.dataset.restore} dan tiklash`, danger: true, submit: 'Tiklash',
@@ -1372,24 +1377,33 @@ const views = {
   },
 };
 
-// Three deliberate steps before EVERYTHING is wiped: understand, prove you are a
-// person (arithmetic), confirm with your password and the exact phrase, and give
-// the login and password of the one admin who remains.
-function wipeWizard(box) {
+// Three deliberate steps before a wipe: understand, prove you are a person
+// (arithmetic), confirm with your password and the exact phrase.
+// kind 'history': reports and movements go, what the system is made of stays.
+// kind 'all': EVERYTHING goes; the login and password of the one admin who remains are asked.
+function wipeWizard(box, kind = 'all') {
+  const hist = kind === 'history';
   let step = 1;
   let ch = null;
   const render = () => {
     if (step === 1) {
-      box.innerHTML = `<p class="err"><b>Diqqat!</b> Tizimdagi <b>hamma narsa</b> o'chiriladi: xodimlar va ularning parollari, PIN kodlar,
+      box.innerHTML = (hist
+        ? `<p class="err"><b>O'chiriladi:</b> barcha hisobotlar, sut yig'uvchi smenalari va sut yozuvlari, to'lovlar, balanslar va qarzlar,
+          xonadonlarning boshlang'ich qarzlari, boshlang'ich qoldiqlar, ombor qoldiqlari va partiyalar, xarid, o'tkazish, hisobdan chiqarish,
+          inventarizatsiya hujjatlari, texnolog smenalari va barcha topshiriqlar, rejalar, kassa harakatlari, tasdiq kutayotganlar, ogohlantirishlar.</p>
+          <p><b>Saqlanib qoladi:</b> mahsulotlar va turlari, omborlar va bosqichlar, tarkiblar va Tex kartalar, xodimlar, rollar va ruxsatlar,
+          login va parollar, PIN kodlar, qurilmalar va monobloklar, sut mahsulotlari, xonadonlar va ularga belgilangan mahsulot va narxlar,
+          ishbay haq turlari, sabablar, kassalar, to'lov turlari, mijozlar, ta'minotchilar, sozlamalar, logo va jurnal.</p>`
+        : `<p class="err"><b>Diqqat!</b> Tizimdagi <b>hamma narsa</b> o'chiriladi: xodimlar va ularning parollari, PIN kodlar,
         xonadonlar va qarzlar, smenalar, sut yozuvlari, to'lovlar, kassadagi pullar, omborlar va qoldiqlar, mahsulotlar,
         tarkiblar, rejalar, sozlamalar, integratsiyalar, logo va jurnal. Tizim yangi o'rnatilgandek bo'ladi —
-        faqat siz kiritgan <b>bitta admin</b> qoladi.</p>
+        faqat siz kiritgan <b>bitta admin</b> qoladi.</p>`) + `
         <p class="muted">Tozalashdan oldin avtomatik zaxira olinadi va <b>3 kun</b> ichida tiklash mumkin. Shundan keyin qaytarib bo'lmaydi.
           Avval "Zaxirani yuklab olish" orqali o'zingizda ham nusxa saqlashni tavsiya qilamiz.</p>
         <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" id="w1"> Tushundim, davom etmoqchiman</label>
         <p><button class="danger" id="wNext" disabled>Davom etish (1/3)</button></p>`;
       $('#w1', box).onchange = (e) => { $('#wNext', box).disabled = !e.target.checked; };
-      $('#wNext', box).onclick = act(async () => { ch = await api('GET', '/data/challenge'); step = 2; render(); });
+      $('#wNext', box).onclick = act(async () => { ch = await api('GET', `/data/challenge${hist ? '?kind=history' : ''}`); step = 2; render(); });
     } else if (step === 2) {
       box.innerHTML = `<p>Siz bot emasligingizni tasdiqlang: <b style="font-size:20px">${esc(ch.question)}</b></p>
         <div class="row" style="align-items:end"><label>Javob <input id="w2" inputmode="numeric" autocomplete="off"></label>
@@ -1400,14 +1414,20 @@ function wipeWizard(box) {
       box.innerHTML = `<form class="row" style="align-items:end" id="wf">
         <label>Admin parolingiz <input name="password" type="password" required autocomplete="current-password"></label>
         <label>Aynan <b>${esc(ch.phrase)}</b> deb yozing <input name="confirm" required autocomplete="off"></label>
-        <label>Tozalangandan keyingi admin logini <input name="newLogin" required autocomplete="off" placeholder="admin"></label>
-        <label>Yangi admin paroli (kamida 6 belgi) <input name="newPassword" type="password" required minlength="6" autocomplete="new-password"></label>
-        <button class="danger">HAMMASINI O'CHIRISH (3/3)</button><button type="button" class="ghost" id="wBack">Bekor</button></form>`;
+        ${hist ? '' : `<label>Tozalangandan keyingi admin logini <input name="newLogin" required autocomplete="off" placeholder="admin"></label>
+        <label>Yangi admin paroli (kamida 6 belgi) <input name="newPassword" type="password" required minlength="6" autocomplete="new-password"></label>`}
+        <button class="danger">${hist ? 'HISOBOTLARNI TOZALASH' : "HAMMASINI O'CHIRISH"} (3/3)</button><button type="button" class="ghost" id="wBack">Bekor</button></form>`;
       $('#wBack', box).onclick = () => { step = 1; render(); };
       $('#wf', box).onsubmit = act(async (e) => {
         e.preventDefault();
         const f = e.target.elements;
         try {
+          if (hist) {
+            const r = await api('POST', '/data/wipe-history', { password: f.password.value, confirm: f.confirm.value, challengeId: ch.id, answer: ch.answer });
+            alert(`Hisobotlar va harakatlar tozalandi. Tiklash nusxasi #${r.safety} — 3 kun saqlanadi (Sozlamalar → Avtomatik zaxiralar).`);
+            route();
+            return;
+          }
           const r = await api('POST', '/data/wipe', { password: f.password.value, confirm: f.confirm.value, newLogin: f.newLogin.value, newPassword: f.newPassword.value, challengeId: ch.id, answer: ch.answer });
           alert(`Tizim tozalandi. Endi "${r.login}" logini va yangi parol bilan kiring.\nTiklash nusxasi #${r.safety} — 3 kun saqlanadi (Sozlamalar → Avtomatik zaxiralar).`);
           // every old sign-in is gone: back to the login screen

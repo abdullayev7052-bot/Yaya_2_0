@@ -2,6 +2,13 @@
 
 Eng yangisi tepada. Qavs ichida Android `versionCode`.
 
+## Yaya 2.0 — Hisobotlar va harakatlarni tozalash, 2026-11-28
+- Sozlamalarda yangi tozalash turi (o'sha 3 qadam: tushundim, misol, parol + "HISOBOTLARNI TOZALASH"): barcha hisobotlar,
+  smenalar, topshiriqlar, rejalar, qoldiqlar, hujjatlar (boshlang'ich qoldiq, xarid, o'tkazish, hisobdan chiqarish, inventarizatsiya),
+  balanslar va boshlang'ich qarzlar, kassa harakatlari, tasdiq kutayotganlar, ogohlantirishlar o'chadi.
+  Mahsulotlar, omborlar, bosqichlar, tarkiblar, xodimlar, rollar, parollar, qurilmalar, monobloklar, xonadonlar va narxlar,
+  ishbay haq turlari, kassalar, sozlamalar qoladi. Tiklash nusxasi 3 kun. Har bir jadval ikki ro'yxatdan birida (test tekshiradi). 81 ta test.
+
 ## Yaya 2.0 — O'z ombori, qidiruv, monoblok klaviaturasi, ishbay haq turlari, 2026-11-28
 - Ombor → Qoldiqlar: "Topshirish" olib tashlandi.
 - **Har bir mahsulotning o'z ombori turiga qarab** (xomashyo → Xomashyo ombori, idish va etiketka → Idish ombori, tayyor →

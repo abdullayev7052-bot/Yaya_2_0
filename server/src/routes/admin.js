@@ -11,7 +11,7 @@ import { CONFIRM_KEYS, confirmFlags, diffFlags, getSetting, setSetting } from '.
 import { ShiftError, acceptShift, cancelShift, copyShift, deleteActiveShifts, listShifts, shiftCopyText, shiftDetail, shiftLabel } from '../shifts.js';
 import { purchaseList, purchaseBreakdown, purchaseRows } from '../purchases.js';
 import { intg, setIntg, reloadBots, sendBackup, checkToken, notifyHousehold } from '../integrations.js';
-import { decrypt, encrypt, listSafety, loadSafety, restore, saveSafety, snapshot } from '../backup.js';
+import { decrypt, encrypt, listSafety, loadSafety, restore, saveSafety, snapshot, wipeHistory } from '../backup.js';
 import { bookHouseholdPayment, voidHouseholdPayment } from '../erp/finance.js';
 import { actorName, describe } from '../auditText.js';
 
@@ -30,6 +30,7 @@ function stripMoney(v) {
 
 const METHODS = ['cash', 'card', 'transfer'];
 const WIPE_PHRASE = "HAMMASINI O'CHIRISH";
+const HISTORY_PHRASE = 'HISOBOTLARNI TOZALASH';
 
 // Management API, used by the web panel (admin) and by the mobile app for
 // everyone else, each within their role's permissions.
@@ -808,14 +809,14 @@ export default async function adminRoutes(app, { db }) {
   // ---------------------------------------------------------------- data: backup, restore, wipe
   // Simple arithmetic question, so a script cannot fire the wipe blindly.
   const challenges = new Map();
-  app.get('/data/challenge', need('data.backup'), async () => {
+  app.get('/data/challenge', need('data.backup'), async (req) => {
     for (const [k, v] of challenges) if (v.exp < Date.now()) challenges.delete(k);
     const a = randomInt(11, 49);
     const b = randomInt(3, 9);
     const c = randomInt(2, 19);
     const id = randomUUID();
     challenges.set(id, { answer: a * b - c, exp: Date.now() + 5 * 60e3 });
-    return { id, question: `${a} × ${b} − ${c} = ?`, phrase: WIPE_PHRASE };
+    return { id, question: `${a} × ${b} − ${c} = ?`, phrase: req.query?.kind === 'history' ? HISTORY_PHRASE : WIPE_PHRASE };
   });
   const passChallenge = (id, answer) => {
     const ch = challenges.get(String(id));
@@ -848,6 +849,18 @@ export default async function adminRoutes(app, { db }) {
     } catch (e) { return bad(reply, e.message); }
     audit(db, req.actor, 'data.import', { safety, exportedAt: snap.exportedAt });
     return { ok: true, safety, exportedAt: snap.exportedAt };
+  });
+
+  // Reports and movements only: what happened goes, what the system is made of stays.
+  app.post('/data/wipe-history', need('data.backup'), async (req, reply) => {
+    const b = req.body ?? {};
+    if (!checkPassword(req, b.password)) return bad(reply, "Admin paroli noto'g'ri");
+    if (!passChallenge(b.challengeId, b.answer)) return bad(reply, "Misol javobi noto'g'ri yoki eskirgan. Qaytadan urinib ko'ring.");
+    if (b.confirm !== HISTORY_PHRASE) return bad(reply, `Tasdiqlash uchun aynan "${HISTORY_PHRASE}" deb yozing`);
+    const safety = saveSafety(db, 'Hisobotlarni tozalashdan oldin', req.actor);
+    wipeHistory(db);
+    log(req, 'data.wipe_history', { safety });
+    return { ok: true, safety };
   });
 
   app.post('/data/wipe', need('data.backup'), async (req, reply) => {

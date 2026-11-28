@@ -215,3 +215,36 @@ test('delete current collector shifts: accepted ones stay, phones drop theirs, l
   // a collector cannot delete
   assert.equal((await call(app, 'POST', '/api/admin/shifts/delete-active', h, { password: '1234' })).status, 403);
 });
+
+test('reports and movements wipe: what happened goes, what the system is made of stays; every table is classified', async () => {
+  const { app, db } = setup();
+  const h = await ali(app);
+  const b = await boss(app);
+  await runShift(app, h, 'w1', [{ supplierId: 1, quantity: 20 }], { close: true });
+  await acceptAll(app, b);
+  db.exec('UPDATE suppliers SET opening_balance = 5000');
+  const keep = { users: db.prepare('SELECT COUNT(*) n FROM users').get().n, suppliers: db.prepare('SELECT COUNT(*) n FROM suppliers').get().n,
+    prices: db.prepare('SELECT COUNT(*) n FROM supplier_products').get().n, products: db.prepare('SELECT COUNT(*) n FROM products').get().n,
+    warehouses: db.prepare('SELECT COUNT(*) n FROM warehouses').get().n };
+  assert.ok(db.prepare('SELECT COUNT(*) n FROM stock_moves').get().n > 0);
+  const ch = (await call(app, 'GET', '/api/admin/data/challenge?kind=history', b)).body;
+  assert.equal(ch.phrase, 'HISOBOTLARNI TOZALASH');
+  const [x, y, z] = ch.question.match(/\d+/g).map(Number);
+  assert.equal((await call(app, 'POST', '/api/admin/data/wipe-history', b, { password: 'secret123', challengeId: ch.id, answer: x * y - z, confirm: "HAMMASINI O'CHIRISH" })).status, 400);
+  const ch2 = (await call(app, 'GET', '/api/admin/data/challenge?kind=history', b)).body;
+  const [x2, y2, z2] = ch2.question.match(/\d+/g).map(Number);
+  const r = await call(app, 'POST', '/api/admin/data/wipe-history', b, { password: 'secret123', challengeId: ch2.id, answer: x2 * y2 - z2, confirm: 'HISOBOTLARNI TOZALASH' });
+  assert.equal(r.status, 200);
+  for (const t of ['shifts', 'collections', 'payments', 'docs', 'stock_moves', 'lots', 'party_entries', 'alerts']) assert.equal(db.prepare(`SELECT COUNT(*) n FROM ${t}`).get().n, 0, `${t} empty`);
+  assert.equal(db.prepare('SELECT SUM(opening_balance) s FROM suppliers').get().s, 0, 'starting balances to zero');
+  assert.deepEqual({ users: db.prepare('SELECT COUNT(*) n FROM users').get().n, suppliers: db.prepare('SELECT COUNT(*) n FROM suppliers').get().n,
+    prices: db.prepare('SELECT COUNT(*) n FROM supplier_products').get().n, products: db.prepare('SELECT COUNT(*) n FROM products').get().n,
+    warehouses: db.prepare('SELECT COUNT(*) n FROM warehouses').get().n }, keep, 'master data stays');
+  // still signed in, and the collector can start again
+  assert.equal((await call(app, 'GET', '/api/auth/me', b)).status, 200);
+  assert.deepEqual((await runShift(app, h, 'w2', [{ supplierId: 1, quantity: 5 }])).shifts.accepted, ['w2']);
+  // every table is either history or kept — a new table must be put in one list on purpose
+  const { HISTORY_TABLES, KEEP_TABLES } = await import('../src/backup.js');
+  const all = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map((t) => t.name);
+  assert.deepEqual(all.filter((t) => !HISTORY_TABLES.includes(t) && !KEEP_TABLES.includes(t)), [], 'unclassified tables');
+});

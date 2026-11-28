@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { SCHEMA_VERSION } from './db/index.js';
-import { ERP_HISTORY_TABLES, seedErp } from './erp/schema.js';
+import { seedErp } from './erp/schema.js';
 
 // Hard cap on decompressed backup size (this app's data is a few MB; 256 MB is
 // far above any legitimate backup) so a decompression bomb cannot OOM the server.
@@ -116,13 +116,40 @@ export function loadSafety(db, id) {
   return JSON.parse(gunzipSync(row.data, { maxOutputLength: MAX_UNZIP }).toString('utf8'));
 }
 
-// "Clear all history": transactions go, master data (people, suppliers,
-// prices, products, settings) stays.
-export function wipeHistory(db, { resetOpening = false } = {}) {
-  db.transaction(() => {
-    for (const t of ['collections', 'payments', 'adjustments', 'applied_ops', 'events']) db.exec(`DELETE FROM ${t}`);
-    for (const t of ERP_HISTORY_TABLES) db.exec(`DELETE FROM ${t}`);
-    db.exec('DELETE FROM shifts');
-    if (resetOpening) db.exec('UPDATE suppliers SET opening_balance = 0');
-  })();
+// "Hisobotlar va harakatlarni tozalash": everything that HAPPENED goes — collector
+// shifts and their milk, payments, balances and corrections, every warehouse
+// document (opening stock, receipts, hand-overs, write-offs, inventories), stock
+// and lots, production shifts and tasks, plans, cash, approvals waiting, alerts.
+// What the system IS made of stays: products and their kinds, warehouses and
+// stages, recipes and maps, staff, roles, permissions, logins and passwords,
+// devices and monoblocks, collectors' milk products, households with their
+// products and prices, wage types, reasons, cashboxes, payment methods,
+// customers, vendors, settings, the logo, and the journal (it records this too).
+// Every table is in one of the two lists (a test checks it), so a table added
+// later has to be put in one of them on purpose.
+export const HISTORY_TABLES = [
+  'prod_shift_milk', 'neg_links', 'alerts', 'cash_entries', 'lot_sources', 'stock_moves', 'pnl_entries', 'party_entries',
+  'prod_tasks', 'prod_shifts', 'doc_lines', 'lots', 'docs', 'plan_lines', 'plans',
+  'shift_accepts', 'collections', 'shifts', 'deleted_shifts', 'payments', 'adjustments', 'applied_ops', 'events',
+];
+export const KEEP_TABLES = [
+  'roles', 'users', 'devices', 'settings', 'files', 'audit_log', 'backups',
+  'suppliers', 'supplier_products', 'employee_suppliers', 'employee_hidden_suppliers', 'tg_households',
+  'products', 'units', 'warehouses', 'warehouse_keepers', 'product_stages', 'stock_reasons', 'pnl_categories', 'wage_types',
+  'recipes', 'recipe_lines', 'recipe_alts', 'recipe_outputs', 'recipe_rates', 'recipe_limits',
+  'customer_types', 'customers', 'product_prices', 'return_types', 'payment_methods', 'cashboxes', 'cashbox_keepers', 'vendors',
+  'kiosks', 'kiosk_users',
+];
+export function wipeHistory(db) {
+  const have = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((t) => t.name));
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.transaction(() => {
+      for (const t of HISTORY_TABLES) if (have.has(t)) db.exec(`DELETE FROM ${t}`);
+      // households' starting balances are history too: everyone starts from zero
+      db.exec('UPDATE suppliers SET opening_balance = 0');
+    })();
+  } finally {
+    db.pragma('foreign_keys = ON');
+  }
 }
